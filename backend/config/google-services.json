@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "713214426806",
+    "project_id": "sysu-web-5a25d",
+    "storage_bucket": "sysu-web-5a25d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:713214426806:android:3e10b702bf9330074d7017",
+        "android_client_info": {
+          "package_name": "com.sysu.go"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "713214426806-8cr1nuj87j44rf957moikr065l4ltng5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sysu.go",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "713214426806-vrnlrj925oavprtnhe92patr7jiurfid.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCGMscRzJs6de9pMIb7afnPqTGJaSMsPL8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "713214426806-vrnlrj925oavprtnhe92patr7jiurfid.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

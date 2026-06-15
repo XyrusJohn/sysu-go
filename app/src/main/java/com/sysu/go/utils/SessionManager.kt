@@ -1,0 +1,197 @@
+package com.sysu.go.utils
+
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.core.content.edit
+
+class SessionManager(context: Context) {
+    companion object {
+        private const val PREFS_NAME = "driver_session"
+        private const val KEY_DRIVER_ID = "driver_id"          // Firebase UID
+        private const val KEY_DRIVER_NAME = "driver_name"
+        private const val KEY_DRIVER_EMAIL = "driver_email"
+        private const val KEY_DRIVER_FN = "driver_fn"
+        private const val KEY_DRIVER_MI = "driver_mi"
+        private const val KEY_DRIVER_LN = "driver_ln"
+        private const val KEY_DRIVER_PHONE = "driver_phone"
+        private const val KEY_DRIVER_COMPANY = "driver_company"
+        private const val KEY_IS_LOGGED_IN = "is_logged_in"
+        private const val KEY_SAP_DOC_ID = "sap_doc_id"
+        private const val KEY_IS_TRIP_ACTIVE = "is_trip_active"
+
+        private const val KEY_LAST_EMIT_LAT = "last_emit_lat"
+        private const val KEY_LAST_EMIT_LNG = "last_emit_lng"
+        private const val KEY_TRACKING_ACTIVE = "tracking_active"
+        /** Tracks the sap_assignments docId that is currently in_transit — used to lock Start buttons on other shipments */
+        private const val KEY_ACTIVE_SAP_DOC_ID = "active_sap_doc_id"
+    }
+
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    fun saveDriverSession(uid: String, name: String, email: String) {
+        val parts = parseNameParts(name)
+        prefs.edit {
+            putString(KEY_DRIVER_ID, uid)
+            putString(KEY_DRIVER_NAME, name)
+            putString(KEY_DRIVER_EMAIL, email)
+            putString(KEY_DRIVER_FN, parts.first)
+            putString(KEY_DRIVER_MI, parts.second)
+            putString(KEY_DRIVER_LN, parts.third)
+            putBoolean(KEY_IS_LOGGED_IN, true)
+        }
+    }
+
+    fun saveDriverSessionWithSplit(
+        uid: String,
+        fn: String,
+        mi: String,
+        ln: String,
+        displayName: String,
+        email: String,
+        phone: String = "",
+        company: String = ""
+    ) {
+        prefs.edit {
+            putString(KEY_DRIVER_ID, uid)
+            putString(KEY_DRIVER_NAME, displayName)
+            putString(KEY_DRIVER_EMAIL, email)
+            putString(KEY_DRIVER_FN, fn)
+            putString(KEY_DRIVER_MI, mi)
+            putString(KEY_DRIVER_LN, ln)
+            putString(KEY_DRIVER_PHONE, phone)
+            putString(KEY_DRIVER_COMPANY, company)
+            putBoolean(KEY_IS_LOGGED_IN, true)
+        }
+    }
+
+    fun getDriverId(): String? = prefs.getString(KEY_DRIVER_ID, null)
+
+    fun getDriverName(): String = prefs.getString(KEY_DRIVER_NAME, "Unknown Driver") ?: "Unknown Driver"
+
+    fun getDriverEmail(): String? = prefs.getString(KEY_DRIVER_EMAIL, null)
+
+    fun getDriverPhone(): String? = prefs.getString(KEY_DRIVER_PHONE, null)
+
+    fun getDriverFN(): String = prefs.getString(KEY_DRIVER_FN, "") ?: ""
+
+    fun getDriverMI(): String = prefs.getString(KEY_DRIVER_MI, "") ?: ""
+
+    fun getDriverLN(): String = prefs.getString(KEY_DRIVER_LN, "") ?: ""
+
+    fun getDriverCompany(): String = prefs.getString(KEY_DRIVER_COMPANY, "") ?: ""
+
+    /**
+     * Returns Triple(driverFN, driverMI, driverLN).
+     * Falls back to parsing getDriverName() if stored fields are blank.
+     */
+    fun getDriverNameParts(): Triple<String, String, String> {
+        val fn = getDriverFN()
+        val mi = getDriverMI()
+        val ln = getDriverLN()
+        if (fn.isNotEmpty() && ln.isNotEmpty()) {
+            return Triple(fn, mi, ln)
+        }
+        // Fallback: parse from the full display name
+        return parseNameParts(getDriverName())
+    }
+
+    /**
+     * Parses "FirstName MiddleInitial LastName" into (fn, mi, ln).
+     * Handles: "Juan M. Cruz" → ("Juan", "M", "Cruz"), "Juan Cruz" → ("Juan", "", "Cruz")
+     */
+    private fun parseNameParts(fullName: String): Triple<String, String, String> {
+        val parts = fullName.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return when {
+            parts.size >= 3 -> {
+                // First Middle Last (e.g., "Juan M. Cruz")
+                val fn = parts[0]
+                val mi = parts.dropLast(2).lastOrNull()?.take(1)?.replace(".", "") ?: ""
+                val ln = parts.last()
+                Triple(fn, mi, ln)
+            }
+            parts.size == 2 -> Triple(parts[0], "", parts[1])
+            parts.size == 1 -> Triple(parts[0], "", "")
+            else -> Triple("", "", "")
+        }
+    }
+
+    fun hasActiveSession(): Boolean = prefs.getBoolean(KEY_IS_LOGGED_IN, false) && getDriverId() != null
+
+    fun clearSession() {
+        prefs.edit { clear() }
+    }
+
+    fun saveCurrentSapDocId(id: String) {
+        prefs.edit { putString(KEY_SAP_DOC_ID, id) }
+    }
+
+    fun getCurrentSapDocId(): String? {
+        return prefs.getString(KEY_SAP_DOC_ID, null)
+    }
+
+    fun clearCurrentSapDocId() {
+        prefs.edit { remove(KEY_SAP_DOC_ID) }
+    }
+
+    fun setTripActive(active: Boolean) {
+        prefs.edit { putBoolean(KEY_IS_TRIP_ACTIVE, active) }
+    }
+
+    fun isTripActive(): Boolean {
+        return prefs.getBoolean(KEY_IS_TRIP_ACTIVE, false)
+    }
+
+    fun getLastEmitLat(): Double = prefs.getFloat(KEY_LAST_EMIT_LAT, 0.0f).toDouble()
+
+    fun getLastEmitLng(): Double = prefs.getFloat(KEY_LAST_EMIT_LNG, 0.0f).toDouble()
+
+    fun saveLastEmit(lat: Double, lng: Double) {
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+            android.util.Log.w("SessionManager", "saveLastEmit: invalid coords [$lat, $lng] — ignoring")
+            return
+        }
+        prefs.edit {
+            putFloat(KEY_LAST_EMIT_LAT, lat.toFloat())
+            putFloat(KEY_LAST_EMIT_LNG, lng.toFloat())
+        }
+    }
+
+    /**
+     * Called by TransitActivity on "Start Trip" to mark that GPS tracking should be active.
+     * LocationServices reads this on onStartCommand to decide whether to start GPS updates.
+     */
+    fun setTrackingActive(active: Boolean) {
+        prefs.edit { putBoolean(KEY_TRACKING_ACTIVE, active) }
+    }
+
+    fun isTrackingActive(): Boolean = prefs.getBoolean(KEY_TRACKING_ACTIVE, false)
+
+    fun clearTripSession() {
+        prefs.edit {
+            remove(KEY_SAP_DOC_ID)
+            remove(KEY_IS_TRIP_ACTIVE)
+            remove(KEY_LAST_EMIT_LAT)
+            remove(KEY_LAST_EMIT_LNG)
+            remove(KEY_TRACKING_ACTIVE)
+            remove(KEY_ACTIVE_SAP_DOC_ID)
+        }
+    }
+
+    /**
+     * Saves the sap_assignments docId of the shipment that is currently in transit.
+     * Used by AssignmentActivity to lock Start Trip buttons on OTHER shipments.
+     */
+    fun saveActiveSapDocId(docId: String?) {
+        prefs.edit {
+            if (docId != null) putString(KEY_ACTIVE_SAP_DOC_ID, docId)
+            else remove(KEY_ACTIVE_SAP_DOC_ID)
+        }
+    }
+
+    /**
+     * Returns the sap_assignments docId of the currently-active in-transit shipment,
+     * or null if no trip is active.
+     */
+    fun getActiveSapDocId(): String? = prefs.getString(KEY_ACTIVE_SAP_DOC_ID, null)
+}

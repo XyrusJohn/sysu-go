@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="green">#008000</color>
+    <color name="red">#FF0000</color>
+
+    <!-- White Theme Backgrounds -->
+    <color name="background_white">#FFFFFFFF</color>
+    <color name="surface">#F5F5F5</color>
+    <color name="surface2">#EEEEEE</color>
+    <color name="card_bg">#FFFFFF</color>
+
+    <!-- Borders & Dividers -->
+    <color name="border">#E0E0E0</color>
+    <color name="divider">#F0F0F0</color>
+
+    <!-- Text Colors -->
+    <color name="text_primary">#1A1A1A</color>
+    <color name="text_secondary">#666666</color>
+    <color name="text_muted">#999999</color>
+    <color name="text_tertiary">#BBBBBB</color>
+
+    <!-- SYSU Brand -->
+    <color name="sysu_red">#c8102e</color>
+    <color name="sysu_gold">#f5a623</color>
+
+    <!-- Transit / Status -->
+    <color name="sysu_green">#00C853</color>
+    <color name="sysu_blue">#1565C0</color>
+    <color name="transit_green">#4CAF50</color>
+    <color name="transit_green_bg">#E8F5E9</color>
+    <color name="transit_amber">#FFF3E0</color>
+    <color name="transit_amber_dark">#FF9800</color>
+</resources>

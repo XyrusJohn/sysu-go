@@ -1,0 +1,148 @@
+<resources>
+    <string name="app_name">Sysu Go</string>
+    <string name="logout">Logout</string>
+    <string name="scan_qr">Scan QR</string>
+    <string name="my_profile">My Profile</string>
+    <string name="your_queue_position">Your Queue Position</string>
+    <string name="in_queue">In Queue</string>
+    <string name="not_in_queue">Not in Queue</string>
+    <string name="default_web_client_id">713214426806-vrnlrj925oavprtnhe92patr7jiurfid.apps.googleusercontent.com</string>
+
+    <!-- Dashboard CTA -->
+    <string name="cta_status_scan">NOT ON QUEUE</string>
+    <string name="cta_status_queue">ON QUEUE</string>
+    <string name="cta_status_assigned">ASSIGNED</string>
+    <string name="cta_status_transit">ON TRANSIT</string>
+    <string name="cta_header_scan">Ready to get started?</string>
+    <string name="cta_header_queue">You\'re in the queue!</string>
+    <string name="cta_header_assigned">Meron nang Shipment!</string>
+    <string name="cta_header_transit">Trip is Live</string>
+    <string name="cta_body_scan">Mag-scan ng QR code sa booth para makapasok sa queue.</string>
+    <string name="cta_body_queue">Nakatayo ka sa queue. Hintayin ang tawag ng booth.</string>
+    <string name="cta_body_assigned">Taposin ang lahat ng detalye. Hinandang patuloy ang trip mo.</string>
+    <string name="cta_body_transit">GPS Tracking Active. Tamang-tama ang ruta mo.</string>
+
+    <!-- Guard Verification -->
+    <string name="select_guard">Select Guard</string>
+
+    <!-- Login -->
+    <string name="login_driver_access">DRIVER OPERATOR ACCESS</string>
+    <string name="login_main_title">Sign Into Your\nFleet</string>
+    <string name="login_email_label">EMAIL</string>
+    <string name="login_password_label">PASSWORD</string>
+    <string name="login_access_dashboard">Access Dashboard</string>
+    <string name="login_or">OR</string>
+    <string name="login_google_sign_in">Google Sign-In</string>
+    <string name="login_dont_have_account">Don\'t have an account? Register</string>
+
+    <!-- Registration -->
+    <string name="register_driver_title">Driver Registration</string>
+    <string name="register_fill_required">Fill in all required field</string>
+    <string name="register_driver_details">Driver Details</string>
+    <string name="register_step_1_of_2">Step 1 of 2 - Driver Information</string>
+    <string name="register_details_label">Details</string>
+    <string name="register_confirm_label">Confirm</string>
+    <string name="register_last_name_label">Last Name</string>
+    <string name="register_last_name_hint">e.g. Dela Cruz</string>
+    <string name="register_first_name_label">First Name</string>
+    <string name="register_first_name_hint">e.g. Juan</string>
+    <string name="register_mi_label">Middle Initial</string>
+    <string name="register_mi_hint">e.g. P</string>
+    <string name="register_phone_label">Phone Number</string>
+    <string name="register_phone_hint">e.g. 09123456789</string>
+    <string name="register_truck_company_label">Truck Company</string>
+    <string name="register_truck_company_hint">JR&amp;R DISTRIBUTORS Inc.</string>
+    <string name="register_continue">Continue</string>
+    <string name="register_confirm">Confirm</string>
+    <string name="register_google_sign_in">Sign up with Google</string>
+    <string name="register_agree_terms">By continuing, you agree to our Terms of Service and Privacy Policy</string>
+    <string name="register_send_otp">Verify Phone</string>
+    <string name="register_otp_sent">Code sent!</string>
+    <string name="register_phone_verified">Verified</string>
+
+    <!-- Truck Companies Dropdown -->
+
+    <!-- QR Scan -->
+    <string name="scan_qr_title">Scan QR Code</string>
+    <string name="scan_instruction">Point your camera at the QR code displayed on the TV screen</string>
+    <string name="token_expired">Token expired. Please scan a new QR code.</string>
+    <string name="token_invalid">Invalid QR code. Please try again.</string>
+    <string name="already_in_queue">You are already in the queue.</string>
+    <string name="scan_failed">Scan failed. Please try again.</string>
+    <string name="camera_required">Camera permission is required to scan QR codes.</string>
+
+    <!-- Update Info -->
+    <string name="update_info_title">Truck Information</string>
+    <string name="helper_name">Helper Name</string>
+    <string name="truck_company">Trucking Company</string>
+    <string name="truck_type">Truck Type</string>
+    <string name="plate_number">Plate Number</string>
+    <string name="submit">Submit</string>
+    <string name="join_queue_success">Driver info submitted!</string>
+
+    <!-- Trip Registration -->
+    <string name="trip_registration_title">Trip Registration</string>
+    <string name="trip_complete_your_details">Complete your trip details to proceed</string>
+    <string name="trip_confirm_label">Confirm Trip Registration</string>
+    <string name="trip_register_success">Trip registered! Proceed to loading zone.</string>
+    <string name="helper_first_name">Helper First Name</string>
+    <string name="helper_middle_initial">MI</string>
+    <string name="helper_last_name">Helper Last Name</string>
+    <string name="company">Company</string>
+    <string name="plate_prefix">Plate Prefix (e.g. ABC)</string>
+    <string name="plate_suffix">Plate Suffix (e.g. 1234)</string>
+
+    <!-- Truck Types -->
+    <string name="truck_type_auv">AUV</string>
+    <string name="truck_type_4w">4W</string>
+    <string name="truck_type_6w">6W</string>
+    <string name="truck_type_10w">10W</string>
+    <string name="truck_type_20f">20F</string>
+    <string name="truck_type_40f">40F</string>
+    <string name="login_email_hint">EMAIL.EXAMPLE@GMAIL.COM</string>
+    <string name="login_password_hint">**********</string>
+    <string name="login_show_password">Show Password</string>
+
+    <!-- Cancel Queue -->
+    <string name="cancel_queue">Kanselahin ang Queue</string>
+    <!-- Dialog 1: Soft confirmation -->
+    <string name="cancel_queue_title_1">Leave Queue?</string>
+    <string name="cancel_queue_msg_1">You\'ll be removed from your current position. To rejoin, you\'ll need to scan a QR code again.</string>
+    <string name="cancel_queue_btn_cancel_1">Nevermind</string>
+    <string name="cancel_queue_btn_confirm_1">Leave Queue</string>
+    <!-- Dialog 2: Final warning -->
+    <string name="cancel_queue_title_2">You\'ll Go to the Back of the Queue</string>
+    <string name="cancel_queue_msg_2">Closing the queue now means you\'ll be placed last when you return. In busy hours, this could mean a long wait.</string>
+    <string name="cancel_queue_consequence">Your current position cannot be recovered once you leave.</string>
+    <string name="cancel_queue_btn_cancel_2">Keep My Spot</string>
+    <string name="cancel_queue_btn_confirm_2">Leave Anyway</string>
+    <!-- Outcomes -->
+    <string name="cancel_queue_success">You\'ve left the queue. Scan a QR code at the booth anytime to rejoin.</string>
+    <string name="cancel_queue_error">Couldn\'t leave the queue. Please try again.</string>
+
+    <!-- Permission Setup -->
+    <string name="perm_setup_title">Setup Required</string>
+    <string name="perm_setup_subtitle">Grant these permissions so SYSU Go can track your trip and keep you visible to dispatch — even with the screen off.</string>
+    <string name="perm_step_label">Step %1$d of %2$d</string>
+
+    <string name="perm_loc_name">Location Access</string>
+    <string name="perm_loc_desc">Required for GPS tracking and real-time dispatch visibility</string>
+    <string name="perm_loc_hint_title">📍 How to enable Location</string>
+    <string name="perm_loc_hint_body">Tap the button above → Select "Allow" for both Fine and Coarse location. Fine location gives street-level accuracy.</string>
+
+    <string name="perm_notif_name">Notifications</string>
+    <string name="perm_notif_desc">Shows a persistent "tracking active" notification while the app is running</string>
+    <string name="perm_notif_hint_title">🔔 How to enable Notifications</string>
+    <string name="perm_notif_hint_body">Tap the button above → Select "Allow" on the prompt. Android 13+ requires this runtime permission to show notifications.</string>
+
+    <string name="perm_battery_name">Background Activity</string>
+    <string name="perm_battery_desc">Required so the app keeps running when your screen is off</string>
+    <string name="perm_battery_hint_title">⚡ How to disable Battery Optimization</string>
+    <string name="perm_battery_hint_body">Tap the button above → Select "Allow" / "Don\'t optimize" on the system dialog. This prevents Android from killing the tracking service.</string>
+
+    <string name="perm_enable_all">Enable All Permissions</string>
+    <string name="perm_continue">Continue to Dashboard</string>
+    <string name="perm_skip">Skip for now — I\'ll enable later in Settings</string>
+    <string name="perm_all_done">All Set!</string>
+    <string name="perm_redirecting">Redirecting to dashboard…</string>
+</resources>
