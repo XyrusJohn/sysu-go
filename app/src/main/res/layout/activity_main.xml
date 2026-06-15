@@ -409,18 +409,9 @@
         app:layout_constraintVertical_bias="0.0" />
 
     <!-- ══════════════════════════════════════════════
-         MY QUEUE CARD (Phase 1: 0 or 1 shipment)
-         VISIBLE by default. GONE when currentShipments.size >= 2.
-
-         TOP:    tvMyQueueLabel bottom
-         BOTTOM: cardScanCTA top
-         → Same anchors as rvShipmentCards — clean GONE/VISIBLE swap.
-         → vertical_bias="0.0" pushes it to top when space is available.
-         ══════════════════════════════════════════════ -->
-    <!-- ══════════════════════════════════════════════
          MY QUEUE SECTION — Full queue detail view
          Replaces cardMyQueue — same constraint anchors.
-         Visibility controlled by isInQueue + hasShipment.
+         Visibility controlled by showMyQueueSection() / updateQueueTabs().
          cardMyQueue kept in DOM (visibility="gone") as fallback.
          ══════════════════════════════════════════════ -->
     <include
@@ -437,8 +428,9 @@
         app:layout_constraintVertical_bias="0.0" />
 
     <!-- cardMyQueue — kept as minimal empty shell (visibility gone).
-         Actual display is in myQueueSection.
-         No inner views — avoids duplicate tvQueueStatusLabel ID with cardQueueStatus. -->
+         The myQueueSection include above replaces it for the queue-display use case.
+         Kept only to preserve anchor chain: top→@id/tvMyQueueLabel, bottom→@id/cardScanCTA.
+         tvQueueDetails placeholder ensures updateQueueUI() binding compiles. -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/cardMyQueue"
         android:layout_width="0dp"
@@ -448,7 +440,18 @@
         app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintVertical_bias="0.0" />
+        app:layout_constraintVertical_bias="0.0">
+
+        <TextView
+            android:id="@+id/tvQueueDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tap scan button to join"
+            android:textSize="@dimen/text_size_label"
+            android:textColor="@color/text_secondary"
+            android:fontFamily="@font/atkinson_hyperlegible_regular"
+            android:padding="20dp" />
+    </com.google.android.material.card.MaterialCardView>
 
     <!-- ══════════════════════════════════════════════
          SCAN HINT — shown when NOT in queue.
