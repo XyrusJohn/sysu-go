@@ -948,6 +948,10 @@ class MainActivity : AppCompatActivity() {
             // OBD number lives inside data nested map
             val obdNumber = data?.get("obdNumber") as? String ?: ""
 
+            // Extract lineItems for ObdItemsBottomSheet
+            @Suppress("UNCHECKED_CAST")
+            val rawLineItems = data?.get("lineItems") as? List<Map<String, Any>> ?: emptyList()
+
             val assignment = com.sysu.go.model.Assignment(
                 docId = docId,
                 queueId = docId,   // for Phase 2, queueId == docId since tabs come from sap_assignments
@@ -959,7 +963,8 @@ class MainActivity : AppCompatActivity() {
                 helper = helperName,
                 guardVerified = guardVerified,
                 deliveryTimestamp = delTs?.toDate()?.time ?: 0L,
-                obdNumber = obdNumber
+                obdNumber = obdNumber,
+                lineItems = rawLineItems
             )
             newShipments.add(assignment)
             Log.d(TAG, ">> Synced shipment: docId=$docId, obd=$obdNumber, plate=$truckPlate, tripStatus=$tripStatus")

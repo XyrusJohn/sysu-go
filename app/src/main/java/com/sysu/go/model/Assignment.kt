@@ -39,6 +39,11 @@ data class Assignment(
     val deliveryTimestamp: Long = 0L,
     val obdCount: Int = 0,
     val requirements: Map<String, Boolean> = emptyMap(),
+    /**
+     * Raw OBD line items from sap_assignments.data.lineItems — used to
+     * populate ObdItemsBottomSheet when user taps OBD Items card.
+     */
+    val lineItems: List<Map<String, Any>> = emptyList(),
     val obdNumber: String = ""
 ) {
     /** Returns OBD number for display; falls back to docId if not set */
