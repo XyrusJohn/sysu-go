@@ -2,6 +2,7 @@ package com.sysu.go.activities
 
 import android.annotation.SuppressLint
 import android.Manifest
+import android.util.Base64
 import android.util.Log
 import android.content.SharedPreferences
 import android.os.Bundle
@@ -22,9 +23,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.storage.FirebaseStorage
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityMainBinding
 import com.sysu.go.firebase.FirebaseAuthManager
+import com.sysu.go.repository.SecurityGuardRepository
+import com.sysu.go.activities.ObdItemsBottomSheet
+import com.sysu.go.activities.GuardSelectionBottomSheet
+import com.sysu.go.activities.SignaturePadBottomSheet
 import com.sysu.go.network.SocketManager
 import com.sysu.go.services.LocationServices
 import com.sysu.go.utils.ConnectivityMonitor
@@ -37,6 +43,7 @@ import kotlinx.coroutines.tasks.await
 import java.util.Locale
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.animation.AnimatorSet
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.res.ColorStateList
@@ -46,6 +53,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkInfo
 import android.os.Handler
 import android.os.Looper
+import com.sysu.go.databinding.MyQueueSectionBinding
 
 class MainActivity : AppCompatActivity() {
 
@@ -109,6 +117,9 @@ class MainActivity : AppCompatActivity() {
     /** In-memory list of loaded Assignment objects — used to populate vertical shipment cards */
     private val currentShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
+    private var myQueueSectionBinding: MyQueueSectionBinding? = null
+    private var sectionBannerAnimator: AnimatorSet? = null
+
     companion object {
         private const val TAG = "MainActivity"
         private const val PREFS_NAME = "go_prefs"
@@ -169,6 +180,11 @@ class MainActivity : AppCompatActivity() {
 
         loadDriverInfo()
         setupUI()
+
+        // Inflate myQueueSection binding
+        val sectionView = findViewById<View>(R.id.myQueueSection)
+        myQueueSectionBinding = MyQueueSectionBinding.bind(sectionView)
+
         setupBottomNav()
         setupTutorial()
         listenToQueueStatus()
@@ -410,11 +426,19 @@ class MainActivity : AppCompatActivity() {
      * of full-width shipment cards, each tappable → QueueDetailsActivity for that shipment.
      */
     private fun updateQueueTabs() {
+        // When driver is in queue, show myQueueSection instead of old cardMyQueue/rvShipmentCards
+        if (isInQueue && currentShipments.isNotEmpty()) {
+            binding.rvShipmentCards.visibility = View.GONE
+            binding.cardMyQueue.visibility = View.GONE
+            showMyQueueSection(true)
+            return
+        }
+
         when {
             currentShipments.size < 2 -> {
-                // 0 or 1 shipment — hide vertical list, cardMyQueue handles display
+                // 0 or 1 shipment — hide vertical list and queue section; cardMyQueue stays gone
                 binding.rvShipmentCards.visibility = View.GONE
-                binding.cardMyQueue.visibility = View.VISIBLE
+                binding.cardMyQueue.visibility = View.GONE
                 return
             }
             else -> {
@@ -545,6 +569,179 @@ class MainActivity : AppCompatActivity() {
             ?: run { binding.ctaStatusDot.alpha = 1f }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // My Queue Section — full queue detail view replacing cardMyQueue
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Shows or hides the My Queue full detail section (myQueueSection).
+     * When showing, hides rvShipmentCards and cardScanCTA to avoid visual conflict.
+     * When hiding, leaves rvShipmentCards/cardScanCTA to their existing visibility state.
+     */
+    private fun showMyQueueSection(show: Boolean) {
+        val sectionView = findViewById<View>(R.id.myQueueSection) ?: return
+        sectionView.visibility = if (show) View.VISIBLE else View.GONE
+
+        if (show) {
+            // Hide competing views — My Queue section is the primary display when in queue
+            binding.rvShipmentCards.visibility = View.GONE
+            binding.cardScanCTA.visibility = View.GONE
+            binding.cardMyQueue.visibility = View.GONE
+        }
+    }
+
+    /**
+     * Populates myQueueSection with data from currentShipments.
+     * Called after currentShipments is updated (syncQueueTabsFromSapSnapshots).
+     *
+     * Visibility rules:
+     * - sectionTopBanner: shown when driver has ≥1 in-queue assignment
+     * - cardDetails: shown for 1st in-queue assignment (always overlaps banner via marginTop=-20dp)
+     * - cardObdItems: shown only when that assignment has lineItems
+     * - guardVerificationSection: shown when in queue
+     */
+    private fun populateMyQueueSection() {
+        val sb = myQueueSectionBinding ?: return
+
+        // Filter to in-queue assignments only
+        val inQueue = currentShipments.filter { it.isInQueue() }
+
+        if (inQueue.isEmpty()) {
+            // No in-queue assignments — hide everything
+            sb.sectionTopBanner.visibility = View.GONE
+            sb.cardDetails.visibility = View.GONE
+            sb.cardObdItems.visibility = View.GONE
+            sb.guardVerificationSection.visibility = View.GONE
+            sb.cardFloatingViewVerification.visibility = View.GONE
+            return
+        }
+
+        // ── Banner ──────────────────────────────────────────────────────────────
+        sb.sectionTopBanner.visibility = View.VISIBLE
+        val first = inQueue.first()
+        // Queue number — stored in queue document (show "—" until listenToQueueStatus updates it)
+        sb.tvQueueNumber.text = // TODO: wire queueNumber from queue document listener
+            inQueue.firstOrNull()?.obdNumber?.takeIf { it.isNotBlank() }?.take(6)?.let { "No. $it" } ?: "—"
+        sb.tvQueueStatusLabel.text = first.status.uppercase()
+        sb.tvQueueNumberLabel.text = "QUEUE NUMBER"
+
+        // ── Shipment Details Card ───────────────────────────────────────────────
+        sb.cardDetails.visibility = View.VISIBLE
+        sb.tvShipmentNumberVal.text = first.shipmentNumber.uppercase()
+        sb.tvPlateNumberVal.text = first.plateNumber.ifBlank { "No plate" }
+        // destination / plannedDelivery — from sap_assignments.data (not yet populated in model)
+        sb.tvDestinationVal.text = "—"
+        sb.tvPlannedDeliveryVal.text = "—"
+
+        // ── OBD Items Card ─────────────────────────────────────────────────────
+        if (first.lineItems.isNotEmpty()) {
+            sb.cardObdItems.visibility = View.VISIBLE
+            sb.tvObdCount.text = "${first.lineItems.size} items"
+            sb.cardObdItems.setOnClickListener {
+                val sheet = ObdItemsBottomSheet.newInstance(first.lineItems)
+                sheet.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
+            }
+        } else {
+            sb.cardObdItems.visibility = View.GONE
+        }
+
+        // ── Guard Verification Section ──────────────────────────────────────────
+        sb.guardVerificationSection.visibility = View.VISIBLE
+
+        // Guard selection card
+        sb.cardSelectGuard.setOnClickListener {
+            openGuardSelectionSheet(first.docId)
+        }
+
+        // Sign button — enabled always; guard selection is a separate step
+        sb.btnSign.isEnabled = true
+        sb.btnSign.alpha = 1f
+        sb.btnSign.setOnClickListener {
+            signatureClicked(first.docId)
+        }
+
+        // Guard name display (populated after guard selection)
+        val guardName = listOf(first.guardFirstName, first.guardLastName)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { "Tap to select guard" }
+        sb.tvSelectedGuardName.text = guardName
+
+        // Guard verified status
+        if (first.guardVerified) {
+            sb.btnSign.text = "Verified"
+            sb.cardFloatingViewVerification.visibility = View.GONE
+        } else {
+            sb.btnSign.text = "Sign & Verify"
+            sb.cardFloatingViewVerification.visibility = View.GONE
+        }
+
+        // ── Floating Verification Pill ──────────────────────────────────────────
+        sb.cardFloatingViewVerification.visibility = View.GONE
+        sb.cardFloatingViewVerification.setOnClickListener {
+            // Scroll to guard section (guardVerificationSection is always shown when in queue)
+            sb.guardVerificationSection.requestFocus()
+        }
+
+        // Start section circle animation (banner bouncing circle)
+        sb.sectionTopBanner.postDelayed({ startSectionCircleAnimation() }, 500)
+    }
+
+    /**
+     * Starts the bouncing circle animation inside the My Queue section's banner
+     * (sectionTopBanner → circleContainer), similar to the main header circle animation.
+     */
+    private fun startSectionCircleAnimation() {
+        val sb = myQueueSectionBinding ?: return
+        val container = sb.circleContainer ?: return
+
+        // Stop any existing animation
+        sectionBannerAnimator?.cancel()
+        container.removeAllViews()
+
+        val containerW = container.width
+        val containerH = container.height
+        if (containerW == 0 || containerH == 0) {
+            container.postDelayed({ startSectionCircleAnimation() }, 200)
+            return
+        }
+
+        val random = java.util.Random()
+        val circleCount = random.nextInt(3) + 3  // 3–5 circles
+
+        for (i in 0 until circleCount) {
+            val sizeDp = 40 + random.nextInt(81)
+            val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
+            val startX = random.nextInt(containerW).coerceAtLeast(0).toFloat()
+            val startY = random.nextInt(containerH).coerceAtLeast(0).toFloat()
+            val minSpeed = 0.15f + random.nextFloat() * 0.15f
+            val maxSpeed = minSpeed + 0.2f + random.nextFloat() * 0.25f
+            val alpha = 0.30f + random.nextFloat() * 0.30f
+
+            val circle = View(this).apply {
+                layoutParams = FrameLayout.LayoutParams(sizePx, sizePx)
+                background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_circle_light_red)
+                this.alpha = alpha
+            }
+            container.addView(circle)
+
+            // Bounce animation using the existing helper
+            startBounceAnimation(
+                view = circle,
+                viewSize = sizePx,
+                containerWidth = containerW,
+                containerHeight = containerH,
+                minSpeed = minSpeed,
+                maxSpeed = maxSpeed,
+                initialX = startX,
+                initialY = startY,
+                startDelayMs = (i * 150L) + random.nextInt(400)
+            )
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+
     private fun openQueueDetails() {
         if (currentQueueEntries.isEmpty() && currentShipments.isEmpty()) {
             Toast.makeText(this, "You are not in the queue yet. Scan a QR code to join.", Toast.LENGTH_SHORT).show()
@@ -560,6 +757,93 @@ class MainActivity : AppCompatActivity() {
 
         // Otherwise, open the standard QueueDetails screen
         startActivity(Intent(this, QueueDetailsActivity::class.java))
+    }
+
+    /**
+     * Opens the guard selection bottom sheet for the given assignment.
+     * Loads guards via SecurityGuardRepository (same pattern as QueueDetailsActivity).
+     * On guard selected, updates guardId on the assignment in Firestore.
+     *
+     * WiresTasks 4 & 5 (stub in Task 4, functional in Task 5).
+     */
+    private fun openGuardSelectionSheet(assignmentDocId: String) {
+        val repository = SecurityGuardRepository(this)
+        lifecycleScope.launch {
+            val guards = repository.loadGuards()
+            val sheet = GuardSelectionBottomSheet.newInstance(guards) { guard ->
+                // Update guardId on the assignment in Firestore
+                val assignmentRef = db.collection("sap_assignments").document(assignmentDocId)
+                val updates = mapOf(
+                    "guardId" to guard.guardId,
+                    "guardVerified" to false
+                )
+                assignmentRef.update(updates)
+                    .addOnSuccessListener {
+                        Toast.makeText(this@MainActivity, "Guard selected", Toast.LENGTH_SHORT).show()
+                        populateMyQueueSection()
+                    }
+                    .addOnFailureListener {
+                        Toast.makeText(this@MainActivity, "Failed to save guard", Toast.LENGTH_SHORT).show()
+                    }
+            }
+            sheet.show(supportFragmentManager, GuardSelectionBottomSheet.TAG)
+        }
+    }
+
+    /**
+     * Opens the signature pad bottom sheet for driver signature capture.
+     * On signature captured, saves signatureUrl to the assignment in Firestore
+     * and marks guardVerified = true.
+     *
+     * Wires Tasks 4 & 5 (stub in Task 4, functional in Task 5).
+     */
+    private fun signatureClicked(assignmentDocId: String) {
+        val sheet = SignaturePadBottomSheet()
+        sheet.onSignatureConfirmed = { base64 ->
+            if (base64.isBlank()) return@onSignatureConfirmed
+
+            lifecycleScope.launch {
+                val base64Data = base64
+                    .removePrefix("data:image/png;base64,")
+                    .removePrefix("data:image/jpeg;base64,")
+
+                val signatureBytes = try {
+                    Base64.decode(base64Data, Base64.NO_WRAP)
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Signature capture failed", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                val filename = "signatures/${assignmentDocId}_${System.currentTimeMillis()}.png"
+                val storageRef = FirebaseStorage.getInstance().reference.child(filename)
+
+                val uploadTask = storageRef.putBytes(signatureBytes)
+                try {
+                    val uri = uploadTask.continueWithTask { task ->
+                        if (!task.isSuccessful) throw task.exception ?: Exception("Upload failed")
+                        storageRef.downloadUrl
+                    }.await()
+
+                    val updates = mapOf(
+                        "signatureUrl" to uri.toString(),
+                        "guardVerified" to true
+                    )
+                    db.collection("sap_assignments").document(assignmentDocId)
+                        .update(updates)
+                        .addOnSuccessListener {
+                            isGuardVerified = true
+                            populateMyQueueSection()
+                            Toast.makeText(this@MainActivity, "Verification complete!", Toast.LENGTH_SHORT).show()
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(this@MainActivity, "Failed to save signature", Toast.LENGTH_SHORT).show()
+                        }
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Signature upload failed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        sheet.show(supportFragmentManager, SignaturePadBottomSheet.TAG)
     }
 
     override fun onResume() {
@@ -840,6 +1124,9 @@ class MainActivity : AppCompatActivity() {
                     // Even with no queue doc, check for assigned shipments in sap_assignments
                     listenToAssignmentViaSessionDriverId(driverId, "")
 
+                    // Hide My Queue section since driver is out of queue
+                    showMyQueueSection(false)
+
                     binding.tvStatusBadgeText.text = "Ready to Scan"
                     binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
                     binding.tvScanHint.text = "Show QR code at booth to check in"
@@ -983,6 +1270,10 @@ class MainActivity : AppCompatActivity() {
         //   < 2 → cardMyQueue visible, rvShipmentCards gone
         //   >= 2 → cardMyQueue gone, rvShipmentCards shows vertical list
         updateQueueTabs()
+
+        // ── My Queue section — populate and show when driver has any in-queue assignment ──
+        populateMyQueueSection()
+        showMyQueueSection(isInQueue && currentShipments.isNotEmpty())
     }
 
     private fun updateQueueUI(position: Int?, status: String, truckType: String, shipmentId: String?) {

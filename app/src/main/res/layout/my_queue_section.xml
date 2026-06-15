@@ -677,7 +677,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/btn_height"
                 android:layout_marginTop="8dp"
-                android:text="VERIFY & SEND"
+                android:text="VERIFY &amp; SEND"
                 android:textAllCaps="true"
                 android:textSize="@dimen/text_size_label"
                 android:visibility="gone"
