@@ -622,7 +622,7 @@ class MainActivity : AppCompatActivity() {
         // Queue number — stored in queue document (show "—" until listenToQueueStatus updates it)
         sb.tvQueueNumber.text = // TODO: wire queueNumber from queue document listener
             inQueue.firstOrNull()?.obdNumber?.takeIf { it.isNotBlank() }?.take(6)?.let { "No. $it" } ?: "—"
-        sb.tvQueueStatusLabel.text = first.status.uppercase()
+        sb.tvSectionQueueStatusLabel.text = first.status.uppercase()
         sb.tvQueueNumberLabel.text = "QUEUE NUMBER"
 
         // ── Shipment Details Card ───────────────────────────────────────────────
@@ -693,7 +693,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startSectionCircleAnimation() {
         val sb = myQueueSectionBinding ?: return
-        val container = sb.circleContainer ?: return
+        val container = sb.sectionCircleContainer ?: return
 
         // Stop any existing animation
         sectionBannerAnimator?.cancel()

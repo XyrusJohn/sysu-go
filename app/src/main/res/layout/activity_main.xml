@@ -436,29 +436,24 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintVertical_bias="0.0" />
 
-    <!-- cardMyQueue — kept in DOM temporarily as fallback during transition.
-         Remove after myQueueSection is confirmed working.
-         Inner content kept minimal — actual display via myQueueSection.
-         tvQueueDetails placeholder prevents compile errors in MainActivity.kt. -->
+    <!-- cardMyQueue — kept as empty shell to preserve existing MainActivity.kt
+         code that reference its children (tvQueueDetails, tvQueueStatusLabel).
+         Actual display is now handled by myQueueSection.
+         Always gone — rvShipmentCards or myQueueSection handles visibility instead. -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/cardMyQueue"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginHorizontal="24dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="8dp"
         android:visibility="gone"
-        app:cardCornerRadius="@dimen/corner_radius_pill"
-        app:cardElevation="8dp"
-        app:cardBackgroundColor="@android:color/white"
         app:layout_constraintTop_toBottomOf="@id/tvMyQueueLabel"
         app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintVertical_bias="0.0">
 
-        <!-- Placeholder views — keep existing MainActivity code compilable.
-             Actual queue detail content lives in myQueueSection. -->
+        <!-- Placeholder views — kept so existing MainActivity.kt binding code
+             (updateQueueUI, listenToQueueStatus) doesn't NPE. Actual display is
+             in myQueueSection. Always gone at runtime. -->
         <TextView
             android:id="@+id/tvQueueDetails"
             android:layout_width="wrap_content"
