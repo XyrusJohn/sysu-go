@@ -436,10 +436,9 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintVertical_bias="0.0" />
 
-    <!-- cardMyQueue — kept as empty shell to preserve existing MainActivity.kt
-         code that reference its children (tvQueueDetails, tvQueueStatusLabel).
-         Actual display is now handled by myQueueSection.
-         Always gone — rvShipmentCards or myQueueSection handles visibility instead. -->
+    <!-- cardMyQueue — kept as minimal empty shell (visibility gone).
+         Actual display is in myQueueSection.
+         No inner views — avoids duplicate tvQueueStatusLabel ID with cardQueueStatus. -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/cardMyQueue"
         android:layout_width="0dp"
@@ -449,26 +448,7 @@
         app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintVertical_bias="0.0">
-
-        <!-- Placeholder views — kept so existing MainActivity.kt binding code
-             (updateQueueUI, listenToQueueStatus) doesn't NPE. Actual display is
-             in myQueueSection. Always gone at runtime. -->
-        <TextView
-            android:id="@+id/tvQueueDetails"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:text="" />
-
-        <TextView
-            android:id="@+id/tvQueueStatusLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:text="" />
-
-    </com.google.android.material.card.MaterialCardView>
+        app:layout_constraintVertical_bias="0.0" />
 
     <!-- ══════════════════════════════════════════════
          SCAN HINT — shown when NOT in queue.
