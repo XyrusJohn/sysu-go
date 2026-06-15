@@ -417,6 +417,29 @@
          → Same anchors as rvShipmentCards — clean GONE/VISIBLE swap.
          → vertical_bias="0.0" pushes it to top when space is available.
          ══════════════════════════════════════════════ -->
+    <!-- ══════════════════════════════════════════════
+         MY QUEUE SECTION — Full queue detail view
+         Replaces cardMyQueue — same constraint anchors.
+         Visibility controlled by isInQueue + hasShipment.
+         cardMyQueue kept in DOM (visibility="gone") as fallback.
+         ══════════════════════════════════════════════ -->
+    <include
+        android:id="@+id/myQueueSection"
+        layout="@layout/my_queue_section"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:layout_marginTop="8dp"
+        app:layout_constraintTop_toBottomOf="@id/tvMyQueueLabel"
+        app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintVertical_bias="0.0" />
+
+    <!-- cardMyQueue — kept in DOM temporarily as fallback during transition.
+         Remove after myQueueSection is confirmed working.
+         Inner content kept minimal — actual display via myQueueSection.
+         tvQueueDetails placeholder prevents compile errors in MainActivity.kt. -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/cardMyQueue"
         android:layout_width="0dp"
@@ -424,6 +447,7 @@
         android:layout_marginHorizontal="24dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp"
+        android:visibility="gone"
         app:cardCornerRadius="@dimen/corner_radius_pill"
         app:cardElevation="8dp"
         app:cardBackgroundColor="@android:color/white"
@@ -433,68 +457,22 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintVertical_bias="0.0">
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <!-- Placeholder views — keep existing MainActivity code compilable.
+             Actual queue detail content lives in myQueueSection. -->
+        <TextView
+            android:id="@+id/tvQueueDetails"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingVertical="18dp"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp">
+            android:visibility="gone"
+            android:text="" />
 
-            <FrameLayout
-                android:layout_width="56dp"
-                android:layout_height="56dp">
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:background="@drawable/bg_circle_light_red"
-                    android:backgroundTint="@color/sysu_red"
-                    android:alpha="0.15" />
-                <ImageView
-                    android:id="@+id/ivTicketIcon"
-                    android:layout_width="@dimen/icon_size_medium"
-                    android:layout_height="@dimen/icon_size_medium"
-                    android:layout_gravity="center"
-                    android:src="@drawable/ticket_1"
-                    app:tint="@color/sysu_red" />
-            </FrameLayout>
+        <TextView
+            android:id="@+id/tvQueueStatusLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:text="" />
 
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:layout_marginStart="20dp"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="My Queue"
-                    android:textSize="@dimen/text_size_subtitle"
-                    android:textColor="@color/black"
-                    android:fontFamily="@font/atkinson_hyperlegible_bold"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/tvQueueDetails"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Tap scan button to join"
-                    android:textSize="@dimen/text_size_label"
-                    android:textColor="@color/text_secondary"
-                    android:fontFamily="@font/atkinson_hyperlegible_regular"
-                    android:layout_marginTop="3dp" />
-            </LinearLayout>
-
-            <ImageView
-                android:id="@+id/ivChevron"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_chevron_right"
-                app:tint="@color/text_muted" />
-        </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
     <!-- ══════════════════════════════════════════════
