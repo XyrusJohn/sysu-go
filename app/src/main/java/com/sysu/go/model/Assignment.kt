@@ -62,7 +62,9 @@ data class Assignment(
 
     /** True if this shipment has locked START TRIP — another shipment is in transit */
     fun isLocked(sessionActiveDocId: String?): Boolean =
-        sessionActiveDocId != null && sessionActiveDocId != docId
+        sessionActiveDocId != null &&
+        sessionActiveDocId != docId &&
+        tripStatus != "in_transit"  // don't lock if THIS shipment isn't even in transit
 
     /** True if guard has verified and trip hasn't started yet — driver can tap START TRIP */
     val canStartTrip: Boolean get() = guardVerified && tripStatus != "in_transit" && tripStatus != "completed"
