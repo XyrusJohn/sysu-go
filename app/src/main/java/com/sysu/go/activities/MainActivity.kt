@@ -761,15 +761,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnScanQR.setOnClickListener {
             when {
-                // ALL CONFIRMED: show My Trip tab — START TRIP dialog only triggers per-card
+                // ALL CONFIRMED: launch MyTripActivity (shipment card list with START TRIP buttons)
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
-                    // Pretend Profile icon was tapped — show My Trip tab
-                    updateBottomNavSelectionForTab(isHomeTab = false)
-                    binding.cardScanCTA.visibility = View.GONE
-                    binding.tvScanHint.visibility = View.GONE
-                    binding.myTripTabContainer.visibility = View.VISIBLE
-                    fetchAndSetupMyTripCards()
+                    startActivity(Intent(this, MyTripActivity::class.java))
                 }
                 // Shipment assigned → open AssignmentActivity (shows all assignments)
                 hasShipment -> {
@@ -808,17 +803,13 @@ class MainActivity : AppCompatActivity() {
             binding.myTripTabContainer.visibility = View.GONE
         }
 
-        // Bottom nav — Profile/Map icon: shows My Trip tab, hides home content
+        // Bottom nav — Profile/Map icon: show My Trip tab (shipment card list)
         binding.btnProfile.setOnClickListener {
-            updateBottomNavSelectionForTab(isHomeTab = false)
-            // Show My Trip tab
-            binding.cardScanCTA.visibility = View.GONE
-            binding.tvScanHint.visibility = View.GONE
-            binding.myTripTabContainer.visibility = View.VISIBLE
-            fetchAndSetupMyTripCards()
+            startActivity(Intent(this, MyTripActivity::class.java))
         }
 
         // Back button inside My Trip tab — returns to Home tab
+        // (kept for backwards compatibility; actual back navigation is now in MyTripActivity)
         binding.myTripTabContainer.findViewById<ImageButton>(R.id.btnBack)?.setOnClickListener {
             updateBottomNavSelectionForTab(isHomeTab = true)
             binding.cardScanCTA.visibility = View.VISIBLE

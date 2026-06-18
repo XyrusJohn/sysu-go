@@ -12,8 +12,8 @@ import com.sysu.go.databinding.ItemMyTripTabCardBinding
 import com.sysu.go.model.Assignment
 
 class MyTripTabAdapter(
-    private val hasActiveTrip: Boolean,
-    private val activeShipmentId: String?,
+    var hasActiveTrip: Boolean,
+    var activeShipmentId: String?,
     private val onTripActionClicked: (Assignment) -> Unit
 ) : ListAdapter<Assignment, MyTripTabAdapter.MyTripTabViewHolder>(AssignmentDiffCallback()) {
 

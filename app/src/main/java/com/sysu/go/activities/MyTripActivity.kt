@@ -1,58 +1,44 @@
 package com.sysu.go.activities
 
-import android.Manifest
-import android.content.ContentValues
-import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Transaction
 import com.sysu.go.R
-import com.sysu.go.adapter.ObdTripAdapter
+import com.sysu.go.adapter.MyTripTabAdapter
 import com.sysu.go.databinding.ActivityMyTripBinding
-import com.sysu.go.utils.ImageStorageHelper
+import com.sysu.go.model.Assignment
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
- * Active Delivery Execution screen.
+ * MY TRIP — shows all confirmed shipments (guardVerified && driverConfirmed)
+ * as cards with START TRIP buttons. Mirrors AssignmentActivity's structure.
  *
- * Shows exactly ONE shipment that is currently "in_transit".
- * Renders all OBD line items. Tapping any item opens [ObdStatusBottomSheet]
- * for status selection, which triggers a camera intent to capture the POD photo.
+ * Red banner: bouncing circles + pulse rings (same animation as AssignmentActivity).
+ * RecyclerView: one card per confirmed shipment using item_my_trip_tab_card.
+ * Tapping START TRIP on a card → confirmShipment() + startSingleShipment()
+ * → saves activeSapDocId → launches MyTripActivity (OBD delivery execution).
+ * Tapping "VIEW OBD ITEMS" on an in_transit card → launches MyTripActivity
+ * scoped to that shipment.
  *
- * State lock: The shipment shown here is the one with tripStatus == "in_transit"
- * for this driver — enforced by Firestore SnapshotListener.
- *
- * Camera lifecycle: Pending OBD state is preserved via [onSaveInstanceState]
- * before launching the camera intent.
+ * Bouncing circles and pulse rings are cleaned up in onDestroy.
  */
 class MyTripActivity : AppCompatActivity() {
 
@@ -60,37 +46,21 @@ class MyTripActivity : AppCompatActivity() {
     private val db = FirebaseFirestore.getInstance()
     private val sessionManager by lazy { SessionManager(this) }
 
-    // Current shipment data
-    private var currentSapDocId: String = ""
-    private var currentLineItems: MutableList<Map<String, Any?>> = mutableListOf()
+    /** Shared adapter — created once in onCreate */
+    private lateinit var shipmentAdapter: MyTripTabAdapter
 
-    // Adapter
-    private val obdAdapter = ObdTripAdapter { item, position ->
-        openStatusSheet(item, position)
-    }
+    /** Firestore snapshot listener removed onDestroy */
+    private var assignmentsListener: com.google.firebase.firestore.ListenerRegistration? = null
 
-    // Firestore listener — kept so we can remove it onDestroy
-    private var shipmentListener: com.google.firebase.firestore.ListenerRegistration? = null
+    /** Bouncing circles — cancelled onDestroy */
+    private val circleAnimators = mutableListOf<android.animation.Animator>()
+    private val circleViews = mutableListOf<View>()
 
-    // Camera: the photo is written here before upload
-    private var pendingPhotoFile: File? = null
-    private var pendingPhotoUri: Uri? = null
-    // Lifecycle-safe: state preserved across config change + OS kill
-    private var pendingStatus: String? = null
-    private var pendingObdNumber: String? = null
-    private var pendingPosition: Int = -1
-
-    // ActivityResult launcher for camera
-    private lateinit var cameraLauncher: ActivityResultLauncher<Intent>
+    /** Prevents double-init of bouncing circles */
+    private var circlesInitialized = false
 
     companion object {
         private const val TAG = "MyTripActivity"
-        private const val REQ_CODE_CAMERA = 1001
-
-        private const val KEY_PENDING_STATUS = "pendingStatus"
-        private const val KEY_PENDING_OBD_NUMBER = "pendingObdNumber"
-        private const val KEY_PENDING_POSITION = "pendingPosition"
-        private const val KEY_PENDING_PHOTO_PATH = "pendingPhotoPath"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,105 +75,381 @@ class MyTripActivity : AppCompatActivity() {
             insets
         }
 
-        setupCameraLauncher()
+        // Create adapter once — stored as class field so we can update state without re-creating
+        shipmentAdapter = MyTripTabAdapter(hasActiveTrip = false, activeShipmentId = null) { assignment ->
+            onTripActionClicked(assignment)
+        }
+
         setupRecyclerView()
         setupUI()
         startCircleAnimation()
-        restoreInstanceState(savedInstanceState)
-
-        // If we were mid-camera when a config change happened, restore and re-launch
-        if (pendingPhotoFile != null && pendingStatus != null) {
-            // Camera was open — don't re-launch immediately (user might still be in camera)
-            // Just log — the onActivityResult will handle it if photo was taken
-            Log.d(TAG, "Restored pending camera state — docId=$currentSapDocId, status=$pendingStatus, obd=$pendingObdNumber")
-        }
+        startPulseRings()
     }
 
     override fun onResume() {
         super.onResume()
-        loadActiveShipment()
+        loadAssignments()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        shipmentListener?.remove()
-        // Clean up temp photo file if not consumed
-        pendingPhotoFile?.delete()
+        circleAnimators.forEach { it.cancel() }
+        circleAnimators.clear()
+        circleViews.forEach { binding.circleContainer.removeView(it) }
+        circleViews.clear()
+        assignmentsListener?.remove()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        pendingStatus?.let { outState.putString(KEY_PENDING_STATUS, it) }
-        pendingObdNumber?.let { outState.putString(KEY_PENDING_OBD_NUMBER, it) }
-        if (pendingPosition >= 0) outState.putInt(KEY_PENDING_POSITION, pendingPosition)
-        pendingPhotoFile?.absolutePath?.let { outState.putString(KEY_PENDING_PHOTO_PATH, it) }
-    }
-
-    // ─── Setup ─────────────────────────────────────────────────────────────────
-
-    private fun restoreInstanceState(savedInstanceState: Bundle?) {
-        savedInstanceState ?: return
-        pendingStatus = savedInstanceState.getString(KEY_PENDING_STATUS)
-        pendingObdNumber = savedInstanceState.getString(KEY_PENDING_OBD_NUMBER)
-        pendingPosition = savedInstanceState.getInt(KEY_PENDING_POSITION, -1)
-        savedInstanceState.getString(KEY_PENDING_PHOTO_PATH)?.let { path ->
-            val file = File(path)
-            if (file.exists()) pendingPhotoFile = file
-        }
-    }
-
-    private fun setupCameraLauncher() {
-        cameraLauncher = registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            if (result.resultCode == RESULT_OK) {
-                onCameraResult()
-            } else {
-                // User cancelled or camera failed — clear pending state
-                Log.d(TAG, "Camera result not OK — clearing pending state")
-                clearPendingState()
-            }
-        }
-    }
-
-    private fun setupRecyclerView() {
-        binding.rvObdItems.apply {
-            layoutManager = LinearLayoutManager(this@MyTripActivity)
-            adapter = obdAdapter
-            itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
-                addDuration = 150
-                removeDuration = 150
-            }
-        }
-    }
+    // ─── UI setup ──────────────────────────────────────────────────────────────
 
     private fun setupUI() {
         binding.btnBack.setOnClickListener { finish() }
+    }
 
-        binding.cardFinishDelivery.setOnClickListener {
-            promptFinishDelivery()
+    private fun setupRecyclerView() {
+        val rv = binding.rvShipments
+        rv.layoutManager = LinearLayoutManager(this)
+        rv.adapter = shipmentAdapter
+        rv.overScrollMode = RecyclerView.OVER_SCROLL_ALWAYS
+        rv.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+            addDuration = 200
+            removeDuration = 200
+            moveDuration = 200
+            changeDuration = 200
         }
     }
 
-    // ─── Circle animation (matches AssignmentActivity pattern) ──────────────────
+    // ─── Firestore loading ─────────────────────────────────────────────────────
+
+    /**
+     * Loads all confirmed shipments for this driver.
+     * Two-approach pattern matching AssignmentActivity:
+     *   1. Try queue doc ID (sap_assignments.driverId = queue doc ID)
+     *   2. Fall back to Firebase UID
+     *
+     * If an in_transit shipment exists or a shipment_doc_id was passed in the
+     * intent, delegates to the in-transit delivery screen automatically.
+     */
+    private fun loadAssignments() {
+        assignmentsListener?.remove()
+        val sessionDriverId = sessionManager.getDriverId() ?: return
+        val intentDocId = intent.getStringExtra("shipment_doc_id")
+
+        val queueDocId = sessionManager.getCurrentQueueDocId()
+        if (!queueDocId.isNullOrBlank()) {
+            assignmentsListener = db.collection("sap_assignments")
+                .whereEqualTo("driverId", queueDocId)
+                .addSnapshotListener { snaps, err ->
+                    if (err != null || snaps == null) {
+                        loadAssignmentsFallback(sessionDriverId, intentDocId)
+                        return@addSnapshotListener
+                    }
+                    if (isFinishing) return@addSnapshotListener
+                    val list = snaps.documents.mapNotNull { buildAssignment(it) }
+                    handleAssignmentList(list, intentDocId)
+                }
+        } else {
+            loadAssignmentsFallback(sessionDriverId, intentDocId)
+        }
+    }
+
+    private fun loadAssignmentsFallback(sessionDriverId: String, intentDocId: String?) {
+        assignmentsListener = db.collection("sap_assignments")
+            .whereEqualTo("driverId", sessionDriverId)
+            .addSnapshotListener { snaps, err ->
+                if (err != null || snaps == null) {
+                    Log.e(TAG, "loadAssignments fallback error: ${err?.message}")
+                    return@addSnapshotListener
+                }
+                if (isFinishing) return@addSnapshotListener
+                val list = snaps.documents.mapNotNull { buildAssignment(it) }
+                handleAssignmentList(list, intentDocId)
+            }
+    }
+
+    private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
+        // If launched with a specific shipment_doc_id — delegate to that shipment
+        if (!intentDocId.isNullOrBlank()) {
+            val target = list.find { it.docId == intentDocId }
+            if (target != null) {
+                loadSpecificShipment(target)
+                return
+            }
+        }
+
+        // Auto-navigate if any shipment is already in_transit
+        val inTransit = list.find { it.tripStatus == "in_transit" }
+        if (inTransit != null) {
+            launchDeliveryActivity(inTransit.docId)
+            return
+        }
+
+        // Show confirmed-but-not-in-transit shipments as cards
+        val confirmed = list.filter {
+            it.guardVerified && it.driverConfirmed && it.tripStatus != "in_transit" && it.tripStatus != "completed"
+        }
+
+        shipmentAdapter.hasActiveTrip = false
+        shipmentAdapter.activeShipmentId = null
+        shipmentAdapter.submitList(confirmed.toList())
+
+        updateAggregateBadge(confirmed)
+        updateEmptyState(confirmed.isEmpty(), list.isEmpty())
+        binding.tvBadgeText.text = getString(R.string.my_trip_badge_trips_ready)
+    }
+
+    /**
+     * Shown when MyTripActivity was launched with a shipment_doc_id intent extra.
+     * Displays that shipment's card and immediately navigates to its delivery UI.
+     */
+    private fun loadSpecificShipment(shipment: Assignment) {
+        val isInTransit = shipment.tripStatus == "in_transit"
+
+        shipmentAdapter.hasActiveTrip = isInTransit
+        shipmentAdapter.activeShipmentId = if (isInTransit) shipment.docId else null
+        shipmentAdapter.submitList(listOf(shipment))
+
+        // If in_transit → go to delivery screen
+        if (isInTransit) {
+            launchDeliveryActivity(shipment.docId)
+            return
+        }
+
+        // Confirmed but not yet in_transit — show as card with START TRIP button
+        updateAggregateBadge(listOf(shipment))
+        binding.tvBadgeText.text = shipment.shipmentNumber.ifBlank { shipment.docId }
+        binding.emptyState.visibility = View.GONE
+    }
+
+    private fun updateEmptyState(listEmpty: Boolean, totalEmpty: Boolean) {
+        if (totalEmpty) {
+            // No assignments at all
+            binding.rvShipments.visibility = View.GONE
+            binding.emptyState.visibility = View.VISIBLE
+            binding.badgeVerified.visibility = View.GONE
+            binding.aggregateBadgeContainer.visibility = View.GONE
+        } else if (listEmpty) {
+            // Assignments exist but none confirmed yet
+            binding.rvShipments.visibility = View.GONE
+            binding.emptyState.visibility = View.VISIBLE
+        } else {
+            binding.rvShipments.visibility = View.VISIBLE
+            binding.emptyState.visibility = View.GONE
+        }
+    }
+
+    // ─── Per-card action ───────────────────────────────────────────────────────
+
+    private fun onTripActionClicked(assignment: Assignment) {
+        when {
+            assignment.tripStatus == "in_transit" -> {
+                // Open delivery execution for this shipment
+                launchDeliveryActivity(assignment.docId)
+            }
+            assignment.guardVerified && assignment.driverConfirmed -> {
+                // Confirmed but no active trip — show START TRIP dialog
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.confirm_start_trip_title)
+                    .setMessage(R.string.confirm_start_trip_message)
+                    .setPositiveButton(R.string.btn_start_trip) { _, _ ->
+                        confirmAndStartTrip(assignment)
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+            assignment.guardVerified && !assignment.driverConfirmed -> {
+                // Guard verified but driver not yet confirmed → confirm first
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.confirm_shipment_title)
+                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
+                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ ->
+                        confirmShipment(assignment) {
+                            confirmAndStartTrip(assignment)
+                        }
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+            else -> {
+                // Not yet guard verified — redirect to AssignmentActivity
+                Toast.makeText(this, "Please complete guard verification first.", Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }
+    }
+
+    private fun confirmShipment(assignment: Assignment, onSuccess: () -> Unit) {
+        lifecycleScope.launch {
+            try {
+                val updates = mapOf("driverConfirmed" to true)
+                db.collection("sap_assignments").document(assignment.docId)
+                    .update(updates)
+                    .await()
+                Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
+                onSuccess()
+            } catch (e: Exception) {
+                Log.e(TAG, "confirmShipment error: ${e.message}")
+                Toast.makeText(this@MyTripActivity, "Failed to confirm. Try again.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun confirmAndStartTrip(assignment: Assignment) {
+        lifecycleScope.launch {
+            try {
+                // Save as active trip in session FIRST
+                sessionManager.saveActiveSapDocId(assignment.docId)
+                sessionManager.saveCurrentSapDocId(assignment.docId)
+                sessionManager.setTripActive(true)
+
+                val updates = mapOf(
+                    "tripStatus" to "in_transit",
+                    "startedAt" to Timestamp.now()
+                )
+                db.collection("sap_assignments").document(assignment.docId)
+                    .update(updates)
+                    .await()
+
+                Log.d(TAG, "startTrip: ${assignment.docId} → in_transit")
+                Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
+
+                // Navigate to delivery execution — use clear_top so back goes to home
+                sessionManager.setTripActive(true)
+                val intent = Intent(this@MyTripActivity, MyTripActivity::class.java).apply {
+                    putExtra("shipment_doc_id", assignment.docId)
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                startActivity(intent)
+                finish()
+            } catch (e: Exception) {
+                Log.e(TAG, "confirmAndStartTrip error: ${e.message}")
+                sessionManager.saveActiveSapDocId(null)
+                sessionManager.clearCurrentSapDocId()
+                sessionManager.setTripActive(false)
+                Toast.makeText(this@MyTripActivity, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun launchDeliveryActivity(sapDocId: String) {
+        sessionManager.saveCurrentSapDocId(sapDocId)
+        val intent = Intent(this, MyTripActivity::class.java).apply {
+            putExtra("shipment_doc_id", sapDocId)
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(intent)
+        finish()
+    }
+
+    // ─── Assignment builder ────────────────────────────────────────────────────
+
+    private fun buildAssignment(snap: com.google.firebase.firestore.DocumentSnapshot): Assignment? {
+        return try {
+            val queueId = snap.getString("driverId") ?: ""
+            val tripStatus = snap.getString("tripStatus")
+            val guardVerified = snap.getBoolean("guardVerified") ?: false
+            val driverConfirmed = snap.getBoolean("driverConfirmed") ?: false
+            val guardFirstName = snap.getString("guardFirstName") ?: ""
+            val guardLastName = snap.getString("guardLastName") ?: ""
+            val guardSignature = snap.getString("guardSignature") ?: ""
+            val shipmentNumberRaw = snap.getString("shipmentNumber") ?: ""
+
+            val lineItems = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
+            val firstItem = lineItems.filterIsInstance<Map<String, Any?>>().firstOrNull()
+            val delTsRaw = firstItem?.get("actualDelDate") as? String
+            val deliveryTs = try {
+                delTsRaw?.removePrefix("/Date(")?.removeSuffix(")/")?.toLong() ?: 0L
+            } catch (e: Exception) { 0L }
+
+            val obdCount = lineItems.filterIsInstance<Map<String, Any?>>().size
+            val obdNumber = firstItem?.get("obdNumber") as? String ?: ""
+
+            Assignment(
+                docId = snap.id,
+                queueId = queueId,
+                driverId = sessionManager.getDriverId() ?: "",
+                status = snap.getString("status") ?: "",
+                tripStatus = tripStatus,
+                plateNumber = snap.getString("truckPlate") ?: "",
+                truckType = snap.getString("truckCompany") ?: snap.getString("truckType") ?: "",
+                helper = snap.getString("helperName") ?: snap.getString("helper") ?: "",
+                guardVerified = guardVerified,
+                driverConfirmed = driverConfirmed,
+                guardFirstName = guardFirstName,
+                guardLastName = guardLastName,
+                guardSignature = guardSignature,
+                deliveryTimestamp = deliveryTs,
+                obdCount = obdCount,
+                requirements = emptyMap(),
+                lineItems = lineItems.filterIsInstance<Map<String, Any?>>() as List<Map<String, Any>>,
+                obdNumber = obdNumber,
+                shipmentNumberRaw = shipmentNumberRaw
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "buildAssignment error: ${e.message}")
+            null
+        }
+    }
+
+    // ─── Badge updates ──────────────────────────────────────────────────────────
+
+    private fun updateAggregateBadge(list: List<Assignment>) {
+        if (list.isEmpty()) {
+            binding.aggregateBadgeContainer.visibility = View.GONE
+            binding.badgeVerified.visibility = View.GONE
+            return
+        }
+        binding.aggregateBadgeContainer.visibility = View.VISIBLE
+        binding.badgeVerified.visibility = View.VISIBLE
+
+        // Count any in_transit shipment
+        val inTransitCount = list.count { it.tripStatus == "in_transit" }
+
+        if (inTransitCount > 0) {
+            // Active trip running
+            binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvAggregateBadge.text = "$inTransitCount in transit"
+            binding.tvAggregateBadge.setTextColor(ContextCompat.getColor(this, R.color.white))
+
+            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvBadgeText.text = getString(R.string.cta_status_transit)
+        } else {
+            // Confirmed, ready to start (list already filtered to confirmed-only)
+            binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvAggregateBadge.text = "${list.size} ready"
+            binding.tvAggregateBadge.setTextColor(ContextCompat.getColor(this, R.color.white))
+
+            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvBadgeText.text = getString(R.string.my_trip_badge_trips_ready)
+        }
+    }
+
+    // ═══ Bouncing Circles + Pulse Rings (AssignmentActivity pattern) ═══════
 
     private fun startCircleAnimation() {
+        if (circlesInitialized) return
+        circlesInitialized = true
+
         binding.circleContainer.post {
             val containerW = binding.circleContainer.width
             val containerH = binding.circleContainer.height
             if (containerW == 0 || containerH == 0) return@post
 
             val random = java.util.Random()
-            val count = random.nextInt(3) + 3
+            val count = random.nextInt(4) + 3  // 3–6 circles
 
             for (i in 0 until count) {
-                val sizeDp = 28 + random.nextInt(41)
+                val sizeDp = 28 + random.nextInt(61)
                 val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
                 val startX = random.nextInt(containerW).toFloat()
                 val startY = random.nextInt(containerH).toFloat()
-                val minSpeed = 0.10f + random.nextFloat() * 0.12f
-                val maxSpeed = minSpeed + 0.12f + random.nextFloat() * 0.18f
-                val alpha = 0.20f + random.nextFloat() * 0.25f
+                val minSpeed = 0.12f + random.nextFloat() * 0.15f
+                val maxSpeed = minSpeed + 0.15f + random.nextFloat() * 0.2f
+                val alpha = 0.25f + random.nextFloat() * 0.3f
 
                 val circle = View(this).apply {
                     layoutParams = FrameLayout.LayoutParams(sizePx, sizePx)
@@ -211,16 +457,62 @@ class MyTripActivity : AppCompatActivity() {
                     this.alpha = alpha
                 }
                 binding.circleContainer.addView(circle)
-                startBounceAnimation(circle, sizePx, containerW.toFloat(), containerH.toFloat(), minSpeed, maxSpeed, startX, startY, (i * 120L) + random.nextInt(400))
+                circleViews.add(circle)
+
+                startBounceAnimation(
+                    view = circle,
+                    viewSize = sizePx,
+                    containerWidth = containerW,
+                    containerHeight = containerH,
+                    minSpeed = minSpeed,
+                    maxSpeed = maxSpeed,
+                    initialX = startX,
+                    initialY = startY,
+                    startDelayMs = (i * 150L) + random.nextInt(500)
+                )
             }
         }
+    }
+
+    private fun startPulseRings() {
+        startPulseRing(binding.pulseRing1, 0L)
+        startPulseRing(binding.pulseRing2, 1200L)
+    }
+
+    private fun startPulseRing(ring: View, delayMs: Long) {
+        ring.visibility = View.VISIBLE
+        ring.alpha = 0f
+
+        val scaleUp = android.animation.ObjectAnimator.ofFloat(ring, "scaleX", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val scaleUpY = android.animation.ObjectAnimator.ofFloat(ring, "scaleY", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val fadeOut = android.animation.ObjectAnimator.ofFloat(ring, "alpha", 0.6f, 0f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+
+        circleAnimators.addAll(listOf(scaleUp, scaleUpY, fadeOut))
+        scaleUp.start()
+        scaleUpY.start()
+        fadeOut.start()
     }
 
     private fun startBounceAnimation(
         view: View,
         viewSize: Int,
-        containerWidth: Float,
-        containerHeight: Float,
+        containerWidth: Int,
+        containerHeight: Int,
         minSpeed: Float,
         maxSpeed: Float,
         initialX: Float,
@@ -228,8 +520,8 @@ class MyTripActivity : AppCompatActivity() {
         startDelayMs: Long
     ) {
         val random = java.util.Random()
-        val maxX = (containerWidth - viewSize).coerceAtLeast(0f)
-        val maxY = (containerHeight - viewSize).coerceAtLeast(0f)
+        val maxX = (containerWidth - viewSize).toFloat().coerceAtLeast(0f)
+        val maxY = (containerHeight - viewSize).toFloat().coerceAtLeast(0f)
 
         view.translationX = initialX
         view.translationY = initialY
@@ -239,432 +531,55 @@ class MyTripActivity : AppCompatActivity() {
         var velY = (random.nextFloat() * (maxSpeed - minSpeed) + minSpeed) *
             if (random.nextBoolean()) 1f else -1f
 
-        val animators = mutableListOf<android.animation.Animator>()
-
         android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = Long.MAX_VALUE
+            repeatCount = android.animation.ValueAnimator.INFINITE
             startDelay = startDelayMs
             addUpdateListener {
                 if (random.nextFloat() < 0.02f) {
-                    velX = (velX + (random.nextFloat() - 0.5f) * 0.4f).coerceIn(-maxSpeed, maxSpeed)
+                    velX += (random.nextFloat() - 0.5f) * 0.4f
+                    velX = velX.coerceIn(-maxSpeed, maxSpeed)
                 }
                 if (random.nextFloat() < 0.02f) {
-                    velY = (velY + (random.nextFloat() - 0.5f) * 0.3f).coerceIn(-maxSpeed, maxSpeed)
+                    velY += (random.nextFloat() - 0.3f) * 0.4f
+                    velY = velY.coerceIn(-maxSpeed, maxSpeed)
                 }
-                var newX = (view.translationX + velX).coerceIn(0f, maxX)
-                var newY = (view.translationY + velY).coerceIn(0f, maxY)
+                var newX = view.translationX + velX
+                var newY = view.translationY + velY
+                if (newX <= 0) { newX = 0f; velX = kotlin.math.abs(velX).coerceIn(minSpeed, maxSpeed) }
+                else if (newX >= maxX) { newX = maxX; velX = -kotlin.math.abs(velX).coerceIn(minSpeed, maxSpeed) }
+                if (newY <= 0) { newY = 0f; velY = kotlin.math.abs(velY).coerceIn(minSpeed, maxSpeed) }
+                else if (newY >= maxY) { newY = maxY; velY = -kotlin.math.abs(velY).coerceIn(minSpeed, maxSpeed) }
                 view.translationX = newX
                 view.translationY = newY
             }
-            animators.add(this)
+            circleAnimators.add(this)
             start()
         }
 
         android.animation.ObjectAnimator.ofFloat(view, "scaleX", 1f, 1.08f).apply {
             duration = 4000L + random.nextInt(1500)
+            repeatCount = android.animation.ObjectAnimator.INFINITE
             repeatMode = android.animation.ObjectAnimator.REVERSE
-            repeatCount = android.animation.ValueAnimator.INFINITE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
             startDelay = startDelayMs
-            animators.add(this)
+            circleAnimators.add(this)
             start()
         }
 
         android.animation.ObjectAnimator.ofFloat(view, "scaleY", 1f, 1.06f).apply {
             duration = 4500L + random.nextInt(1500)
+            repeatCount = android.animation.ObjectAnimator.INFINITE
             repeatMode = android.animation.ObjectAnimator.REVERSE
-            repeatCount = android.animation.ValueAnimator.INFINITE
-            startDelay = startDelayMs + 500L
-            animators.add(this)
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            startDelay = startDelayMs + 600L
+            circleAnimators.add(this)
             start()
         }
     }
 
-    // ─── Firestore Loading ─────────────────────────────────────────────────────
-
-    /**
-     * Loads the single in_transit shipment for this driver.
-     *
-     * Query strategy mirrors AssignmentActivity's pattern:
-     * 1. Try queue doc ID (sap_assignments.driverId = queue doc ID)
-     * 2. Fall back to Firebase UID
-     *
-     * addSnapshotListener keeps the lock authoritative even if another process
-     * changes the tripStatus while this activity is on screen.
-     */
-    private fun loadActiveShipment() {
-        shipmentListener?.remove()
-
-        val driverId = sessionManager.getDriverId() ?: run {
-            showNoActiveTrip()
-            return
-        }
-        val queueDocId = sessionManager.getCurrentQueueDocId() ?: ""
-
-        // Override loading state
-        showLoading()
-
-        // Approach 1: queue doc ID primary
-        val docRef = if (queueDocId.isNotBlank()) {
-            db.collection("sap_assignments")
-                .whereEqualTo("driverId", queueDocId)
-                .whereEqualTo("tripStatus", "in_transit")
-        } else null
-
-        if (docRef != null) {
-            shipmentListener = docRef.addSnapshotListener { snaps, err ->
-                if (snaps != null && snaps.size() >= 1) {
-                    loadShipmentFromSnapshot(snaps.documents[0])
-                } else {
-                    loadActiveShipmentFallback(driverId)
-                }
-            }
-        } else {
-            loadActiveShipmentFallback(driverId)
-        }
-    }
-
-    private fun loadActiveShipmentFallback(driverId: String) {
-        shipmentListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", driverId)
-            .whereEqualTo("tripStatus", "in_transit")
-            .addSnapshotListener { snaps, err ->
-                if (err != null) {
-                    Log.e(TAG, "loadActiveShipment (fallback) error: ${err.message}")
-                    showNoActiveTrip()
-                    return@addSnapshotListener
-                }
-                if (isActivityFinished) return@addSnapshotListener
-                if (snaps != null && snaps.size() >= 1) {
-                    loadShipmentFromSnapshot(snaps.documents[0])
-                } else {
-                    showNoActiveTrip()
-                }
-            }
-    }
-
-    private fun loadShipmentFromSnapshot(doc: com.google.firebase.firestore.DocumentSnapshot) {
-        currentSapDocId = doc.id
-
-        // Banner
-        binding.tvBannerShipmentNumber.text = doc.getString("shipmentNumber") ?: doc.id
-        binding.tvBannerPlateNo.text = buildString {
-            append(doc.getString("truckPlate") ?: "—")
-            val truckCo = doc.getString("truckCompany") ?: doc.getString("truckType") ?: ""
-            if (truckCo.isNotBlank()) {
-                append(" • $truckCo")
-            }
-        }
-
-        // Summary card
-        binding.tvPlateNo.text = doc.getString("truckPlate") ?: "—"
-        binding.tvTruckType.text = doc.getString("truckCompany") ?: doc.getString("truckType") ?: "—"
-        binding.tvHelper.text = doc.getString("helperName") ?: doc.getString("helper") ?: "—"
-
-        // Line items
-        @Suppress("UNCHECKED_CAST")
-        val rawItems = doc.get("lineItems") as? List<Map<String, Any?>> ?: emptyList()
-        currentLineItems = rawItems.toMutableList()
-        binding.tvObdCount.text = rawItems.size.toString()
-
-        showContent()
-        obdAdapter.submitList(rawItems.toList())
-        updateFinishDeliveryVisibility()
-    }
-
-    // ─── OBD Click → Status Sheet → Camera ───────────────────────────────────
-
-    private fun openStatusSheet(item: Map<String, Any?>, position: Int) {
-        // Don't allow reopening if already delivered
-        val status = item["deliveryStatus"] as? String
-        if (status == getString(R.string.pod_status_delivered) ||
-            status == getString(R.string.pod_status_rejected) ||
-            status == getString(R.string.pod_status_delivered_rejection)) {
-            Toast.makeText(this, "This OBD has already been processed.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val sheet = ObdStatusBottomSheet.newInstance(item, currentSapDocId)
-        sheet.onConfirmWithStatus = { selectedStatus, selectedItem, docId ->
-            // Save pending state BEFORE launching camera — survive OS kill
-            pendingStatus = selectedStatus
-            pendingObdNumber = selectedItem["obdNumber"] as? String
-            pendingPosition = position
-
-            Log.d(TAG, "Status confirmed: '$selectedStatus' for OBD: ${pendingObdNumber}")
-            launchCameraIntent()
-        }
-        sheet.show(supportFragmentManager, ObdStatusBottomSheet.TAG)
-    }
-
-    // ─── Camera Intent ─────────────────────────────────────────────────────────
-
-    /**
-     * Launches the system camera app.
-     * Uses MediaStore.EXTRA_OUTPUT for a deterministic save path — survives
-     * most OS kills because the file is written directly to disk by the camera app.
-     */
-    private fun launchCameraIntent() {
-        val photoFile = createImageFile()
-        pendingPhotoFile = photoFile
-
-        val photoUri: Uri = FileProvider.getUriForFile(
-            this,
-            "${packageName}.fileprovider", // must match AndroidManifest provider authority
-            photoFile
-        )
-        pendingPhotoUri = photoUri
-
-        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-            putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
-            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }
-
-        if (intent.resolveActivity(packageManager) != null) {
-            cameraLauncher.launch(intent)
-        } else {
-            Toast.makeText(this, "No camera app found.", Toast.LENGTH_SHORT).show()
-            clearPendingState()
-        }
-    }
-
-    /** Creates a temp file in app's internal storage for camera to write to. */
-    private fun createImageFile(): File {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        return File.createTempFile("POD_${timeStamp}_", ".jpg", storageDir)
-    }
-
-    // ─── Camera Result Handler ─────────────────────────────────────────────────
-
-    private fun onCameraResult() {
-        val photoFile = pendingPhotoFile
-        val status = pendingStatus
-        val obdNumber = pendingObdNumber
-        val position = pendingPosition
-
-        if (photoFile == null || !photoFile.exists() || status == null || obdNumber == null) {
-            Log.w(TAG, "onCameraResult called with missing data — file=${photoFile?.exists()}, status=$status, obd=$obdNumber")
-            Toast.makeText(this, R.string.pod_upload_failed, Toast.LENGTH_SHORT).show()
-            clearPendingState()
-            return
-        }
-
-        Log.d(TAG, "Camera captured: ${photoFile.absolutePath}, status=$status, obd=$obdNumber")
-
-        uploadAndUpdateFirestore(photoFile, status, obdNumber, position)
-    }
-
-    // ─── Upload + Firestore Update ─────────────────────────────────────────────
-
-    /**
-     * 1. Compress + upload photo to Firebase Cloud Storage
-     * 2. Firestore runTransaction: read lineItems → update target OBD map fields → write back
-     * 3. On success: update local adapter list + check if all items complete → show finish card
-     */
-    private fun uploadAndUpdateFirestore(
-        photoFile: File,
-        status: String,
-        obdNumber: String,
-        position: Int
-    ) {
-        val storagePath = ImageStorageHelper.buildStoragePath(
-            shipmentDocId = currentSapDocId,
-            obdNumber = obdNumber,
-            timestamp = System.currentTimeMillis()
-        )
-
-        Log.d(TAG, "Uploading POD to: $storagePath")
-
-        ImageStorageHelper.uploadPodImage(
-            photoFile = photoFile,
-            context = this,
-            storagePath = storagePath,
-            onSuccess = { downloadUrl ->
-                Log.d(TAG, "Upload succeeded — URL: $downloadUrl")
-                savePodToFirestore(downloadUrl, status, obdNumber, position)
-            },
-            onFailure = { errorMsg ->
-                Log.e(TAG, "Upload failed: $errorMsg")
-                runOnUiThread {
-                    Toast.makeText(this, R.string.pod_upload_failed, Toast.LENGTH_LONG).show()
-                    clearPendingState()
-                }
-            }
-        )
-    }
-
-    private fun savePodToFirestore(
-        downloadUrl: String,
-        status: String,
-        obdNumber: String,
-        position: Int
-    ) {
-        val docRef = db.collection("sap_assignments").document(currentSapDocId)
-
-        db.runTransaction { transaction ->
-            val snapshot = transaction.get(docRef)
-
-            @Suppress("UNCHECKED_CAST")
-            val lineItems = (snapshot.get("lineItems") as? List<Map<String, Any?>>)
-                ?.toMutableList()
-                ?: throw FirebaseFirestoreException(
-                    "lineItems not found",
-                    com.google.firebase.firestore.FirebaseFirestoreException.Code.ABORTED
-                )
-
-            // Find + update the target OBD item
-            val index = lineItems.indexOfFirst { item ->
-                (item["obdNumber"] as? String) == obdNumber
-            }
-
-            if (index < 0) {
-                Log.w(TAG, "OBD not found in lineItems: $obdNumber")
-                return@runTransaction
-            }
-
-            val updatedItem = lineItems[index].toMutableMap()
-            updatedItem["deliveryStatus"] = status
-            updatedItem["podImageUrl"] = downloadUrl
-            updatedItem["podTimestamp"] = Timestamp.now()
-
-            lineItems[index] = updatedItem
-            transaction.update(docRef, "lineItems", lineItems)
-
-            Log.d(TAG, "lineItems[$index] updated — status=$status, URL length=${downloadUrl.length}")
-        }.addOnSuccessListener {
-            Log.d(TAG, "Firestore transaction success for OBD: $obdNumber")
-            runOnUiThread {
-                onPodUpdateSuccess(obdNumber, position)
-            }
-        }.addOnFailureListener { e ->
-            Log.e(TAG, "Firestore transaction failed: ${e.message}")
-            runOnUiThread {
-                Toast.makeText(this, R.string.pod_update_failed, Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    /**
-     * Called after a successful Firestore update.
-     * Updates the local adapter list and shows a per-item confirmation toast.
-     */
-    private fun onPodUpdateSuccess(obdNumber: String, position: Int) {
-        // Update local mutable list to keep it in sync
-        currentLineItems.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }.takeIf { it >= 0 }?.let { idx ->
-            val updated = currentLineItems[idx].toMutableMap()
-            updated["deliveryStatus"] = pendingStatus
-            updated["podImageUrl"] = "uploaded" // placeholder — URL already in Firestore
-            updated["podTimestamp"] = Timestamp.now()
-            currentLineItems[idx] = updated
-        }
-
-        // Notify adapter of the changed row
-        val newList = currentLineItems.toList()
-        obdAdapter.submitList(newList)
-
-        Toast.makeText(this, getString(R.string.pod_status_updated, obdNumber), Toast.LENGTH_SHORT).show()
-
-        updateFinishDeliveryVisibility()
-        clearPendingState()
-    }
-
-    // ─── Completion Check ───────────────────────────────────────────────────────
-
-    /** Shows/hides the green "FINISH DELIVERY" card based on whether all OBDs are processed. */
-    private fun updateFinishDeliveryVisibility() {
-        val allProcessed = currentLineItems.all { item ->
-            val status = item["deliveryStatus"] as? String
-            status != null && status.isNotBlank()
-        }
-
-        binding.cardFinishDelivery.visibility = if (allProcessed) View.VISIBLE else View.GONE
-
-        // Update subtitle with count
-        val processed = currentLineItems.count { (it["deliveryStatus"] as? String)?.isNotBlank() == true }
-        val total = currentLineItems.size
-        if (allProcessed) {
-            binding.tvFinishSubtitle.text = "All $total items processed — you're done!"
-        } else {
-            binding.tvFinishSubtitle.text = "$processed of $total items processed"
-        }
-    }
-
-    // ─── Finish Delivery ────────────────────────────────────────────────────────
-
-    private fun promptFinishDelivery() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.my_trip_finish_confirm_title)
-            .setMessage(R.string.my_trip_finish_confirm_message)
-            .setPositiveButton(R.string.my_trip_finish_delivery) { _, _ -> finishDelivery() }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun finishDelivery() {
-        if (currentSapDocId.isBlank()) return
-
-        lifecycleScope.launch {
-            try {
-                val updates = mapOf(
-                    "tripStatus" to "completed",
-                    "completedAt" to Timestamp.now()
-                )
-                db.collection("sap_assignments").document(currentSapDocId)
-                    .update(updates)
-                    .await()
-
-                // Clear active trip from session
-                sessionManager.saveActiveSapDocId(null)
-                sessionManager.setTripActive(false)
-
-                Toast.makeText(
-                    this@MyTripActivity,
-                    R.string.pod_delivery_complete,
-                    Toast.LENGTH_LONG
-                ).show()
-                finish()
-            } catch (e: Exception) {
-                Log.e(TAG, "finishDelivery failed: ${e.message}")
-                Toast.makeText(
-                    this@MyTripActivity,
-                    "Failed to complete delivery. Check connection.",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
-    }
-
-    // ─── UI State Helpers ───────────────────────────────────────────────────────
-
-    private fun showLoading() {
-        binding.loadingState.visibility = View.VISIBLE
-        binding.emptyState.visibility = View.GONE
-        binding.rvObdItems.visibility = View.GONE
-    }
-
-    private fun showContent() {
-        binding.loadingState.visibility = View.GONE
-        binding.emptyState.visibility = View.GONE
-        binding.rvObdItems.visibility = View.VISIBLE
-        binding.badgeInTransit.visibility = View.VISIBLE
-    }
-
-    private fun showNoActiveTrip() {
-        binding.loadingState.visibility = View.GONE
-        binding.emptyState.visibility = View.VISIBLE
-        binding.rvObdItems.visibility = View.GONE
-        binding.badgeInTransit.visibility = View.GONE
-    }
-
-    private fun clearPendingState() {
-        pendingStatus = null
-        pendingObdNumber = null
-        pendingPosition = -1
-        pendingPhotoFile?.delete()
-        pendingPhotoFile = null
-        pendingPhotoUri = null
-    }
-
+    // Stub for compatibility — the original MyTripActivity had these UI helpers
+    // but the new design doesn't need them in this screen
     private val isActivityFinished: Boolean
-        get() = isDestroyed || isFinishing
+        get() = isFinishing || isDestroyed
 }

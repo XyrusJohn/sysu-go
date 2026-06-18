@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -8,7 +9,7 @@
     android:clipChildren="false"
     android:clipToPadding="false">
 
-    <!-- TOP BAR -->
+    <!-- TOP BAR — fixed @dimen/header_height, white -->
     <LinearLayout
         android:id="@+id/topBar"
         android:layout_width="match_parent"
@@ -37,6 +38,7 @@
             android:orientation="vertical">
 
             <TextView
+                android:id="@+id/tvTopBarTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/atkinson_hyperlegible_bold"
@@ -46,9 +48,9 @@
                 android:textSize="@dimen/text_size_button"
                 android:textStyle="bold" />
 
-            <!-- Live in-transit badge -->
+            <!-- Aggregate verification badge — pill style, updated live -->
             <LinearLayout
-                android:id="@+id/badgeInTransit"
+                android:id="@+id/aggregateBadgeContainer"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
@@ -61,28 +63,27 @@
                 tools:visibility="visible">
 
                 <View
+                    android:id="@+id/aggregateBadgeDot"
                     android:layout_width="6dp"
                     android:layout_height="6dp"
                     android:background="@drawable/bg_status_dot_green" />
 
                 <TextView
+                    android:id="@+id/tvAggregateBadge"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:fontFamily="@font/atkinson_hyperlegible_regular"
-                    android:text="In Transit"
                     android:textColor="@color/white"
                     android:textSize="@dimen/text_size_caption" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Placeholder to balance the back arrow -->
         <View
             android:layout_width="48dp"
             android:layout_height="48dp" />
     </LinearLayout>
 
-    <!-- Divider -->
     <View
         android:id="@+id/divider"
         android:layout_width="match_parent"
@@ -90,247 +91,101 @@
         android:background="@color/divider"
         app:layout_constraintTop_toBottomOf="@id/topBar" />
 
-    <!-- RED HEADER — 120dp, same brand color as AssignmentActivity -->
+    <!-- RED BANNER — 140dp, bouncing circles + pulse rings + aggregate pill -->
     <FrameLayout
         android:id="@+id/redBanner"
         android:layout_width="match_parent"
-        android:layout_height="120dp"
+        android:layout_height="140dp"
         android:background="@drawable/bg_red_header_rounded_bottom"
         app:layout_constraintTop_toBottomOf="@id/divider">
 
-        <!-- Bouncing circles container — added programmatically -->
+        <!-- Pulse ring 1 (behind circles) -->
+        <View
+            android:id="@+id/pulseRing1"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:layout_gravity="center"
+            android:alpha="0.0"
+            android:background="@drawable/bg_pulse_ring"
+            android:visibility="gone" />
+
+        <!-- Pulse ring 2 (behind circles) -->
+        <View
+            android:id="@+id/pulseRing2"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:layout_gravity="center"
+            android:alpha="0.0"
+            android:background="@drawable/bg_pulse_ring"
+            android:visibility="gone" />
+
+        <!-- Bouncing circles — added programmatically to circleContainer -->
         <FrameLayout
             android:id="@+id/circleContainer"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <!-- Center content -->
+        <!-- Center content: aggregate pill -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:gravity="center"
             android:orientation="vertical">
 
-            <ImageView
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:src="@drawable/ic_ticket"
-                app:tint="@color/white"
-                android:alpha="0.9" />
-
-            <TextView
-                android:id="@+id/tvBannerShipmentNumber"
+            <LinearLayout
+                android:id="@+id/badgeVerified"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:fontFamily="@font/atkinson_hyperlegible_bold"
-                android:letterSpacing="0.1"
-                android:textColor="@color/white"
-                android:textSize="@dimen/text_size_title"
-                android:textStyle="bold"
-                tools:text="0010128715" />
+                android:background="@drawable/bg_transit_verified_pill"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="10dp">
+
+                <View
+                    android:id="@+id/badgeDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:background="@drawable/bg_status_dot_green" />
+
+                <TextView
+                    android:id="@+id/tvBadgeText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:fontFamily="@font/atkinson_hyperlegible_bold"
+                    android:letterSpacing="0.12"
+                    android:textColor="@color/white"
+                    android:textSize="@dimen/text_size_body"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/tvBannerPlateNo"
+                android:id="@+id/tvLocationCoords"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:fontFamily="@font/atkinson_hyperlegible_regular"
-                android:textColor="#CCFFFFFF"
-                android:textSize="@dimen/text_size_label"
-                tools:text="ABC 1234 • 6W" />
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:textColor="#80FFFFFF"
+                android:textSize="@dimen/text_size_caption"
+                android:visibility="gone" />
         </LinearLayout>
     </FrameLayout>
 
-    <!-- Shipment summary card — overlaps redBanner + divider -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/cardShipmentDetails"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="20dp"
-        android:layout_marginTop="-20dp"
-        app:cardCornerRadius="@dimen/corner_radius_pill"
-        app:cardElevation="6dp"
-        app:cardBackgroundColor="@color/white"
-        app:layout_constraintTop_toBottomOf="@id/redBanner"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <!-- Red top bar -->
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="3dp"
-                android:layout_marginBottom="12dp"
-                android:background="@color/sysu_red" />
-
-            <!-- Plate / Truck / Helper inline row -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:baselineAligned="false">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="PLATE NO."
-                        android:textColor="@color/text_muted"
-                        android:textSize="9sp"
-                        android:textStyle="bold"
-                        android:letterSpacing="0.06" />
-
-                    <TextView
-                        android:id="@+id/tvPlateNo"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary"
-                        android:textSize="@dimen/text_size_body"
-                        android:textStyle="bold"
-                        tools:text="ABC 1234" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="TRUCK TYPE"
-                        android:textColor="@color/text_muted"
-                        android:textSize="9sp"
-                        android:textStyle="bold"
-                        android:letterSpacing="0.06" />
-
-                    <TextView
-                        android:id="@+id/tvTruckType"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary"
-                        android:textSize="@dimen/text_size_body"
-                        android:textStyle="bold"
-                        tools:text="6W" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="HELPER"
-                        android:textColor="@color/text_muted"
-                        android:textSize="9sp"
-                        android:textStyle="bold"
-                        android:letterSpacing="0.06" />
-
-                    <TextView
-                        android:id="@+id/tvHelper"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary"
-                        android:textSize="@dimen/text_size_body"
-                        android:textStyle="bold"
-                        android:maxLines="1"
-                        android:ellipsize="end"
-                        tools:text="Juan D." />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- OBD count badge row -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <ImageView
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:src="@drawable/ic_ticket"
-                    app:tint="@color/sysu_red" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:text="@string/my_trip_header_obd_items"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="@dimen/text_size_caption"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.06" />
-
-                <TextView
-                    android:id="@+id/tvObdCount"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:minWidth="24dp"
-                    android:gravity="center"
-                    android:paddingHorizontal="8dp"
-                    android:paddingVertical="2dp"
-                    android:background="@drawable/bg_obd_count_pill"
-                    android:textColor="@color/white"
-                    android:textSize="@dimen/text_size_caption"
-                    android:textStyle="bold"
-                    tools:text="8" />
-            </LinearLayout>
-        </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
-
-    <!-- Section label -->
-    <TextView
-        android:id="@+id/tvOBDLabel"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="20dp"
-        android:layout_marginTop="20dp"
-        android:text="@string/my_trip_header_obd_items"
-        android:textColor="@color/text_muted"
-        android:textSize="@dimen/text_size_caption"
-        android:textStyle="bold"
-        android:letterSpacing="0.1"
-        app:layout_constraintTop_toBottomOf="@id/cardShipmentDetails"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- OBD RecyclerView — scrollable list of POD items -->
+    <!-- SHIPMENTS RecyclerView — full height below banner -->
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvObdItems"
-        android:layout_width="0dp"
+        android:id="@+id/rvShipments"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginHorizontal="16dp"
-        android:layout_marginTop="10dp"
+        android:clipChildren="false"
         android:clipToPadding="false"
-        android:paddingBottom="16dp"
         android:overScrollMode="always"
-        app:layout_constraintTop_toBottomOf="@id/tvOBDLabel"
-        app:layout_constraintBottom_toTopOf="@id/cardFinishDelivery"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintVertical_bias="0"
-        tools:listitem="@layout/item_my_trip_obd"
-        tools:itemCount="5" />
+        android:paddingTop="12dp"
+        android:paddingBottom="24dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/redBanner" />
 
-    <!-- Empty state — shown when there are no OBD items -->
+    <!-- Empty state — shown when list is empty -->
     <LinearLayout
         android:id="@+id/emptyState"
         android:layout_width="match_parent"
@@ -339,106 +194,27 @@
         android:orientation="vertical"
         android:paddingHorizontal="48dp"
         android:visibility="gone"
-        app:layout_constraintTop_toBottomOf="@id/tvOBDLabel"
-        app:layout_constraintBottom_toTopOf="@id/cardFinishDelivery">
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/redBanner">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="@font/atkinson_hyperlegible_bold"
             android:gravity="center"
-            android:text="@string/my_trip_empty_obd"
+            android:text="No trips yet"
             android:textColor="@color/text_primary"
-            android:textSize="@dimen/text_size_body" />
-    </LinearLayout>
-
-    <!-- Loading state -->
-    <LinearLayout
-        android:id="@+id/loadingState"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:visibility="gone"
-        app:layout_constraintTop_toBottomOf="@id/cardShipmentDetails"
-        app:layout_constraintBottom_toBottomOf="parent">
-
-        <ProgressBar
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:indeterminateTint="@color/sysu_red" />
+            android:textSize="@dimen/text_size_subtitle" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/my_trip_loading"
-            android:textColor="@color/text_muted"
-            android:textSize="@dimen/text_size_label"
-            android:fontFamily="@font/atkinson_hyperlegible_regular" />
-    </LinearLayout>
-
-    <!-- Finish Delivery card — pinned to bottom, shown only when all OBDs processed -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/cardFinishDelivery"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="20dp"
-        android:layout_marginBottom="20dp"
-        android:visibility="gone"
-        app:cardCornerRadius="@dimen/corner_radius_pill"
-        app:cardElevation="6dp"
-        app:cardBackgroundColor="@color/transit_green"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        tools:visibility="visible">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:fontFamily="@font/atkinson_hyperlegible_regular"
             android:gravity="center"
-            android:orientation="horizontal"
-            android:paddingVertical="16dp"
-            android:paddingHorizontal="20dp">
-
-            <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:src="@drawable/ic_checkmark_white"
-                app:tint="@color/white" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="12dp"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/my_trip_all_delivered"
-                    android:textColor="@color/white"
-                    android:textSize="@dimen/text_size_body"
-                    android:textStyle="bold"
-                    android:fontFamily="@font/atkinson_hyperlegible_bold" />
-
-                <TextView
-                    android:id="@+id/tvFinishSubtitle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Tap to complete the delivery"
-                    android:textColor="#CCFFFFFF"
-                    android:textSize="@dimen/text_size_caption" />
-            </LinearLayout>
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_arrow_forward"
-                app:tint="@color/white" />
-        </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
+            android:text="All assigned trips will appear here"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_size_label" />
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
