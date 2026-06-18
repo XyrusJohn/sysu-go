@@ -180,6 +180,8 @@
 
     <!-- MyTripActivity (Active Delivery Execution) -->
     <string name="my_trip_title">ACTIVE TRIP</string>
+    <string name="my_trip_tab_title">MY TRIP</string>
+    <string name="my_trip_badge_trips_ready">TRIPS READY</string>
     <string name="my_trip_header_obd_items">OBD ITEMS</string>
     <string name="my_trip_all_delivered">All items delivered!</string>
     <string name="my_trip_finish_delivery">FINISH DELIVERY</string>

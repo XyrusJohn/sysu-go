@@ -646,6 +646,14 @@ class MainActivity : AppCompatActivity() {
             fetchAndSetupMyTripCards()
         }
 
+        // Back button inside My Trip tab — returns to Home tab
+        binding.myTripTabContainer.findViewById<ImageButton>(R.id.btnBack)?.setOnClickListener {
+            updateBottomNavSelectionForTab(isHomeTab = true)
+            binding.cardScanCTA.visibility = View.VISIBLE
+            binding.tvScanHint.visibility = View.GONE
+            binding.myTripTabContainer.visibility = View.GONE
+        }
+
         binding.btnCancelQueue.setOnClickListener { showCancelQueueDialog() }
 
         // Dismiss / close the CTA notification card
@@ -1336,6 +1344,10 @@ class MainActivity : AppCompatActivity() {
         val tabRv = tabContainer.findViewById<RecyclerView>(R.id.rvMyTripCards)
         val emptyState = tabContainer.findViewById<LinearLayout>(R.id.emptyStateContainer)
         val tvCount = tabContainer.findViewById<TextView>(R.id.tvMyTripCount)
+        val aggregateBadgeContainer = tabContainer.findViewById<LinearLayout>(R.id.aggregateBadgeContainer)
+        val tvAggregateBadge = tabContainer.findViewById<TextView>(R.id.tvAggregateBadge)
+        val badgeVerified = tabContainer.findViewById<LinearLayout>(R.id.badgeVerified)
+        val tvBadgeText = tabContainer.findViewById<TextView>(R.id.tvBadgeText)
 
         db.collection("sap_assignments")
             .whereEqualTo("driverId", driverId)
@@ -1371,7 +1383,30 @@ class MainActivity : AppCompatActivity() {
 
                 tabRv.layoutManager = LinearLayoutManager(this)
                 tabRv.adapter = adapter
-                tvCount.text = assignments.size.toString()
+
+                // Show count badge if assignments exist
+                tvCount?.visibility = if (assignments.isNotEmpty()) View.VISIBLE else View.GONE
+                tvCount?.text = assignments.size.toString()
+
+                // Update aggregate badge: show green "All Confirmed" if all trips ready
+                val allConfirmed = assignments.isNotEmpty() && assignments.all { it.guardVerified && it.driverConfirmed }
+                if (allConfirmed) {
+                    aggregateBadgeContainer?.visibility = View.VISIBLE
+                    aggregateBadgeContainer?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                    tvAggregateBadge?.text = getString(R.string.assignment_badge_all_verified)
+                    tvAggregateBadge?.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.white))
+                    // Red banner badge: "TRIPS READY"
+                    badgeVerified?.visibility = View.VISIBLE
+                    tvBadgeText?.text = getString(R.string.my_trip_badge_trips_ready)
+                } else if (assignments.isNotEmpty()) {
+                    val pending = assignments.count { !it.guardVerified || !it.driverConfirmed }
+                    aggregateBadgeContainer?.visibility = View.VISIBLE
+                    aggregateBadgeContainer?.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                    tvAggregateBadge?.text = "$pending pending"
+                    tvAggregateBadge?.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_amber))
+                    badgeVerified?.visibility = View.GONE
+                }
+
                 emptyState.visibility = if (assignments.isEmpty()) View.VISIBLE else View.GONE
                 tabRv.visibility = if (assignments.isEmpty()) View.GONE else View.VISIBLE
             }
