@@ -147,7 +147,10 @@ class MyTripActivity : AppCompatActivity() {
                     }
                     if (isFinishing) return@addSnapshotListener
                     val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                    handleAssignmentList(list, intentDocId)
+                    // Enrich each assignment with requirements from driver/{sessionDriverId}
+                    fetchDriverRequirements(sessionDriverId, list) { enriched ->
+                        handleAssignmentList(enriched, intentDocId)
+                    }
                 }
         } else {
             loadAssignmentsFallback(sessionDriverId, intentDocId)
@@ -164,7 +167,35 @@ class MyTripActivity : AppCompatActivity() {
                 }
                 if (isFinishing) return@addSnapshotListener
                 val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                handleAssignmentList(list, intentDocId)
+                // Load requirements from the driver document, then handle the list
+                fetchDriverRequirements(sessionDriverId, list) { enriched ->
+                    handleAssignmentList(enriched, intentDocId)
+                }
+            }
+    }
+
+    /**
+     * Fetches the driver's requirements from the drivers/{driverId} document,
+     * then injects them into each Assignment (since requirements lives in the
+     * driver document, not in sap_assignments itself).
+     * Calls onReady with the enriched list.
+     */
+    private fun fetchDriverRequirements(
+        driverId: String,
+        assignments: List<Assignment>,
+        onReady: (List<Assignment>) -> Unit
+    ) {
+        db.collection("drivers").document(driverId)
+            .get()
+            .addOnSuccessListener { doc ->
+                val reqMap = doc.get("requirements") as? Map<String, Boolean> ?: emptyMap()
+                // Inject requirements into every assignment via copy()
+                val enriched = assignments.map { it.copy(requirements = reqMap) }
+                onReady(enriched)
+            }
+            .addOnFailureListener {
+                // Driver doc not found — proceed with empty requirements
+                onReady(assignments)
             }
     }
 
