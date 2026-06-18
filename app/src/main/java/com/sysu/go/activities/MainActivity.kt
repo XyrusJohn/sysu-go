@@ -763,12 +763,13 @@ class MainActivity : AppCompatActivity() {
         binding.btnScanQR.setOnClickListener {
             // SCENARIO B: There is an active in_transit trip — go directly to live tracking screen.
             // Check both in-memory list (fast) and SharedPreferences (survives app restart after START TRIP).
+            val sessionMgr = SessionManager(this)
             val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
-                || sessionManager.getActiveSapDocId() != null
+                || sessionMgr.getActiveSapDocId() != null
 
             if (hasActiveTrip) {
                 // Active trip running — open TransitActivity live tracking screen
-                sessionManager.getActiveSapDocId()?.let { activeDocId ->
+                sessionMgr.getActiveSapDocId()?.let { activeDocId ->
                     startActivity(Intent(this, TransitActivity::class.java).apply {
                         putExtra("shipment_doc_id", activeDocId)
                     })
