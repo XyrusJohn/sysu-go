@@ -147,8 +147,8 @@ class MyTripActivity : AppCompatActivity() {
                     }
                     if (isFinishing) return@addSnapshotListener
                     val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                    // Enrich each assignment with requirements from driver/{sessionDriverId}
-                    fetchDriverRequirements(sessionDriverId, list) { enriched ->
+                    // Enrich with driver doc data (truckType/truckingCompany + requirements + helper)
+                    fetchDriverData(sessionDriverId, list) { enriched ->
                         handleAssignmentList(enriched, intentDocId)
                     }
                 }
@@ -167,20 +167,23 @@ class MyTripActivity : AppCompatActivity() {
                 }
                 if (isFinishing) return@addSnapshotListener
                 val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                // Load requirements from the driver document, then handle the list
-                fetchDriverRequirements(sessionDriverId, list) { enriched ->
+                // Enrich with driver doc data (truckType/truckingCompany + requirements + helper)
+                fetchDriverData(sessionDriverId, list) { enriched ->
                     handleAssignmentList(enriched, intentDocId)
                 }
             }
     }
 
     /**
-     * Fetches the driver's requirements from the drivers/{driverId} document,
-     * then injects them into each Assignment (since requirements lives in the
-     * driver document, not in sap_assignments itself).
-     * Calls onReady with the enriched list.
+     * Fetches driver metadata from the drivers/{driverId} document:
+     *   - requirements: Map<String, Boolean>  (aircon, reflectorizedVest, etc.)
+     *   - truckingCompany: String             → Assignment.truckType
+     *   - helper: String?                      → Assignment.helper (optional field in driver doc)
+     *
+     * The driver doc is the source of truth for truckType (truckingCompany)
+     * and requirements; sap_assignments only has driverId reference.
      */
-    private fun fetchDriverRequirements(
+    private fun fetchDriverData(
         driverId: String,
         assignments: List<Assignment>,
         onReady: (List<Assignment>) -> Unit
@@ -189,12 +192,23 @@ class MyTripActivity : AppCompatActivity() {
             .get()
             .addOnSuccessListener { doc ->
                 val reqMap = doc.get("requirements") as? Map<String, Boolean> ?: emptyMap()
-                // Inject requirements into every assignment via copy()
-                val enriched = assignments.map { it.copy(requirements = reqMap) }
+                val truckingCompany = doc.getString("truckingCompany") ?: ""
+                // helper may live in the driver doc or fallback to sap_assignments (already set by buildAssignment)
+                val driverHelper = doc.getString("helper") ?: ""
+
+                // Enrich each assignment with driver-sourced fields
+                val enriched = assignments.map { assignment ->
+                    assignment.copy(
+                        requirements = reqMap,
+                        truckType = truckingCompany.ifBlank { assignment.truckType },
+                        // Helper: driver doc wins if present, else keep what buildAssignment extracted
+                        helper = driverHelper.ifBlank { assignment.helper }
+                    )
+                }
                 onReady(enriched)
             }
             .addOnFailureListener {
-                // Driver doc not found — proceed with empty requirements
+                // Driver doc not found — proceed with sap_assignments data as-is
                 onReady(assignments)
             }
     }
