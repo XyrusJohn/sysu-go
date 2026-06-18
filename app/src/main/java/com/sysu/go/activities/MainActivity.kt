@@ -1522,7 +1522,7 @@ class MainActivity : AppCompatActivity() {
         val driverId = SessionManager(this).getDriverId() ?: return
 
         val tabContainer = binding.myTripTabContainer
-        val tabRv = tabContainer.findViewById<RecyclerView>(R.id.rvMyTripCards)
+        val tabRv = tabContainer.findViewById<RecyclerView>(R.id.rvShipments)
         val emptyState = tabContainer.findViewById<LinearLayout>(R.id.emptyState)
         val aggregateBadgeContainer = tabContainer.findViewById<LinearLayout>(R.id.aggregateBadgeContainer)
         val tvAggregateBadge = tabContainer.findViewById<TextView>(R.id.tvAggregateBadge)
