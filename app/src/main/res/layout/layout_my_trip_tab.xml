@@ -9,7 +9,7 @@
     android:clipChildren="false"
     android:clipToPadding="false">
 
-    <!-- TOP BAR — fixed, white -->
+    <!-- TOP BAR — fixed @dimen/header_height, white -->
     <LinearLayout
         android:id="@+id/topBar"
         android:layout_width="match_parent"
@@ -21,7 +21,6 @@
         android:paddingHorizontal="16dp"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- Back button — returns to Home tab -->
         <ImageButton
             android:id="@+id/btnBack"
             android:layout_width="48dp"
@@ -29,7 +28,7 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Back"
             android:src="@drawable/ic_back"
-            app:tint="@color/text_primary" />
+            app:tint="@color/black" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -48,7 +47,7 @@
                 android:textSize="@dimen/text_size_button"
                 android:textStyle="bold" />
 
-            <!-- Aggregate count badge — "X trips ready" -->
+            <!-- Aggregate verification badge — pill style, updated live -->
             <LinearLayout
                 android:id="@+id/aggregateBadgeContainer"
                 android:layout_width="wrap_content"
@@ -74,26 +73,10 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:fontFamily="@font/atkinson_hyperlegible_regular"
-                    android:text="2 Trips Ready"
                     android:textColor="@color/white"
                     android:textSize="@dimen/text_size_caption" />
             </LinearLayout>
         </LinearLayout>
-
-        <!-- Count indicator — shows number of shipments assigned -->
-        <TextView
-            android:id="@+id/tvMyTripCount"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_status_pill_gray"
-            android:gravity="center"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="4dp"
-            android:textColor="@color/white"
-            android:textSize="@dimen/text_size_caption"
-            android:textStyle="bold"
-            tools:text="3"
-            android:visibility="gone" />
 
         <View
             android:layout_width="48dp"
@@ -107,7 +90,7 @@
         android:background="@color/divider"
         app:layout_constraintTop_toBottomOf="@id/topBar" />
 
-    <!-- RED BANNER — 140dp, bouncing circles + pulse rings + trips ready pill -->
+    <!-- RED BANNER — 140dp, bouncing circles + pulse rings + aggregate pill -->
     <FrameLayout
         android:id="@+id/redBanner"
         android:layout_width="match_parent"
@@ -141,7 +124,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <!-- Center content: "trips ready" badge -->
+        <!-- Center content: aggregate pill -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -171,7 +154,6 @@
                     android:layout_marginStart="10dp"
                     android:fontFamily="@font/atkinson_hyperlegible_bold"
                     android:letterSpacing="0.12"
-                    android:text="TRIPS READY"
                     android:textColor="@color/white"
                     android:textSize="@dimen/text_size_body"
                     android:textStyle="bold" />
@@ -200,12 +182,11 @@
         android:paddingTop="12dp"
         android:paddingBottom="24dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/redBanner"
-        tools:listitem="@layout/item_my_trip_tab_card" />
+        app:layout_constraintTop_toBottomOf="@id/redBanner" />
 
-    <!-- Empty state — shown when no shipments assigned yet -->
+    <!-- Empty state — shown when list is empty -->
     <LinearLayout
-        android:id="@+id/emptyStateContainer"
+        android:id="@+id/emptyState"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:gravity="center"

@@ -99,6 +99,12 @@ class MainActivity : AppCompatActivity() {
     private val circleAnimators = mutableListOf<android.animation.Animator>()
     /** Tracks views injected into circleContainer so they can be removed onDestroy */
     private val circleViews = mutableListOf<View>()
+    /** Tracks My Trip tab's own circle animators — separate from home banner */
+    private val myTripCircleAnimators = mutableListOf<android.animation.Animator>()
+    /** Tracks My Trip tab's own circle views — separate from home banner */
+    private val myTripCircleViews = mutableListOf<View>()
+    /** Prevents double-init of My Trip circle animations */
+    private var myTripCirclesInitialized = false
     /** Tracks the bounce arrow animator so it can be cancelled onDestroy */
     private var bounceArrowAnimator: ObjectAnimator? = null
     /** Connection loss popup guard — prevents double-dialog if network flaps */
@@ -542,11 +548,171 @@ class MainActivity : AppCompatActivity() {
         statusDotHandler.postDelayed(statusDotRunnable!!, 0L)
     }
 
+    // ─── My Trip Tab Animations ────────────────────────────────────────────────
+
+    /**
+     * Starts bouncing circles + pulse rings inside the My Trip tab's red banner.
+     * Called once when the tab first appears; guarded by myTripCirclesInitialized.
+     */
+    private fun initMyTripTabAnimations() {
+        if (myTripCirclesInitialized) return
+        myTripCirclesInitialized = true
+
+        val tabContainer = binding.myTripTabContainer
+        val circleContainer = tabContainer.findViewById<FrameLayout>(R.id.circleContainer) ?: return
+        val pulseRing1 = tabContainer.findViewById<View>(R.id.pulseRing1)
+        val pulseRing2 = tabContainer.findViewById<View>(R.id.pulseRing2)
+
+        circleContainer.post {
+            val containerW = circleContainer.width
+            val containerH = circleContainer.height
+            if (containerW == 0 || containerH == 0) return@post
+
+            val random = java.util.Random()
+            val count = random.nextInt(3) + 3
+
+            for (i in 0 until count) {
+                val sizeDp = 28 + random.nextInt(61)
+                val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
+                val startX = random.nextInt(containerW).toFloat()
+                val startY = random.nextInt(containerH).toFloat()
+                val minSpeed = 0.12f + random.nextFloat() * 0.15f
+                val maxSpeed = minSpeed + 0.15f + random.nextFloat() * 0.2f
+                val alpha = 0.25f + random.nextFloat() * 0.3f
+
+                val circle = View(this).apply {
+                    layoutParams = FrameLayout.LayoutParams(sizePx, sizePx)
+                    background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_circle_light_red)
+                    this.alpha = alpha
+                }
+                circleContainer.addView(circle)
+                myTripCircleViews.add(circle)
+
+                startMyTripBounceAnimation(
+                    circle, sizePx, containerW, containerH,
+                    minSpeed, maxSpeed, startX, startY,
+                    (i * 150L) + random.nextInt(500)
+                )
+            }
+        }
+
+        // Pulse rings for My Trip tab
+        startMyTripPulseRing(pulseRing1, 0L)
+        startMyTripPulseRing(pulseRing2, 1200L)
+    }
+
+    private fun startMyTripBounceAnimation(
+        view: View,
+        viewSize: Int,
+        containerWidth: Int,
+        containerHeight: Int,
+        minSpeed: Float,
+        maxSpeed: Float,
+        initialX: Float,
+        initialY: Float,
+        startDelayMs: Long
+    ) {
+        val random = java.util.Random()
+        val maxX = (containerWidth - viewSize).toFloat().coerceAtLeast(0f)
+        val maxY = (containerHeight - viewSize).toFloat().coerceAtLeast(0f)
+
+        view.translationX = initialX
+        view.translationY = initialY
+
+        var velX = (random.nextFloat() * (maxSpeed - minSpeed) + minSpeed) *
+            if (random.nextBoolean()) 1f else -1f
+        var velY = (random.nextFloat() * (maxSpeed - minSpeed) + minSpeed) *
+            if (random.nextBoolean()) 1f else -1f
+
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Long.MAX_VALUE
+            repeatCount = ValueAnimator.INFINITE
+            startDelay = startDelayMs
+            addUpdateListener {
+                if (random.nextFloat() < 0.02f) {
+                    velX += (random.nextFloat() - 0.5f) * 0.4f
+                    velX = velX.coerceIn(-maxSpeed, maxSpeed)
+                }
+                if (random.nextFloat() < 0.02f) {
+                    velY += (random.nextFloat() - 0.3f) * 0.4f
+                    velY = velY.coerceIn(-maxSpeed, maxSpeed)
+                }
+                var newX = view.translationX + velX
+                var newY = view.translationY + velY
+                if (newX <= 0) { newX = 0f; velX = kotlin.math.abs(velX).coerceIn(minSpeed, maxSpeed) }
+                else if (newX >= maxX) { newX = maxX; velX = -kotlin.math.abs(velX).coerceIn(minSpeed, maxSpeed) }
+                if (newY <= 0) { newY = 0f; velY = kotlin.math.abs(velY).coerceIn(minSpeed, maxSpeed) }
+                else if (newY >= maxY) { newY = maxY; velY = -kotlin.math.abs(velY).coerceIn(minSpeed, maxSpeed) }
+                view.translationX = newX
+                view.translationY = newY
+            }
+            myTripCircleAnimators.add(this)
+            start()
+        }
+
+        ObjectAnimator.ofFloat(view, "scaleX", 1f, 1.08f).apply {
+            duration = 4000L + random.nextInt(1500)
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            startDelay = startDelayMs
+            myTripCircleAnimators.add(this)
+            start()
+        }
+
+        ObjectAnimator.ofFloat(view, "scaleY", 1f, 1.06f).apply {
+            duration = 4500L + random.nextInt(1500)
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            startDelay = startDelayMs + 600L
+            myTripCircleAnimators.add(this)
+            start()
+        }
+    }
+
+    private fun startMyTripPulseRing(ring: View?, delayMs: Long) {
+        ring ?: return
+        ring.visibility = View.VISIBLE
+        ring.alpha = 0f
+
+        val scaleUp = ObjectAnimator.ofFloat(ring, "scaleX", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = ValueAnimator.RESTART
+            repeatCount = ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val scaleUpY = ObjectAnimator.ofFloat(ring, "scaleY", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = ValueAnimator.RESTART
+            repeatCount = ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val fadeOut = ObjectAnimator.ofFloat(ring, "alpha", 0.6f, 0f).apply {
+            duration = 2000L
+            repeatMode = ValueAnimator.RESTART
+            repeatCount = ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+
+        myTripCircleAnimators.addAll(listOf(scaleUp, scaleUpY, fadeOut))
+        scaleUp.start()
+        scaleUpY.start()
+        fadeOut.start()
+    }
+
     private fun stopCircleAnimations() {
         circleAnimators.forEach { it.cancel() }
         circleAnimators.clear()
         circleViews.forEach { binding.circleContainer.removeView(it) }
         circleViews.clear()
+        // Also clean up My Trip tab circles
+        myTripCircleAnimators.forEach { it.cancel() }
+        myTripCircleAnimators.clear()
+        myTripCircleViews.forEach {
+            binding.myTripTabContainer.findViewById<FrameLayout>(R.id.circleContainer)?.removeView(it)
+        }
+        myTripCircleViews.clear()
     }
 
     private fun stopStatusDot() {
@@ -1344,12 +1510,12 @@ class MainActivity : AppCompatActivity() {
      * empty state visibility.
      */
     private fun fetchAndSetupMyTripCards() {
+        initMyTripTabAnimations()
         val driverId = SessionManager(this).getDriverId() ?: return
 
         val tabContainer = binding.myTripTabContainer
         val tabRv = tabContainer.findViewById<RecyclerView>(R.id.rvMyTripCards)
-        val emptyState = tabContainer.findViewById<LinearLayout>(R.id.emptyStateContainer)
-        val tvCount = tabContainer.findViewById<TextView>(R.id.tvMyTripCount)
+        val emptyState = tabContainer.findViewById<LinearLayout>(R.id.emptyState)
         val aggregateBadgeContainer = tabContainer.findViewById<LinearLayout>(R.id.aggregateBadgeContainer)
         val tvAggregateBadge = tabContainer.findViewById<TextView>(R.id.tvAggregateBadge)
         val badgeVerified = tabContainer.findViewById<LinearLayout>(R.id.badgeVerified)
@@ -1396,10 +1562,6 @@ class MainActivity : AppCompatActivity() {
 
                 tabRv.layoutManager = LinearLayoutManager(this)
                 tabRv.adapter = adapter
-
-                // Show count badge if assignments exist
-                tvCount?.visibility = if (assignments.isNotEmpty()) View.VISIBLE else View.GONE
-                tvCount?.text = assignments.size.toString()
 
                 // Update aggregate badge: show green "All Confirmed" if all trips ready
                 val allConfirmed = assignments.isNotEmpty() && assignments.all { it.guardVerified && it.driverConfirmed }
