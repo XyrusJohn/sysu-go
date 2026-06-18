@@ -38,11 +38,12 @@
             android:orientation="vertical">
 
             <TextView
+                android:id="@+id/tvTopBarTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:fontFamily="@font/atkinson_hyperlegible_bold"
                 android:letterSpacing="0.1"
-                android:text="@string/my_trip_tab_title"
+                android:text="@string/my_trip_title"
                 android:textColor="@color/text_primary"
                 android:textSize="@dimen/text_size_button"
                 android:textStyle="bold" />
@@ -171,9 +172,9 @@
         </LinearLayout>
     </FrameLayout>
 
-    <!-- TRIPS RecyclerView — full height below banner, uses item_my_trip_tab_card -->
+    <!-- TRIPS RecyclerView — full height below banner -->
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvMyTripCards"
+        android:id="@+id/rvShipments"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:clipChildren="false"
