@@ -20,6 +20,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
+import com.sysu.go.activities.TransitActivity
 import com.sysu.go.adapter.MyTripTabAdapter
 import com.sysu.go.databinding.ActivityMyTripBinding
 import com.sysu.go.model.Assignment
@@ -199,8 +200,10 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     /**
-     * Shown when MyTripActivity was launched with a shipment_doc_id intent extra.
-     * Displays that shipment's card and immediately navigates to its delivery UI.
+     * Shows the shipment's card in MyTripActivity.
+     * Does NOT auto-navigate — the card's action button (START TRIP or VIEW OBD ITEMS)
+     * handles navigation. This prevents double-navigation when confirmAndStartTrip saves
+     * tripStatus=in_transit and re-launches MyTripActivity via Intent with shipment_doc_id.
      */
     private fun loadSpecificShipment(shipment: Assignment) {
         val isInTransit = shipment.tripStatus == "in_transit"
@@ -209,15 +212,14 @@ class MyTripActivity : AppCompatActivity() {
         shipmentAdapter.activeShipmentId = if (isInTransit) shipment.docId else null
         shipmentAdapter.submitList(listOf(shipment))
 
-        // If in_transit → go to delivery screen
-        if (isInTransit) {
-            launchDeliveryActivity(shipment.docId)
-            return
-        }
-
-        // Confirmed but not yet in_transit — show as card with START TRIP button
+        // Do NOT auto-navigate here — let the card's action button handle it.
+        // Auto-navigation only happens in handleAssignmentList for non-intentDocId cases.
         updateAggregateBadge(listOf(shipment))
-        binding.tvBadgeText.text = shipment.shipmentNumber.ifBlank { shipment.docId }
+        binding.tvBadgeText.text = if (isInTransit) {
+            getString(R.string.cta_status_transit)
+        } else {
+            shipment.shipmentNumber.ifBlank { shipment.docId }
+        }
         binding.emptyState.visibility = View.GONE
     }
 
@@ -313,9 +315,8 @@ class MyTripActivity : AppCompatActivity() {
                 Log.d(TAG, "startTrip: ${assignment.docId} → in_transit")
                 Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
 
-                // Navigate to delivery execution — use clear_top so back goes to home
-                sessionManager.setTripActive(true)
-                val intent = Intent(this@MyTripActivity, MyTripActivity::class.java).apply {
+                // Navigate to TransitActivity (live map / delivery tracking screen) — NOT MyTripActivity
+                val intent = Intent(this@MyTripActivity, TransitActivity::class.java).apply {
                     putExtra("shipment_doc_id", assignment.docId)
                     flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }
@@ -333,7 +334,8 @@ class MyTripActivity : AppCompatActivity() {
 
     private fun launchDeliveryActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
-        val intent = Intent(this, MyTripActivity::class.java).apply {
+        // Launch the live map / tracking screen — NOT MyTripActivity (prevents loop)
+        val intent = Intent(this, TransitActivity::class.java).apply {
             putExtra("shipment_doc_id", sapDocId)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }

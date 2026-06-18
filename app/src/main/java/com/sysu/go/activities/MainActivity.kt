@@ -28,6 +28,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.DocumentSnapshot
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityMainBinding
+import com.sysu.go.activities.TransitActivity
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.SocketManager
 import com.sysu.go.services.LocationServices
@@ -760,8 +761,23 @@ class MainActivity : AppCompatActivity() {
         binding.tvDriverName.text = session.getDriverName()
 
         binding.btnScanQR.setOnClickListener {
+            // SCENARIO B: There is an active in_transit trip — go directly to live tracking screen.
+            // Check both in-memory list (fast) and SharedPreferences (survives app restart after START TRIP).
+            val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
+                || sessionManager.getActiveSapDocId() != null
+
+            if (hasActiveTrip) {
+                // Active trip running — open TransitActivity live tracking screen
+                sessionManager.getActiveSapDocId()?.let { activeDocId ->
+                    startActivity(Intent(this, TransitActivity::class.java).apply {
+                        putExtra("shipment_doc_id", activeDocId)
+                    })
+                } ?: startActivity(Intent(this, TransitActivity::class.java))
+                return@setOnClickListener
+            }
+
             when {
-                // ALL CONFIRMED: launch MyTripActivity (shipment card list with START TRIP buttons)
+                // SCENARIO A: All confirmed — show MyTripActivity card list with START TRIP buttons
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                     startActivity(Intent(this, MyTripActivity::class.java))
