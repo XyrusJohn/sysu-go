@@ -521,7 +521,13 @@ class AssignmentActivity : AppCompatActivity() {
     }
 
     private fun submitToAdapter(list: List<Assignment>) {
-        val sessionActiveDocId = sessionManager.getActiveSapDocId()
+        // Only lock a shipment if activeSapDocId is NOT stale.
+        // Must be: (a) present in current list AND (b) actually in_transit in Firestore.
+        // Prevents stale SharedPreferences from locking cards from past sessions.
+        val rawActiveId = sessionManager.getActiveSapDocId()
+        val sessionActiveDocId = rawActiveId?.takeIf { storedId ->
+            list.any { it.docId == storedId && it.isInTransit }
+        }
 
         val adapter = (binding.rvAssignments.adapter as? AssignmentAdapter)
             ?: AssignmentAdapter(
