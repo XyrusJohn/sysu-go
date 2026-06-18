@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.sysu.go.R
@@ -15,7 +16,11 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     private var _binding: DialogObdItemsBinding? = null
     private val binding get() = _binding!!
 
-    private var lineItems: List<Map<String, Any>> = emptyList()
+    private var lineItems: List<Map<String, Any?>> = emptyList()
+
+    /** Optional callback when an individual OBD row is tapped.
+     *  Used when the shipment is in_transit so tapping a row opens MyTripActivity. */
+    var onItemClick: ((item: Map<String, Any?>) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,13 +60,13 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         container.removeAllViews()
 
         if (lineItems.isEmpty()) {
-            binding.tvObdSheetEmpty.visibility = View.VISIBLE
-            binding.llObdSheetContainer.visibility = View.GONE
+            binding.tvObdSheetEmpty.isVisible = true
+            binding.llObdSheetContainer.isVisible = false
             return
         }
 
-        binding.tvObdSheetEmpty.visibility = View.GONE
-        binding.llObdSheetContainer.visibility = View.VISIBLE
+        binding.tvObdSheetEmpty.isVisible = false
+        binding.llObdSheetContainer.isVisible = true
 
         lineItems.forEachIndexed { index, item ->
             val rowBinding = ItemObdLineBinding.inflate(
@@ -89,6 +94,13 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
             rowBinding.tvCustomerName.text = item["customerName"] as? String ?: "—"
 
+            // Wire click listener if callback is set (active trip mode)
+            onItemClick?.let { callback ->
+                rowBinding.root.setOnClickListener {
+                    callback.invoke(item)
+                }
+            }
+
             container.addView(rowBinding.root)
         }
     }
@@ -101,9 +113,13 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     companion object {
         const val TAG = "ObdItemsBottomSheet"
 
-        fun newInstance(lineItems: List<Map<String, Any>>): ObdItemsBottomSheet {
+        fun newInstance(
+            lineItems: List<Map<String, Any?>>,
+            onItemClick: ((item: Map<String, Any?>) -> Unit)? = null
+        ): ObdItemsBottomSheet {
             return ObdItemsBottomSheet().apply {
                 this.lineItems = lineItems
+                this.onItemClick = onItemClick
             }
         }
     }

@@ -24,6 +24,9 @@ class GuardVerificationBottomSheet : BottomSheetDialogFragment() {
     private var signatureBase64: String = ""
     private var verifiedAtMillis: Long = 0L
 
+    /** Called after the user confirms (second tap) — triggers Firestore save in AssignmentActivity */
+    var onSubmitConfirmed: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setStyle(STYLE_NORMAL, R.style.BottomSheetTheme)
@@ -72,6 +75,12 @@ class GuardVerificationBottomSheet : BottomSheetDialogFragment() {
             binding.tvVerifiedAt.text = sdf.format(Date(verifiedAtMillis))
         } else {
             binding.tvVerifiedAt.text = "—"
+        }
+
+        // Submit button — 2nd tap to confirm and save to Firestore
+        binding.btnGuardVerificationSubmit.setOnClickListener {
+            onSubmitConfirmed?.invoke()
+            dismiss()
         }
     }
 

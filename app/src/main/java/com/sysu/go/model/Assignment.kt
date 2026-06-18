@@ -33,6 +33,7 @@ data class Assignment(
     val truckType: String,
     val helper: String,
     val guardVerified: Boolean,
+    val driverConfirmed: Boolean = false,
     val guardFirstName: String = "",
     val guardLastName: String = "",
     val guardSignature: String = "",
@@ -44,10 +45,16 @@ data class Assignment(
      * populate ObdItemsBottomSheet when user taps OBD Items card.
      */
     val lineItems: List<Map<String, Any>> = emptyList(),
-    val obdNumber: String = ""
+    val obdNumber: String = "",
+    /**
+     * Shipment number as stored in the root sap_assignments document field.
+     * Falls back to derived logic (obdNumber → docId) if blank.
+     */
+    val shipmentNumberRaw: String = ""
 ) {
-    /** Returns OBD number for display; falls back to docId if not set */
-    val shipmentNumber: String get() = obdNumber.ifBlank { docId }
+    /** Returns shipment number: root SAP field → Firestore doc ID. Never falls back to OBD sub-item number. */
+    val shipmentNumber: String get() =
+        shipmentNumberRaw.ifBlank { docId }
 
     /** True if this shipment's docId matches the active in-transit shipment in SessionManager */
     fun isActive(sessionActiveDocId: String?): Boolean =
@@ -59,6 +66,9 @@ data class Assignment(
 
     /** True if guard has verified and trip hasn't started yet — driver can tap START TRIP */
     val canStartTrip: Boolean get() = guardVerified && tripStatus != "in_transit" && tripStatus != "completed"
+
+    /** True if guard verified but driver has NOT yet confirmed — enable CONFIRM SHIPMENT button */
+    val canConfirmTrip: Boolean get() = guardVerified && !driverConfirmed && !isLocked(null) && tripStatus != "in_transit" && tripStatus != "completed"
 
     /** True if trip is in progress on THIS shipment */
     val isInTransit: Boolean get() = tripStatus == "in_transit"

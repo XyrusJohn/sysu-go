@@ -127,6 +127,22 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
+        <!-- FileProvider — required for camera intent (MediaStore.ACTION_IMAGE_CAPTURE).
+             Supplies content:// URIs that the camera app can write to. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <activity
+            android:name=".activities.MyTripActivity"
+            android:exported="false" />
+
     </application>
 
 </manifest>

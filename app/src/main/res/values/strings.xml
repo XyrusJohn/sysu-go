@@ -1,4 +1,4 @@
-<resources>
+﻿<resources>
     <string name="app_name">Sysu Go</string>
     <string name="logout">Logout</string>
     <string name="scan_qr">Scan QR</string>
@@ -122,27 +122,86 @@
 
     <!-- Permission Setup -->
     <string name="perm_setup_title">Setup Required</string>
-    <string name="perm_setup_subtitle">Grant these permissions so SYSU Go can track your trip and keep you visible to dispatch — even with the screen off.</string>
+    <string name="perm_setup_subtitle">Grant these permissions so SYSU Go can track your trip and keep you visible to dispatch â€” even with the screen off.</string>
     <string name="perm_step_label">Step %1$d of %2$d</string>
 
     <string name="perm_loc_name">Location Access</string>
     <string name="perm_loc_desc">Required for GPS tracking and real-time dispatch visibility</string>
-    <string name="perm_loc_hint_title">📍 How to enable Location</string>
-    <string name="perm_loc_hint_body">Tap the button above → Select "Allow" for both Fine and Coarse location. Fine location gives street-level accuracy.</string>
+    <string name="perm_loc_hint_title">ðŸ“ How to enable Location</string>
+    <string name="perm_loc_hint_body">Tap the button above â†’ Select "Allow" for both Fine and Coarse location. Fine location gives street-level accuracy.</string>
 
     <string name="perm_notif_name">Notifications</string>
     <string name="perm_notif_desc">Shows a persistent "tracking active" notification while the app is running</string>
-    <string name="perm_notif_hint_title">🔔 How to enable Notifications</string>
-    <string name="perm_notif_hint_body">Tap the button above → Select "Allow" on the prompt. Android 13+ requires this runtime permission to show notifications.</string>
+    <string name="perm_notif_hint_title">ðŸ”” How to enable Notifications</string>
+    <string name="perm_notif_hint_body">Tap the button above â†’ Select "Allow" on the prompt. Android 13+ requires this runtime permission to show notifications.</string>
 
     <string name="perm_battery_name">Background Activity</string>
     <string name="perm_battery_desc">Required so the app keeps running when your screen is off</string>
-    <string name="perm_battery_hint_title">⚡ How to disable Battery Optimization</string>
-    <string name="perm_battery_hint_body">Tap the button above → Select "Allow" / "Don\'t optimize" on the system dialog. This prevents Android from killing the tracking service.</string>
+    <string name="perm_battery_hint_title">âš¡ How to disable Battery Optimization</string>
+    <string name="perm_battery_hint_body">Tap the button above â†’ Select "Allow" / "Don\'t optimize" on the system dialog. This prevents Android from killing the tracking service.</string>
 
     <string name="perm_enable_all">Enable All Permissions</string>
     <string name="perm_continue">Continue to Dashboard</string>
-    <string name="perm_skip">Skip for now — I\'ll enable later in Settings</string>
+    <string name="perm_skip">Skip for now â€” I\'ll enable later in Settings</string>
     <string name="perm_all_done">All Set!</string>
-    <string name="perm_redirecting">Redirecting to dashboard…</string>
+    <string name="perm_redirecting">Redirecting to dashboardâ€¦</string>
+
+    <!-- Assignment (My Assignments) -->
+    <string name="assignment_header_title">MY ASSIGNMENTS</string>
+    <string name="assignment_badge_all_verified">All Verified</string>
+    <string name="assignment_badge_pending">Pending Verification</string>
+    <string name="guard_status_verified">Verified</string>
+    <string name="guard_status_pending">Pending</string>
+    <string name="assignment_departed">Departed</string>
+    <string name="assignment_completed">Completed</string>
+    <string name="assignment_empty">No assignments yet</string>
+    <string name="assignment_empty_subtitle">Your shipments will appear here once assigned</string>
+
+    <!-- Confirm Shipment (Two-Step Trip Flow) -->
+    <string name="confirm_shipment_title">Confirm Shipment</string>
+    <string name="confirm_shipment_message">Confirm shipment %1$s? Review the details before taping Start Trip in the home screen once all shipments are ready.</string>
+    <string name="confirm_shipment_toast">Shipment confirmed! Ready for transit.</string>
+    <string name="btn_confirm_shipment">Confirm Shipment</string>
+    <string name="assignment_badge_all_confirmed">All Ready for Transit</string>
+    <string name="assignment_badge_confirmed_pending">Awaiting Confirmation</string>
+    <string name="btn_ready">Ready âœ“</string>
+
+    <!-- MainActivity CTA transit -->
+    <string name="cta_status_ready_transit">READY FOR TRANSIT</string>
+    <string name="cta_header_ready_transit">All Shipments Ready!</string>
+    <string name="cta_body_ready_transit">Tap the map icon to start your trip.</string>
+    <string name="cta_status_start_trip">START TRIP</string>
+    <string name="cta_header_start_trip">Time to Roll!</string>
+    <string name="cta_body_start_trip">All shipments verified and confirmed. Hit Start!</string>
+    <string name="confirm_start_trip_title">Start Trip</string>
+    <string name="confirm_start_trip_message">Start trip for all confirmed shipments?</string>
+    <string name="btn_start_trip">Start Trip</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- MyTripActivity (Active Delivery Execution) -->
+    <string name="my_trip_title">ACTIVE TRIP</string>
+    <string name="my_trip_header_obd_items">OBD ITEMS</string>
+    <string name="my_trip_all_delivered">All items delivered!</string>
+    <string name="my_trip_finish_delivery">FINISH DELIVERY</string>
+    <string name="my_trip_finish_confirm_title">Finish Delivery?</string>
+    <string name="my_trip_finish_confirm_message">All OBD items have been processed. Confirm shipment completion?</string>
+    <string name="my_trip_empty_obd">No OBD items found for this shipment.</string>
+    <string name="my_trip_no_active_trip">No active trip found.</string>
+    <string name="my_trip_loading">Loading shipment detailsâ€¦</string>
+
+    <!-- Per-OBD POD Status -->
+    <string name="pod_status_delivered">Delivered</string>
+    <string name="pod_status_rejected">Rejected</string>
+    <string name="pod_status_delivered_rejection">Delivered w/ Rejection</string>
+    <string name="pod_confirm_take_photo">CONFIRM &amp; TAKE PHOTO</string>
+    <string name="pod_select_status_hint">Select a delivery status to continue</string>
+    <string name="pod_photo_required">A photo is required to confirm delivery.</string>
+    <string name="pod_upload_failed">Photo upload failed. Please try again.</string>
+    <string name="pod_update_failed">Failed to update status. Please try again.</string>
+    <string name="pod_status_updated">Status updated for OBD %1$s</string>
+    <string name="pod_delivery_complete">Delivery complete! Great job.</string>
+    <string name="pod_rejected_label">REJECTED</string>
+    <string name="pod_delivered_label">DELIVERED</string>
+    <string name="pod_delivered_with_rejection_label">DEL. W/ REJECTION</string>
+    <string name="pod_pending_label">PENDING</string>
 </resources>

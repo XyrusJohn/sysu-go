@@ -405,7 +405,7 @@
         app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHeight_max="240dp"
+        app:layout_constraintHeight_max="320dp"
         app:layout_constraintVertical_bias="0.0" />
 
     <!-- ══════════════════════════════════════════════
@@ -696,6 +696,22 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
         </androidx.constraintlayout.widget.ConstraintLayout>
+    </FrameLayout>
+
+    <!-- My Trip Tab — toggled visible/invisible by navMapIcon click -->
+    <FrameLayout
+        android:id="@+id/myTripTabContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        android:background="@color/background_white"
+        app:layout_constraintTop_toBottomOf="@id/redHeader"
+        app:layout_constraintBottom_toTopOf="@id/bottomNavContainer"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <include layout="@layout/layout_my_trip_tab" />
+
     </FrameLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

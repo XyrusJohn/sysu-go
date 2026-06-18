@@ -1,3 +1,4 @@
+// MainActivity
 package com.sysu.go.activities
 
 import android.annotation.SuppressLint
@@ -9,6 +10,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +24,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.DocumentSnapshot
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityMainBinding
 import com.sysu.go.firebase.FirebaseAuthManager
@@ -32,6 +35,7 @@ import com.sysu.go.utils.NetworkUtils // Import NetworkUtils
 import com.sysu.go.utils.PermissionHelper
 import com.sysu.go.utils.SessionManager
 import com.sysu.go.utils.TrackingStateMonitor
+import com.sysu.go.model.Assignment
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
@@ -46,6 +50,8 @@ import android.net.ConnectivityManager
 import android.net.NetworkInfo
 import android.os.Handler
 import android.os.Looper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
 
@@ -411,21 +417,21 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateQueueTabs() {
         when {
-            currentShipments.size < 2 -> {
-                // 0 or 1 shipment — hide vertical list, cardMyQueue handles display
+            currentShipments.isEmpty() -> {
+                // No shipments — hide both shipment displays
                 binding.rvShipmentCards.visibility = View.GONE
-                binding.cardMyQueue.visibility = View.VISIBLE
+                binding.cardMyQueue.visibility = View.GONE
+                binding.myQueueSection.root.visibility = View.GONE
                 return
             }
             else -> {
-                // 2+ shipments — hide cardMyQueue, show vertical non-scrollable shipment cards
+                // 1 OR MORE shipments — always show rvShipmentCards with cards
                 binding.cardMyQueue.visibility = View.GONE
+                binding.myQueueSection.root.visibility = View.GONE
                 binding.rvShipmentCards.visibility = View.VISIBLE
             }
         }
         // ── Vertical stacking: one full-width card per shipment, scrollable ──
-        //    constraintHeight_max="240dp" in XML caps height at ~3 cards;
-        //    LinearLayoutManager (default canScrollVertically=true) handles scroll.
         binding.rvShipmentCards.layoutManager =
             androidx.recyclerview.widget.LinearLayoutManager(this)
 
@@ -433,31 +439,48 @@ class MainActivity : AppCompatActivity() {
         shipmentCardAdapter = com.sysu.go.adapter.ShipmentCardAdapter(
             sessionActiveDocId = SessionManager(this).getActiveSapDocId()
         ) { assignment ->
-            // Card tapped → open AssignmentActivity for this specific shipment
-            val intent = Intent(this, AssignmentActivity::class.java)
-            intent.putExtra("shipment_doc_id", assignment.docId)
-            startActivity(intent)
+            // Card tapped → navigate based on trip status
+            when {
+                assignment.isInTransit -> {
+                    // Active trip in progress → open MyTripActivity for POD execution
+                    val intent = Intent(this, MyTripActivity::class.java)
+                    intent.putExtra("shipment_doc_id", assignment.docId)
+                    startActivity(intent)
+                }
+                assignment.isCompleted -> {
+                    // Already completed → show as read-only in AssignmentActivity
+                    val intent = Intent(this, AssignmentActivity::class.java)
+                    startActivity(intent)
+                }
+                else -> {
+                    // Pre-transit → QueueDetailsActivity for review
+                    val intent = Intent(this, QueueDetailsActivity::class.java)
+                    intent.putExtra("shipment_doc_id", assignment.docId)
+                    startActivity(intent)
+                }
+            }
         }
         binding.rvShipmentCards.adapter = shipmentCardAdapter
         shipmentCardAdapter?.submitList(currentShipments.toList())
     }
 
     private fun updateScanButtonState() {
-        // 4-state pill: NOT ON QUEUE → ON QUEUE → ASSIGNED → ON TRANSIT
+        // 4-state pill: NOT ON QUEUE → IN QUEUE → ASSIGNED → READY FOR TRANSIT
         when {
-            hasShipment && isGuardVerified -> {
-                // ON TRANSIT — driver tapped Start Trip, GPS tracking live
+            // ── NEW STATE: All shipments verified AND confirmed — Map Icon activates ──
+            currentShipments.isNotEmpty() &&
+                currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
-                binding.tvStatusPill?.text = getString(R.string.cta_status_transit)
+                binding.tvStatusPill?.text = getString(R.string.cta_status_start_trip)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.transit_green))
-                binding.tvCTAHeader?.text = getString(R.string.cta_header_transit)
-                binding.tvCTABody?.text = getString(R.string.cta_body_transit)
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_queued)
-                stopStatusDot()
+                binding.tvCTAHeader?.text = getString(R.string.cta_header_start_trip)
+                binding.tvCTABody?.text = getString(R.string.cta_body_start_trip)
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
             }
             hasShipment -> {
-                // ASSIGNED — shipment assigned to driver, waiting for guard or Start Trip tap
+                // ASSIGNED — shipment assigned, guard verification happens in AssignmentActivity
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_assigned)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_blue))
@@ -467,19 +490,8 @@ class MainActivity : AppCompatActivity() {
                 startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
             }
-            isInQueue && isGuardVerified -> {
-                // Guard verified but no shipment yet — can transition when shipment assigned
-                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
-                binding.tvStatusPill?.text = getString(R.string.cta_status_transit)
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.transit_green))
-                binding.tvCTAHeader?.text = getString(R.string.cta_header_transit)
-                binding.tvCTABody?.text = getString(R.string.cta_body_transit)
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_queued)
-                stopStatusDot()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
-            }
             isInQueue -> {
-                // ON QUEUE — waiting in queue to be called by booth
+                // IN QUEUE — waiting in queue to be called by booth
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_queue)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_gold))
@@ -551,9 +563,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // If guard has verified and shipment is assigned, open Assignment screen (My Trip)
-        // which shows all assignments + Start/End Trip buttons per shipment
-        if (hasShipment && isGuardVerified) {
+        // Shipment assigned → open AssignmentActivity (shows all assignments with live guard status)
+        if (hasShipment) {
             startActivity(Intent(this, AssignmentActivity::class.java))
             return
         }
@@ -583,14 +594,17 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnScanQR.setOnClickListener {
             when {
-                // Guard verified + shipment assigned → open My Trip screen (AssignmentActivity)
-                // which shows shipment details + proper Start/End Trip button
-                hasShipment && isGuardVerified -> {
+                // CONFIRMED: All shipments verified and confirmed — Map Icon tapped → show start trip dialog
+                currentShipments.isNotEmpty() &&
+                    currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
+                    showStartTripDialog()
+                }
+                // Shipment assigned → open AssignmentActivity (shows all assignments)
+                hasShipment -> {
                     startActivity(Intent(this, AssignmentActivity::class.java))
                 }
-                // ON QUEUE or ASSIGNED — icon shows ticket, open QueueDetailsActivity
-                // (handles: hasShipment but not verified yet, or isInQueue without shipment yet)
-                isInQueue || hasShipment -> {
+                // In queue, no shipment yet → show queue details
+                isInQueue -> {
                     openQueueDetails()
                 }
                 else -> {
@@ -601,14 +615,35 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.cardMyQueue.setOnClickListener {
-            openQueueDetails()
+            // Always open AssignmentActivity when there's a shipment or queue
+            if (isInQueue || hasShipment) {
+                startActivity(Intent(this, AssignmentActivity::class.java))
+            }
         }
 
         // Logout removed from main activity layout as requested
         // binding.btnLogout.setOnClickListener { logout() }
 
+        // Initialize My Trip tab as hidden (Home tab is shown at startup)
+        binding.myTripTabContainer.visibility = View.GONE
+
+        // Bottom nav — Home icon: shows home content, hides My Trip tab
+        binding.btnHome.setOnClickListener {
+            updateBottomNavSelectionForTab(isHomeTab = true)
+            // Show home content
+            binding.cardScanCTA.visibility = View.VISIBLE
+            binding.tvScanHint.visibility = View.GONE
+            binding.myTripTabContainer.visibility = View.GONE
+        }
+
+        // Bottom nav — Profile/Map icon: shows My Trip tab, hides home content
         binding.btnProfile.setOnClickListener {
-            startActivity(Intent(this, ProfileActivity::class.java))
+            updateBottomNavSelectionForTab(isHomeTab = false)
+            // Show My Trip tab
+            binding.cardScanCTA.visibility = View.GONE
+            binding.tvScanHint.visibility = View.GONE
+            binding.myTripTabContainer.visibility = View.VISIBLE
+            fetchAndSetupMyTripCards()
         }
 
         binding.btnCancelQueue.setOnClickListener { showCancelQueueDialog() }
@@ -763,6 +798,7 @@ class MainActivity : AppCompatActivity() {
 
                     isInQueue = true
                     currentQueueDocId = entry.id
+                    session.saveCurrentQueueDocId(entry.id)
                     // ── Queue Tabs: add entry immediately, hasShipment updated later in listenToAssignment ──
                     val tab = com.sysu.go.adapter.QueueTab(
                         queueDocId = entry.id,
@@ -782,12 +818,9 @@ class MainActivity : AppCompatActivity() {
                         updateQueueUI(null, status, truckType, null)
                         updateScanButtonState()
                     } else if (status == "in_transit") {
-                        // Driver tapped Start Trip — GPS tracking live. Show ON TRANSIT.
-                        // Don't check sap_assignments — driver is already in transit.
+                        // Driver is in transit — keep listening for updates
                         assignmentListener?.remove()
-                        if (isGuardVerified) {
-                            listenToAssignment(queueId, truckType, sessionDriverId)
-                        }
+                        listenToAssignment(queueId, truckType, sessionDriverId)
                         updateQueueUI(null, status, truckType, null)
                         updateScanButtonState()
                     } else if (status == "loading") {
@@ -936,21 +969,25 @@ class MainActivity : AppCompatActivity() {
         val newShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
         for (doc in sapSnapshots.documents) {
-            val docId = doc.id
-            val data = doc.get("data") as? Map<String, Any?>
+            val docId = doc.id  // document ID IS the shipment number (e.g. "0010128715")
             val tripStatus = doc.getString("tripStatus")
             val guardVerified = doc.getBoolean("guardVerified") ?: false
-            // truckPlate / truckCompany live at root level of sap_assignments
-            val truckPlate = doc.getString("truckPlate") ?: data?.get("truckPlate") as? String ?: ""
-            val truckCompany = doc.getString("truckCompany") ?: data?.get("truckCompany") as? String ?: ""
-            val helperName = doc.getString("helperName") ?: ""
-            val delTs = doc.getTimestamp("actualDelDate")
-            // OBD number lives inside data nested map
-            val obdNumber = data?.get("obdNumber") as? String ?: ""
+            val driverConfirmed = doc.getBoolean("driverConfirmed") ?: false
 
+            // All fields are at ROOT level of sap_assignments — no nested "data" map
+            val truckPlate   = doc.getString("truckPlate")   ?: ""
+            val truckCompany = doc.getString("truckCompany") ?: ""
+            val helperName   = doc.getString("helperName")   ?: ""
+
+            // Delivery date: actualDelDate lives in lineItems[0] as OData string "/Date(millis)/"
+            val lineItems = doc.get("lineItems") as? List<Map<String, Any?>> ?: emptyList()
+            val firstItem = lineItems.firstOrNull()
+            val deliveryMillis = parseODataDate(firstItem?.get("actualDelDate") as? String)
+
+            // docId (shipment number) is used as the OBD reference
             val assignment = com.sysu.go.model.Assignment(
-                docId = docId,
-                queueId = docId,   // for Phase 2, queueId == docId since tabs come from sap_assignments
+                docId = docId,              // e.g. "0010128715" — IS the shipment number
+                queueId = doc.getString("driverId") ?: docId,
                 driverId = sessionDriverId,
                 status = if (tripStatus == "in_transit") "in_transit" else "loading",
                 tripStatus = tripStatus,
@@ -958,11 +995,12 @@ class MainActivity : AppCompatActivity() {
                 truckType = truckCompany,
                 helper = helperName,
                 guardVerified = guardVerified,
-                deliveryTimestamp = delTs?.toDate()?.time ?: 0L,
-                obdNumber = obdNumber
+                driverConfirmed = driverConfirmed,
+                deliveryTimestamp = deliveryMillis,
+                obdNumber = docId           // shipment number doubles as OBD reference
             )
             newShipments.add(assignment)
-            Log.d(TAG, ">> Synced shipment: docId=$docId, obd=$obdNumber, plate=$truckPlate, tripStatus=$tripStatus")
+            Log.d(TAG, ">> Synced shipment: docId=$docId, plate=$truckPlate, lineItems=${lineItems.size}, tripStatus=$tripStatus")
         }
 
         // Replace currentShipments completely — removed shipments vanish immediately
@@ -978,6 +1016,19 @@ class MainActivity : AppCompatActivity() {
         //   < 2 → cardMyQueue visible, rvShipmentCards gone
         //   >= 2 → cardMyQueue gone, rvShipmentCards shows vertical list
         updateQueueTabs()
+    }
+
+    /**
+     * Parses OData-style date strings like "/Date(1780444800000)/"
+     * Returns epoch millis as Long, or 0L if unparseable.
+     */
+    private fun parseODataDate(raw: String?): Long {
+        if (raw == null) return 0L
+        return try {
+            raw.removePrefix("/Date(").removeSuffix(")/").toLong()
+        } catch (e: Exception) {
+            0L
+        }
     }
 
     private fun updateQueueUI(position: Int?, status: String, truckType: String, shipmentId: String?) {
@@ -1172,6 +1223,64 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ─── Start Trip (Batch execution after all shipments confirmed) ────────────
+
+    /** Shows the final confirmation dialog before starting the trip. */
+    private fun showStartTripDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.confirm_start_trip_title)
+            .setMessage(R.string.confirm_start_trip_message)
+            .setPositiveButton(R.string.btn_start_trip) { _, _ -> performBatchStartTrip() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * Batch-updates all confirmed shipments (guardVerified && driverConfirmed)
+     * to tripStatus = "in_transit", then launches MyTripActivity for the first one.
+     */
+    private fun performBatchStartTrip() {
+        val confirmed = currentShipments.filter { it.guardVerified && it.driverConfirmed }
+        if (confirmed.isEmpty()) {
+            Toast.makeText(this, "No confirmed shipments to start.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val session = SessionManager(this)
+        val firstDocId = confirmed.first().docId
+        // Mark first shipment as active in session ( MyTripActivity reads this )
+        session.saveActiveSapDocId(firstDocId)
+        session.saveCurrentSapDocId(firstDocId)
+        session.setTripActive(true)
+
+        val batch = db.batch()
+        val timestamp = com.google.firebase.Timestamp.now()
+        val updates = mapOf(
+            "tripStatus" to "in_transit",
+            "startedAt" to timestamp
+        )
+
+        confirmed.forEach { shipment ->
+            val ref = db.collection("sap_assignments").document(shipment.docId)
+            batch.update(ref, updates)
+        }
+
+        batch.commit()
+            .addOnSuccessListener {
+                Log.d(TAG, "Batch startTrip: ${confirmed.size} shipment(s) → in_transit")
+                // Navigate to MyTripActivity for the first (primary) shipment
+                val intent = Intent(this, MyTripActivity::class.java)
+                startActivity(intent)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Batch startTrip failed: ${e.message}")
+                session.saveActiveSapDocId(null)
+                session.clearCurrentSapDocId()
+                session.setTripActive(false)
+                Toast.makeText(this, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+            }
+    }
+
     // Heartbeat monitoring methods
     private fun startHeartbeatMonitoring() {
         heartbeatHandler.post(heartbeatRunnable)
@@ -1196,6 +1305,103 @@ class MainActivity : AppCompatActivity() {
         stopHeartbeatMonitoring()
         // Defensive: clear queue doc reference so stale IDs can't be used post-destroy
         currentQueueDocId = null
+    }
+
+    // ─── My Trip Tab ─────────────────────────────────────────────────────────
+
+    /**
+     * Updates bottom nav icon tints to reflect the active tab.
+     * isHomeTab=true  → Home tab selected (red highlight on ivHome, muted on ivProfile)
+     * isHomeTab=false → Profile/My Trip tab selected (red highlight on ivProfile, muted on ivHome)
+     */
+    private fun updateBottomNavSelectionForTab(isHomeTab: Boolean) {
+        if (isHomeTab) {
+            binding.ivHome.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
+            binding.ivProfile.setColorFilter(ContextCompat.getColor(this, R.color.text_muted))
+        } else {
+            binding.ivHome.setColorFilter(ContextCompat.getColor(this, R.color.text_muted))
+            binding.ivProfile.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
+        }
+    }
+
+    /**
+     * Fetches all sap_assignments for the current driver and populates the My Trip tab
+     * RecyclerView using MyTripTabAdapter. Also updates the trip count and handles
+     * empty state visibility.
+     */
+    private fun fetchAndSetupMyTripCards() {
+        val driverId = SessionManager(this).getDriverId() ?: return
+
+        val tabContainer = binding.myTripTabContainer
+        val tabRv = tabContainer.findViewById<RecyclerView>(R.id.rvMyTripCards)
+        val emptyState = tabContainer.findViewById<LinearLayout>(R.id.emptyStateContainer)
+        val tvCount = tabContainer.findViewById<TextView>(R.id.tvMyTripCount)
+
+        db.collection("sap_assignments")
+            .whereEqualTo("driverId", driverId)
+            .get()
+            .addOnSuccessListener { snaps ->
+                val assignments = mutableListOf<Assignment>()
+                for (doc in snaps.documents) {
+                    doc.toObject(Assignment::class.java)?.let { assignments.add(it) }
+                }
+                val inTransit = assignments.find { it.tripStatus == "in_transit" }
+                val hasActiveTrip = inTransit != null
+
+                val adapter = com.sysu.go.adapter.MyTripTabAdapter(
+                    hasActiveTrip = hasActiveTrip,
+                    activeShipmentId = inTransit?.docId
+                ) { assignment ->
+                    when {
+                        assignment.tripStatus == "in_transit" -> {
+                            // Open MyTripActivity for the active shipment
+                            val intent = Intent(this, MyTripActivity::class.java)
+                            intent.putExtra("shipment_doc_id", assignment.docId)
+                            startActivity(intent)
+                        }
+                        hasActiveTrip -> {
+                            Toast.makeText(this, "You already have an active trip.", Toast.LENGTH_SHORT).show()
+                        }
+                        else -> {
+                            // Trigger start trip for this shipment
+                            startSingleShipment(assignment.docId)
+                        }
+                    }
+                }
+
+                tabRv.layoutManager = LinearLayoutManager(this)
+                tabRv.adapter = adapter
+                tvCount.text = assignments.size.toString()
+                emptyState.visibility = if (assignments.isEmpty()) View.VISIBLE else View.GONE
+                tabRv.visibility = if (assignments.isEmpty()) View.GONE else View.VISIBLE
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "fetchAndSetupMyTripCards: ${e.message}")
+            }
+    }
+
+    /**
+     * Marks a single shipment as in_transit in Firestore and launches MyTripActivity.
+     * Used when the driver taps START TRIP on a confirmed-but-not-yet-active shipment
+     * from the My Trip tab.
+     */
+    private fun startSingleShipment(docId: String) {
+        val ref = db.collection("sap_assignments").document(docId)
+        val batch = db.batch()
+        batch.update(ref, mapOf(
+            "tripStatus" to "in_transit",
+            "startedAt" to com.google.firebase.Timestamp.now()
+        ))
+        batch.commit().addOnSuccessListener {
+            Toast.makeText(this, "Trip started!", Toast.LENGTH_SHORT).show()
+            // Navigate to MyTripActivity
+            val intent = Intent(this, MyTripActivity::class.java)
+            intent.putExtra("shipment_doc_id", docId)
+            startActivity(intent)
+        }.addOnFailureListener { e ->
+            Log.e(TAG, "startSingleShipment failed: ${e.message}")
+            Toast.makeText(this, "Failed to start trip.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun logout() {

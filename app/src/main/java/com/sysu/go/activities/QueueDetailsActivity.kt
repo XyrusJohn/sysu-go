@@ -1,9 +1,8 @@
-﻿package com.sysu.go.activities
+package com.sysu.go.activities
 
 import android.os.Bundle
 import android.util.Log
 import android.view.View
-import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -11,34 +10,19 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.lifecycle.lifecycleScope
-import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityQueueDetailsBinding
-import com.sysu.go.model.SecurityGuard
-import com.sysu.go.repository.SecurityGuardRepository
 import com.sysu.go.utils.SessionManager
-import kotlinx.coroutines.launch
 
 class QueueDetailsActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityQueueDetailsBinding
     private val db = FirebaseFirestore.getInstance()
     private var currentSapDocId: String = ""
-    private var currentGuardFirstName: String = ""
-    private var currentGuardLastName: String = ""
-    private var currentGuardMI: String = ""
-    private var currentGuardSignature: String = ""
-    private var currentVerifiedAtMillis: Long = 0L
-    private var pendingSignatureBase64: String? = null
-    private var currentLineItems: List<Map<String, Any>> = emptyList()
-
-    // Security guard data (loaded once, used by bottom sheet)
-    private var securityGuards: List<SecurityGuard> = emptyList()
-    private var currentSelectedGuardId: String = ""
-    private var hasShipment: Boolean = false  // true only when sap_assignment doc is loaded
-    private var queueDriverId: String = ""  // Firebase UID — used for requirements lookup
+    private var currentLineItems: List<Map<String, Any?>> = emptyList()
+    private var hasShipment: Boolean = false   // true only when sap_assignment doc is loaded
+    private var queueDriverId: String = ""    // Firebase UID — used for requirements lookup
 
     // Circle animation tracking
     private val circleAnimators = mutableListOf<android.animation.Animator>()
@@ -56,7 +40,6 @@ class QueueDetailsActivity : AppCompatActivity() {
             insets
         }
 
-        setupGuardSelection()
         setupUI()
         startCircleAnimation()
 
@@ -66,22 +49,6 @@ class QueueDetailsActivity : AppCompatActivity() {
             loadSpecificShipment(explicitShipmentDocId)
         } else {
             loadQueueDetails()
-        }
-    }
-
-    private fun setupGuardSelection() {
-        val repository = SecurityGuardRepository(this)
-
-        // Load from cache immediately so guards are ready for bottom sheet
-        securityGuards = repository.getCachedGuards()
-
-        // Refresh in background and update cache
-        lifecycleScope.launch {
-            val fresh = repository.refreshGuards()
-            Log.d("OBD", "refreshGuards returned ${fresh.size} guards")
-            if (fresh.isNotEmpty()) {
-                securityGuards = fresh
-            }
         }
     }
 
@@ -224,86 +191,11 @@ class QueueDetailsActivity : AppCompatActivity() {
     private fun setupUI() {
         binding.btnBack.setOnClickListener { finish() }
 
-        // ── Guard card: open GuardSelectionBottomSheet ──
-        binding.cardSelectGuard.setOnClickListener {
-            if (securityGuards.isEmpty()) {
-                Toast.makeText(this, "Guards not loaded yet", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val sheet = GuardSelectionBottomSheet.newInstance(securityGuards) { guard ->
-                currentSelectedGuardId = guard.guardId
-                binding.tvSelectedGuardName.text = guard.fullName
-                binding.tvSelectedGuardName.setTextColor(
-                    ContextCompat.getColor(this@QueueDetailsActivity, R.color.text_primary)
-                )
-                updateSignButtonState()
-            }
-            sheet.show(supportFragmentManager, GuardSelectionBottomSheet.TAG)
-        }
-
-        // ── STEP 1: SIGN — opens floating bottom sheet for signature capture ──
-        binding.btnSign.setOnClickListener {
-            if (!hasShipment || currentSelectedGuardId.isBlank()) return@setOnClickListener
-
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            currentFocus?.let { imm.hideSoftInputFromWindow(it.windowToken, 0) }
-
-            val sheet = SignaturePadBottomSheet()
-            sheet.onSignatureConfirmed = { base64 ->
-                pendingSignatureBase64 = base64
-                binding.btnVerify.visibility = View.VISIBLE
-            }
-            sheet.show(supportFragmentManager, SignaturePadBottomSheet.TAG)
-        }
-
-        // ── STEP 2: VERIFY & SEND ──
-        binding.btnVerify.setOnClickListener {
-            val base64 = pendingSignatureBase64
-            if (base64.isNullOrBlank()) {
-                Toast.makeText(this, "Signature required", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            binding.btnVerify.isEnabled = false
-
-            val selectedGuard = securityGuards.find { it.guardId == currentSelectedGuardId }
-            if (selectedGuard == null) {
-                binding.btnVerify.isEnabled = true
-                Toast.makeText(this, "Guard selection error. Please re-select.", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-
-            saveVerificationToFirestore(signatureBase64 = base64, guard = selectedGuard)
-        }
-
-        // View previously submitted verification
-        binding.cardFloatingViewVerification.setOnClickListener {
-            val sheet = com.sysu.go.activities.GuardVerificationBottomSheet.newInstance(
-                firstName = currentGuardFirstName,
-                lastName = currentGuardLastName,
-                mi = currentGuardMI,
-                signature = currentGuardSignature,
-                verifiedAt = currentVerifiedAtMillis
-            )
-            sheet.show(supportFragmentManager, com.sysu.go.activities.GuardVerificationBottomSheet.TAG)
-        }
-
         // OBD items
         binding.cardObdItems.setOnClickListener {
             val sheet = ObdItemsBottomSheet.newInstance(currentLineItems)
             sheet.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
         }
-
-        // Initial sign button state — locked until shipment assigned + guard selected
-        binding.btnSign.isEnabled = false
-        updateSignButtonState()
-    }
-
-    /**
-     * Gates SIGN button: only enabled when shipment exists AND guard is selected.
-     */
-    private fun updateSignButtonState() {
-        val canSign = hasShipment && currentSelectedGuardId.isNotBlank()
-        binding.btnSign.isEnabled = canSign
     }
 
     private fun loadQueueDetails() {
@@ -382,162 +274,155 @@ class QueueDetailsActivity : AppCompatActivity() {
     private fun loadSpecificShipment(shipmentDocId: String) {
         Log.d("OBD", ">>> loadSpecificShipment docId=$shipmentDocId")
         db.collection("sap_assignments").document(shipmentDocId)
-            .get()
-            .addOnSuccessListener { snap ->
-                if (snap == null || !snap.exists()) {
-                    Toast.makeText(this, "Shipment not found", Toast.LENGTH_SHORT).show()
-                    finish()
-                    return@addOnSuccessListener
-                }
-                processSapDocFromQueueDetails(shipmentDocId, snap.data ?: return@addOnSuccessListener)
-            }
-            .addOnFailureListener { e ->
-                Log.e("OBD", ">>> loadSpecificShipment FAILED: ${e.message}")
-                Toast.makeText(this, "Failed to load shipment", Toast.LENGTH_SHORT).show()
-                finish()
+            .addSnapshotListener { snap, err ->
+                if (err != null || snap == null || !snap.exists()) return@addSnapshotListener
+                populateQueueDetailsUI(snap)
             }
     }
 
     /**
-     * Populates all UI fields from a specific sap_assignments document.
-     * For per-shipment view opened from dashboard card tap.
+     * Populates all UI fields from a sap_assignments document.
+     * sap_assignments/{shipmentNumber} — doc ID is the shipment number itself.
+     * Requirements are loaded via 2-hop: driverId (queue doc ID) → queue.driverId (Firebase UID) → drivers.requirements.
      */
-    private fun processSapDocFromQueueDetails(docId: String, data: Map<String, Any>) {
-        Log.d("OBD", ">>> processSapDocFromQueueDetails docId=$docId")
+    private fun populateQueueDetailsUI(doc: com.google.firebase.firestore.DocumentSnapshot) {
+        val shipmentNumber = doc.id  // document ID IS the shipment number (e.g. "0010128715")
 
-        // sap_assignments.driverId = QUEUE DOCUMENT ID (doc.id), NOT Firebase UID
-        val queueDocId = data["driverId"] as? String ?: ""
-        currentSapDocId = docId
-        hasShipment = true
+        // ── Banner: show shipment number as queue reference ──
+        binding.tvQueueNumberLabel.text = "SHIPMENT"
+        binding.tvQueueNumber.text = shipmentNumber
 
-        // ── Shipment number = sap_assignments doc ID ──
-        binding.tvShipmentNumber.text = docId
+        // ── Subtitle ──
+        binding.tvSubStatus.text = "Being loaded"
 
-        // ── Queue number: no queue position context, show "—" ──
-        binding.tvQueueNumber.text = "—"
-        binding.tvQueueNumberLabel.text = "QUEUE NUMBER"
+        // ── Details card fields from sap_assignments root ──
+        binding.tvShipmentNumber.text = shipmentNumber
+        binding.tvPlateNo.text   = doc.getString("truckPlate")   ?: "—"
+        // tvTruckType and tvHelper come from the queue doc (loaded inside loadRequirementsAndQueueData below)
 
-        // ── Sub-status ──
-        val status = data["status"] as? String ?: ""
-        binding.tvSubStatus.text = when (status) {
-            "assigned" -> "Shipment Assigned"
-            "in_transit" -> "Trip in Progress"
-            "loading" -> "Being loaded"
-            "waiting" -> "Waiting in queue"
-            "called" -> "Proceed to bay"
-            else -> status.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-        }
-
-        // ── Plate / Truck / Helper from queue doc ──
-        // Requirements (driver-level) need FIREBASE UID, which lives in queueDoc["driverId"]
+        // ── Customer Requirements + Queue fields: 2-hop via queue doc ──
+        val queueDocId = doc.getString("driverId") ?: ""
         if (queueDocId.isNotBlank()) {
-            db.collection("queue").document(queueDocId)
-                .get()
-                .addOnSuccessListener { queueDoc ->
-                    if (queueDoc == null || !queueDoc.exists() || isFinishing) return@addOnSuccessListener
-                    val q = queueDoc.data ?: return@addOnSuccessListener
-
-                    // Plate / Truck / Helper from the queue document
-                    binding.tvPlateNo.text     = q["plateNumber"]  as? String ?: "—"
-                    binding.tvTruckType.text   = q["truckType"]   as? String ?: "—"
-                    binding.tvHelper.text      = q["helper"]      as? String ?: "—"
-
-                    // Get the FIREBASE UID (queueDoc["driverId"]) for requirements lookup
-                    val firebaseUid = q["driverId"] as? String ?: ""
-                    queueDriverId = firebaseUid
-                    if (firebaseUid.isNotBlank()) {
-                        loadRequirementsFromDriver(firebaseUid)
-                    }
-                }
+            loadRequirementsAndQueueData(queueDocId)
         } else {
-            binding.tvPlateNo.text   = "—"
+            // Fallback: clear requirements and fields
+            bindRequirement(binding.tvReqAircon, null)
+            bindRequirement(binding.tvReqVest, null)
+            bindRequirement(binding.tvReqHeadcap, null)
+            bindRequirement(binding.tvReqSafetyShoes, null)
+            bindRequirement(binding.tvReqPants, null)
+            bindRequirement(binding.tvReqClosedShoes, null)
             binding.tvTruckType.text = "—"
             binding.tvHelper.text    = "—"
         }
 
-        // ── OBD line items ──
-        val lineItemsRef = data["lineItems"]
-        if (lineItemsRef != null && lineItemsRef is List<*>) {
-            val lineItems = lineItemsRef.mapNotNull { it as? Map<*, *> }
-            if (lineItems.isNotEmpty()) {
-                @Suppress("UNCHECKED_CAST")
-                val items = lineItems as? List<Map<String, Any>> ?: emptyList()
-                currentLineItems = items
-                binding.tvObdCount.text = items.size.toString()
-            } else {
-                currentLineItems = emptyList()
-                binding.tvObdCount.text = "0"
-            }
-        } else {
-            currentLineItems = emptyList()
-            binding.tvObdCount.text = "0"
-        }
+        // ── Planned Delivery: actualDelDate lives in lineItems[0] as OData string "/Date(millis)/" ──
+        @Suppress("UNCHECKED_CAST")
+        val lineItems = doc.get("lineItems") as? List<Map<String, Any?>> ?: emptyList()
+        currentLineItems = lineItems.mapNotNull { it as? Map<String, Any?> }
+        val firstItem = lineItems.firstOrNull()
+        val rawDate = firstItem?.get("actualDelDate") as? String
+        binding.tvDeliveryDate.text = formatODataDate(rawDate)
 
-        // ── Planned delivery date ──
-        val delTimestamp = data["actualDelDate"] as? com.google.firebase.Timestamp
-        if (delTimestamp != null && !isFinishing) {
-            val cal = java.util.Calendar.getInstance()
-            cal.timeInMillis = delTimestamp.toDate().time
-            val fmt = java.text.SimpleDateFormat("MMM dd, yyyy  hh:mm a", java.util.Locale.US)
-            binding.tvDeliveryDate.text = fmt.format(cal.time)
-        } else {
-            binding.tvDeliveryDate.text = "—"
-        }
+        // ── OBD count pill ──
+        binding.tvObdCount.text = lineItems.size.toString()
 
-        // ── Guard verification ──
-        val guardVerified = data["guardVerified"] as? Boolean ?: false
-        if (guardVerified) {
-            binding.guardVerificationSection.visibility = View.GONE
-            binding.cardFloatingViewVerification.visibility = View.VISIBLE
-            binding.btnVerify.visibility = View.GONE
-
-            currentGuardFirstName = data["guardFirstName"] as? String ?: ""
-            currentGuardLastName = data["guardLastName"] as? String ?: ""
-            currentGuardMI = data["guardMI"] as? String ?: ""
-            currentGuardSignature = data["guardSignature"] as? String ?: ""
-            currentSelectedGuardId = data["guardId"] as? String ?: ""
-            val ts = data["verifiedAt"] as? com.google.firebase.Timestamp
-            currentVerifiedAtMillis = ts?.toDate()?.time ?: 0L
-        } else {
-            binding.guardVerificationSection.visibility = View.VISIBLE
-            binding.cardFloatingViewVerification.visibility = View.GONE
-            binding.btnVerify.visibility = View.GONE
-            updateSignButtonState()
-        }
+        currentSapDocId = shipmentNumber
+        hasShipment = true
     }
 
     /**
-     * Shared handler for a confirmed queue document, used across all attempt fallbacks.
-     * @param source Debug tag showing which attempt succeeded.
+     * Loads queue doc data AND driver requirements via 2-hop:
+     * sap_assignments.driverId (= queue doc ID) → queue.driverId (Firebase UID) → drivers.requirements
+     *
+     * Also sets truckType, helper, and plateNumber from the queue doc (source of truth for these fields).
      */
-    private fun processQueueDocument(doc: DocumentSnapshot, source: String) {
-        Log.d("OBD", ">>> processQueueDocument FROM: $source")
+    private fun loadRequirementsAndQueueData(queueDocId: String) {
+        db.collection("queue").document(queueDocId).get()
+            .addOnSuccessListener { queueDoc ->
+                if (queueDoc == null || !queueDoc.exists() || isFinishing) return@addOnSuccessListener
 
-        val queueDocId = doc.id
-        val data = doc.data ?: return
-        val status = data["status"] as? String ?: ""
-        val joinedAt = data["joinedAt"] as? com.google.firebase.Timestamp
-        val driverId = data["driverId"] as? String ?: ""
-        queueDriverId = driverId
+                // ── Truck type, helper, plate — from queue document ──
+                binding.tvTruckType.text = queueDoc.getString("truckType") ?: "—"
+                binding.tvHelper.text    = queueDoc.getString("helper")   ?: "—"
+                // plateNumber may already be set from sap; only override if queue has it (queue is source of truth)
+                val queuePlate = queueDoc.getString("plateNumber") ?: ""
+                if (queuePlate.isNotBlank()) binding.tvPlateNo.text = queuePlate
 
-        binding.tvPlateNo.text = data["plateNumber"] as? String ?: "—"
-        binding.tvTruckType.text = data["truckType"] as? String ?: "—"
-        binding.tvHelper.text = data["helperName"] as? String ?: data["helper"] as? String ?: "—"
+                // ── Get Firebase UID for requirements lookup ──
+                val firebaseUid = queueDoc.getString("driverId") ?: ""
+                if (firebaseUid.isBlank()) return@addOnSuccessListener
+                db.collection("drivers").document(firebaseUid).get()
+                    .addOnSuccessListener { driverDoc ->
+                        if (driverDoc == null || !driverDoc.exists() || isFinishing) return@addOnSuccessListener
+                        @Suppress("UNCHECKED_CAST")
+                        val req = driverDoc.get("requirements") as? Map<String, Any?> ?: return@addOnSuccessListener
+                        bindRequirement(binding.tvReqAircon,        req["aircon"]           as? Boolean)
+                        bindRequirement(binding.tvReqVest,         req["reflectorizedVest"] as? Boolean)
+                        bindRequirement(binding.tvReqHeadcap,      req["headcap"]          as? Boolean)
+                        bindRequirement(binding.tvReqSafetyShoes, req["safetyShoes"]      as? Boolean)
+                        bindRequirement(binding.tvReqPants,       req["pants"]            as? Boolean)
+                        bindRequirement(binding.tvReqClosedShoes, req["closedShoes"]      as? Boolean)
+                    }
+            }
+    }
 
-        // Load requirements from driver document (async, non-blocking)
-        loadRequirementsFromDriver(driverId)
+    /** Binds a requirement TextView: green ✓ (true), gray — (false/null). */
+    private fun bindRequirement(tv: android.widget.TextView, value: Boolean?) {
+        if (isFinishing) return
+        when (value) {
+            true -> {
+                tv.text = "✔"
+                tv.setTextColor(ContextCompat.getColor(this, R.color.transit_green))
+            }
+            else -> {
+                tv.text = "—"
+                tv.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
+            }
+        }
+    }
 
-        binding.tvSubStatus.text = when (status) {
-            "assigned" -> "Shipment Assigned"
-            "waiting" -> "Waiting in queue"
-            "called" -> "Proceed to bay"
-            "in_transit" -> "Trip in Progress"
-            "loading" -> "Being loaded"
-            else -> status.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    /** Parses OData date string "/Date(millis)/" into a human-readable "MMM dd, yyyy • h:mm a". */
+    private fun formatODataDate(raw: String?): String {
+        if (raw == null) return "—"
+        return try {
+            val millis = raw.removePrefix("/Date(").removeSuffix(")/").toLong()
+            val sdf = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm a", java.util.Locale.US)
+            sdf.format(java.util.Date(millis))
+        } catch (e: Exception) {
+            "—"
+        }
+    }
+
+    private fun processQueueDocument(doc: com.google.firebase.firestore.DocumentSnapshot, source: String) {
+        if (isFinishing) return
+        val status = doc.getString("status") ?: "unknown"
+        Log.d("OBD", ">>> processQueueDocument source=$source status='$status'")
+
+        binding.tvQueueNumber.text = status.replaceFirstChar {
+            if (it.isLowerCase()) it.titlecase() else it.toString()
         }
 
+        // Persist queue doc ID for later lookup
+        currentQueueDocId = doc.id
+        sessionManager.saveCurrentQueueDocId(doc.id)
+
+        // ── 2-hop: queue.driverId (Firebase UID) → drivers.requirements ──
+        val driverId = doc.getString("driverId") ?: ""
+        if (driverId.isNotBlank()) {
+            queueDriverId = driverId
+            loadRequirementsFromDriver(driverId)
+        } else {
+            clearRequirements()
+        }
+
+        binding.tvPlateNo.text    = doc.getString("plateNumber")   ?: "—"
+        binding.tvTruckType.text  = doc.getString("truckType")      ?: "—"
+        binding.tvHelper.text     = doc.getString("helper")         ?: "—"
+
+        val joinedAt = doc.getTimestamp("joinedAt")
         if (joinedAt != null) {
-            val truckType = data["truckType"] as? String ?: ""
+            val truckType = doc.getString("truckType") ?: ""
             db.collection("queue")
                 .whereEqualTo("truckType", truckType)
                 .whereIn("status", listOf("assigned", "waiting", "called"))
@@ -557,18 +442,14 @@ class QueueDetailsActivity : AppCompatActivity() {
 
         // ── CRITICAL: sap_assignments.driverId stores the QUEUE DOCUMENT ID (doc.id),
         // NOT queue["driverId"] which is the Firebase UID. Use queueDocId here.
-        Log.d("OBD", ">>> sap query using queueDocId='$queueDocId' (doc.id, not driverId='$driverId')")
+        Log.d("OBD", ">>> sap query using queueDocId='$currentQueueDocId' (doc.id, not driverId='$driverId')")
         db.collection("sap_assignments")
-            .whereEqualTo("driverId", queueDocId)
+            .whereEqualTo("driverId", currentQueueDocId)
             .get()
             .addOnSuccessListener { assignSnaps ->
                 if (assignSnaps.isEmpty) {
-                    Log.d("OBD", ">>> sap_assignments WALA — hiding guard section")
+                    Log.d("OBD", ">>> sap_assignments WALA")
                     hasShipment = false
-                    binding.guardVerificationSection.visibility = View.GONE
-                    binding.cardFloatingViewVerification.visibility = View.GONE
-                    binding.btnVerify.visibility = View.GONE
-                    updateSignButtonState()
                     return@addOnSuccessListener
                 }
 
@@ -592,7 +473,6 @@ class QueueDetailsActivity : AppCompatActivity() {
                     binding.tvObdCount.text = "0"
                 }
 
-                val guardVerified = assignSnaps.documents[0].getBoolean("guardVerified") ?: false
                 hasShipment = true
 
                 // ── Read and display delivery date from sap_assignments ──
@@ -600,7 +480,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                 if (delTimestamp != null && !isFinishing) {
                     val cal = java.util.Calendar.getInstance()
                     cal.timeInMillis = delTimestamp.toDate().time
-                    val fmt = java.text.SimpleDateFormat("MMM dd, yyyy  hh:mm a", java.util.Locale.US)
+                    val fmt = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm a", java.util.Locale.US)
                     binding.tvDeliveryDate.text = fmt.format(cal.time)
                 } else {
                     binding.tvDeliveryDate.text = "—"
@@ -611,30 +491,14 @@ class QueueDetailsActivity : AppCompatActivity() {
                     binding.tvQueueNumber.text = "LOADING"
                     binding.tvQueueNumberLabel.visibility = View.GONE
                 }
-
-                if (guardVerified) {
-                    binding.guardVerificationSection.visibility = View.GONE
-                    binding.cardFloatingViewVerification.visibility = View.VISIBLE
-                    binding.btnVerify.visibility = View.GONE
-
-                    currentGuardFirstName = assignSnaps.documents[0].getString("guardFirstName") ?: ""
-                    currentGuardLastName = assignSnaps.documents[0].getString("guardLastName") ?: ""
-                    currentGuardMI = assignSnaps.documents[0].getString("guardMI") ?: ""
-                    currentGuardSignature = assignSnaps.documents[0].getString("guardSignature") ?: ""
-                    currentSelectedGuardId = assignSnaps.documents[0].getString("guardId") ?: ""
-                    val ts = assignSnaps.documents[0].getTimestamp("verifiedAt")
-                    currentVerifiedAtMillis = ts?.toDate()?.time ?: 0L
-                } else {
-                    binding.guardVerificationSection.visibility = View.VISIBLE
-                    binding.cardFloatingViewVerification.visibility = View.GONE
-                    binding.btnVerify.visibility = View.GONE
-                    updateSignButtonState()
-                }
             }
             .addOnFailureListener { e ->
                 Log.e("OBD", ">>> sap_assignments FAILED: ${e.message}")
             }
     }
+
+    private val sessionManager by lazy { SessionManager(this) }
+    private var currentQueueDocId: String = ""
 
     private fun loadRequirementsFromDriver(driverId: String) {
         if (driverId.isBlank()) return
@@ -668,43 +532,19 @@ class QueueDetailsActivity : AppCompatActivity() {
         )
     }
 
-    private fun saveVerificationToFirestore(signatureBase64: String, guard: SecurityGuard) {
-        if (currentSapDocId.isBlank()) {
-            binding.btnVerify.isEnabled = true
-            Toast.makeText(this, "Error: assignment not loaded. Please restart.", Toast.LENGTH_LONG).show()
-            return
+    private fun clearRequirements() {
+        listOf(
+            binding.tvReqAircon,
+            binding.tvReqVest,
+            binding.tvReqHeadcap,
+            binding.tvReqSafetyShoes,
+            binding.tvReqPants,
+            binding.tvReqClosedShoes
+        ).forEach { tv ->
+            tv.text = "—"
+            tv.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
         }
-
-        val updates = mapOf(
-            "guardVerified" to true,
-            "guardId" to guard.guardId,
-            "guardFirstName" to guard.firstName,
-            "guardLastName" to guard.lastName,
-            "guardMI" to guard.middleInitial,
-            "guardSignature" to signatureBase64,
-            "verifiedAt" to com.google.firebase.Timestamp.now()
-        )
-
-        db.collection("sap_assignments").document(currentSapDocId)
-            .update(updates)
-            .addOnSuccessListener {
-                binding.guardVerificationSection.visibility = View.GONE
-                binding.cardFloatingViewVerification.visibility = View.VISIBLE
-                binding.btnVerify.visibility = View.GONE
-
-                currentGuardFirstName = guard.firstName
-                currentGuardLastName = guard.lastName
-                currentGuardMI = guard.middleInitial
-                currentGuardSignature = signatureBase64
-                currentSelectedGuardId = guard.guardId
-                currentVerifiedAtMillis = System.currentTimeMillis()
-
-                Toast.makeText(this, "Verification saved", Toast.LENGTH_SHORT).show()
-            }
-            .addOnFailureListener { e ->
-                Log.e("OBD", ">>> verification save FAILED: ${e.message}")
-                binding.btnVerify.isEnabled = true
-                Toast.makeText(this, "Failed to save verification. Try again.", Toast.LENGTH_SHORT).show()
-            }
+        binding.tvTruckType.text = "—"
+        binding.tvHelper.text    = "—"
     }
 }

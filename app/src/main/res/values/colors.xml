@@ -7,6 +7,7 @@
 
     <!-- White Theme Backgrounds -->
     <color name="background_white">#FFFFFFFF</color>
+    <color name="background_primary">#FFFFFFFF</color>
     <color name="surface">#F5F5F5</color>
     <color name="surface2">#EEEEEE</color>
     <color name="card_bg">#FFFFFF</color>
@@ -32,4 +33,11 @@
     <color name="transit_green_bg">#E8F5E9</color>
     <color name="transit_amber">#FFF3E0</color>
     <color name="transit_amber_dark">#FF9800</color>
+
+    <!-- Disabled states -->
+    <color name="gray_disabled">#B0B0B0</color>
+
+    <!-- Amber / pending status -->
+    <color name="amber_pill_bg">#FFF3E0</color>
+    <color name="text_amber">#E65100</color>
 </resources>

@@ -13,27 +13,30 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
+import com.sysu.go.adapter.AssignmentAdapter
 import com.sysu.go.databinding.ActivityAssignmentBinding
 import com.sysu.go.model.Assignment
+import com.sysu.go.model.SecurityGuard
+import com.sysu.go.repository.SecurityGuardRepository
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 /**
- * My Trip / Assignment screen — single shipment view.
+ * MY ASSIGNMENTS — shows all of the driver's shipments in a single scrollable list.
  *
- * Shows one shipment's VERIFIED pill, progress strip (Verified → Transit → Done),
- * shipment details (number / plate / truck type / helper), and a fixed
- * START TRIP / END TRIP button at the bottom.
+ * Top bar: "MY ASSIGNMENTS" + aggregate verification badge (green "All Verified" /
+ * amber "X Pending").
+ * Red banner: bouncing circles + pulse rings (same animation as MainActivity).
+ * RecyclerView: one AssignmentCard per shipment, each showing all detail fields.
+ * Each card's btnTripAction opens a guard verification flow or launches TransitActivity.
  *
- * Tapping START TRIP calls performStartTrip() → updates Firestore → launches TransitActivity.
- * Tapping END TRIP delegates to TransitActivity which handles trip completion.
- *
- * Phase 1: only 1 shipment in the list → 1 screen, 1 button.
- * Phase 2+ (multiple ships_assignments docs): the first matching shipment fills the screen.
+ * Phase 2: All shipment loading via Firestore addSnapshotListener so badges
+ * and card states update live.
  */
 class AssignmentActivity : AppCompatActivity() {
 
@@ -41,13 +44,16 @@ class AssignmentActivity : AppCompatActivity() {
     private val db = FirebaseFirestore.getInstance()
     private val sessionManager by lazy { SessionManager(this) }
 
-    // Current shipment being displayed on this screen
-    private var currentAssignment: Assignment? = null
+    // Current list of assignments shown in rvAssignments
+    private var assignments: List<Assignment> = emptyList()
 
-    // Firestore listeners for cleanup
-    private var currentAssignmentListener: com.google.firebase.firestore.ListenerRegistration? = null
+    // Requirements snapshot loaded once from drivers/{driverId}/requirements
+    private var requirementsSnapshot: Map<String, Boolean> = emptyMap()
 
-    // Bouncing circles animation state
+    // Firestore listener — kept so we remove it in onDestroy
+    private var assignmentsListener: com.google.firebase.firestore.ListenerRegistration? = null
+
+    // Bouncing circles
     private val circleAnimators = mutableListOf<android.animation.Animator>()
     private val circleViews = mutableListOf<View>()
 
@@ -67,12 +73,15 @@ class AssignmentActivity : AppCompatActivity() {
             insets
         }
 
+        setupRecyclerView()
         setupUI()
         startCircleAnimation()
+        startPulseRings()
     }
 
     override fun onResume() {
         super.onResume()
+        loadRequirements()
         loadAssignments()
     }
 
@@ -82,60 +91,199 @@ class AssignmentActivity : AppCompatActivity() {
         circleAnimators.clear()
         circleViews.forEach { binding.circleContainer.removeView(it) }
         circleViews.clear()
-        currentAssignmentListener?.remove()
+        assignmentsListener?.remove()
+    }
+
+    private fun setupRecyclerView() {
+        val adapter = AssignmentAdapter(
+            onTripActionClick = { assignment -> onAssignmentAction(assignment) },
+            onGuardPillTap = { assignment -> openGuardVerification(assignment) },
+            onObdTap = { assignment -> openObdBottomSheet(assignment) },
+            onVerificationAction = { assignment, guardVerified ->
+                if (guardVerified) showGuardVerificationSheet(assignment)
+                else openGuardVerification(assignment)
+            }
+        )
+
+        binding.rvAssignments.apply {
+            layoutManager = LinearLayoutManager(this@AssignmentActivity)
+            this.adapter = adapter
+            overScrollMode = androidx.recyclerview.widget.RecyclerView.OVER_SCROLL_ALWAYS
+            itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+                addDuration = 200
+                removeDuration = 200
+                moveDuration = 200
+                changeDuration = 200
+            }
+        }
     }
 
     private fun setupUI() {
-        // Back button
         binding.btnBack.setOnClickListener { finish() }
+    }
 
-        // Bottom START TRIP / END TRIP button
-        binding.btnStartTrip.setOnClickListener {
-            val assignment = currentAssignment ?: return@setOnClickListener
-            onButtonClicked(assignment)
+    /**
+     * Handles the action button on an assignment card.
+     * Delegates to same AlertDialog / performStartTrip flow from the old screen.
+     */
+    private fun onAssignmentAction(assignment: Assignment) {
+        when {
+            assignment.isLocked(sessionManager.getActiveSapDocId()) -> {
+                Toast.makeText(this, "Another trip is in progress", Toast.LENGTH_SHORT).show()
+            }
+            assignment.isInTransit -> {
+                launchTransitActivity(assignment.docId)
+            }
+            assignment.isCompleted -> {
+                Toast.makeText(this, "This trip has already been completed", Toast.LENGTH_SHORT).show()
+            }
+            assignment.canConfirmTrip -> {
+                // Guard verified, driver NOT yet confirmed — show confirm dialog
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.confirm_shipment_title)
+                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
+                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+            assignment.guardVerified && assignment.canStartTrip -> {
+                // Guard verified AND driver confirmed — direct to TransitActivity
+                launchTransitActivity(assignment.docId)
+            }
+            else -> {
+                openGuardVerification(assignment)
+            }
+        }
+    }
+
+    private fun openGuardVerification(assignment: Assignment) {
+        lifecycleScope.launch {
+            val repo = SecurityGuardRepository(this@AssignmentActivity)
+            val guards = repo.refreshGuards().ifEmpty { repo.getCachedGuards() }
+            if (guards.isEmpty()) {
+                Toast.makeText(this@AssignmentActivity, "No guards available", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            // Step 1: Guard selection
+            GuardSelectionBottomSheet.newInstance(guards) { guard ->
+                // Step 2: Open signature pad
+                SignaturePadBottomSheet().apply {
+                    onSignatureConfirmed = { signatureBase64 ->
+                        submitGuardVerification(assignment, guard, signatureBase64)
+                    }
+                }.show(supportFragmentManager, SignaturePadBottomSheet.TAG)
+            }.show(supportFragmentManager, GuardSelectionBottomSheet.TAG)
+        }
+    }
+
+    private fun submitGuardVerification(
+        assignment: Assignment,
+        guard: SecurityGuard,
+        signatureBase64: String
+    ) {
+        // Step 3: Show verification result sheet with Submit button
+        val verifiedAt = System.currentTimeMillis()
+        GuardVerificationBottomSheet.newInstance(
+            firstName = guard.firstName,
+            lastName = guard.lastName,
+            mi = guard.middleInitial,
+            signature = signatureBase64,
+            verifiedAt = verifiedAt
+        ).apply {
+            onSubmitConfirmed = {
+                saveGuardVerificationToFirestore(assignment, guard, signatureBase64, verifiedAt)
+            }
+        }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
+    }
+
+    private fun saveGuardVerificationToFirestore(
+        assignment: Assignment,
+        guard: SecurityGuard,
+        signatureBase64: String,
+        verifiedAtMillis: Long
+    ) {
+        lifecycleScope.launch {
+            try {
+                val updates = mapOf(
+                    "guardVerified" to true,
+                    "guardFirstName" to guard.firstName,
+                    "guardLastName" to guard.lastName,
+                    "guardMI" to guard.middleInitial,
+                    "guardSignatureBase64" to signatureBase64,
+                    "guardVerifiedAt" to Timestamp.now()
+                )
+                db.collection("sap_assignments").document(assignment.docId)
+                    .update(updates)
+                    .addOnSuccessListener {
+                        Log.d(TAG, "Guard verification saved for ${assignment.docId}")
+                        Toast.makeText(
+                            this@AssignmentActivity,
+                            "Guard verification complete!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "Guard verification save failed: ${e.message}")
+                        Toast.makeText(
+                            this@AssignmentActivity,
+                            "Verification failed. Try again.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "saveGuardVerificationToFirestore error: ${e.message}")
+            }
         }
     }
 
     /**
-     * Handles the single fixed button at the bottom of the screen.
-     *
-     * IN TRANSIT → END TRIP tapped → delegate to TransitActivity
-     * VERIFIED + not yet started → START TRIP tapped → confirm dialog → performStartTrip
-     * COMPLETED → button is disabled, no-op
+     * Re-opens GuardVerificationBottomSheet for an already-verified assignment.
+     * Shows guard name + signature + timestamp from existing Firestore data.
      */
-    private fun onButtonClicked(assignment: Assignment) {
-        when {
-            assignment.isInTransit && assignment.isActive(sessionManager.getActiveSapDocId()) -> {
-                // END TRIP — delegate to TransitActivity
-                launchTransitActivity(assignment.docId)
-                return
-            }
-            assignment.guardVerified && assignment.canStartTrip -> {
-                // START TRIP — confirm then perform
-                AlertDialog.Builder(this)
-                    .setTitle("Start Trip")
-                    .setMessage("Start trip for shipment ${assignment.shipmentNumber}?")
-                    .setPositiveButton("Start Trip") { _, _ -> performStartTrip(assignment) }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-                return
-            }
-            else -> {
-                // Not ready — button is already hidden/disabled by updateButtonState
-                return
+    private fun showGuardVerificationSheet(assignment: Assignment) {
+        lifecycleScope.launch {
+            try {
+                val docSnap = db.collection("sap_assignments")
+                    .document(assignment.docId)
+                    .get()
+                    .await()
+
+                if (!docSnap.exists()) {
+                    Toast.makeText(this@AssignmentActivity, "Verification data not found", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                val firstName = docSnap.getString("guardFirstName") ?: ""
+                val lastName  = docSnap.getString("guardLastName") ?: ""
+                val mi        = docSnap.getString("guardMI") ?: ""
+                val sigBase64 = docSnap.getString("guardSignatureBase64") ?: ""
+
+                val ts = docSnap.getTimestamp("guardVerifiedAt")
+                val verifiedAt = ts?.toDate()?.time ?: 0L
+
+                GuardVerificationBottomSheet.newInstance(
+                    firstName = firstName,
+                    lastName  = lastName,
+                    mi        = mi,
+                    signature = sigBase64,
+                    verifiedAt = verifiedAt
+                ).apply {
+                    onSubmitConfirmed = { }  // read-only after submission
+                }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
+            } catch (e: Exception) {
+                Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
+                Toast.makeText(this@AssignmentActivity, "Failed to load verification details", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun performStartTrip(assignment: Assignment) {
         val docId = assignment.docId
-
-        // 1. Lock this shipment as the active one via SessionManager
         sessionManager.saveActiveSapDocId(docId)
         sessionManager.saveCurrentSapDocId(docId)
         sessionManager.setTripActive(true)
 
-        // 2. Update Firestore: mark trip as in_transit
         lifecycleScope.launch {
             try {
                 val updates = mapOf(
@@ -166,321 +314,297 @@ class AssignmentActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sets driverConfirmed = true for this shipment.
+     * Does NOT start the trip or launch TransitActivity — that happens
+     * when MainActivity CTA is tapped after ALL shipments are confirmed.
+     */
+    private fun confirmShipment(assignment: Assignment) {
+        lifecycleScope.launch {
+            try {
+                val updates = mapOf("driverConfirmed" to true)
+                db.collection("sap_assignments").document(assignment.docId)
+                    .update(updates)
+                    .addOnSuccessListener {
+                        Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
+                        Toast.makeText(
+                            this@AssignmentActivity,
+                            R.string.confirm_shipment_toast,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e(TAG, "confirmShipment failed: ${e.message}")
+                        Toast.makeText(
+                            this@AssignmentActivity,
+                            "Failed to confirm. Try again.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "confirmShipment error: ${e.message}")
+            }
+        }
+    }
+
     private fun launchTransitActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
         val intent = Intent(this, TransitActivity::class.java)
         startActivity(intent)
-        // Don't finish() — onResume will refresh the screen with updated trip status
     }
 
     /**
-     * Loads the assignment for the current screen.
-     *
-     * Priority 1 — specific shipment_doc_id extra (passed from tab click):
-     *   Query sap_assignments/{docId} directly => shows the exact shipment for that tab.
-     *
-     * Priority 2 — no extra (navigated via map icon, cardMyQueue, etc.):
-     *   Load via queue + sap_assignment join (existing behavior, shows first/any shipment).
-     *
-     * Firestore listener is kept so onResume picks up updated tripStatus.
+     * Loads ALL sap_assignments documents for this driver.
+     * TWO-APPROACH pattern:
+     *   1. Try queue doc ID (stored when driver joined queue) — catches docs that store queue doc ID as driverId
+     *   2. Fallback to Firebase UID — catches docs that store Firebase UID as driverId
+     * Uses addSnapshotListener so badge and card states update live.
      */
     private fun loadAssignments() {
-        currentAssignmentListener?.remove()
+        assignmentsListener?.remove()
         val sessionDriverId = sessionManager.getDriverId() ?: return
 
-        // Priority 1: specific shipment requested (from a dashboard tab)
-        val explicitShipmentDocId = intent.getStringExtra("shipment_doc_id")
-        if (!explicitShipmentDocId.isNullOrBlank()) {
-            Log.d(TAG, "Loading specific shipment: $explicitShipmentDocId")
-            loadSpecificShipment(explicitShipmentDocId)
+        // ── APPROACH 1: Primary — try queue doc ID first ──
+        val queueDocId = sessionManager.getCurrentQueueDocId()
+        if (!queueDocId.isNullOrBlank()) {
+            assignmentsListener = db.collection("sap_assignments")
+                .whereEqualTo("driverId", queueDocId)
+                .addSnapshotListener { snaps, err ->
+                    if (err != null || snaps == null) {
+                        Log.e(TAG, "loadAssignments (queue approach) error: ${err?.message}")
+                        // Fall through to approach 2
+                        loadAssignmentsFallback(sessionDriverId)
+                        return@addSnapshotListener
+                    }
+                    if (isFinishing) return@addSnapshotListener
+
+                    val list = snaps.documents.mapNotNull { snap -> buildAssignment(snap) }
+                    assignments = list
+                    submitToAdapter(list)
+                    updateAggregateBadge(list)
+                }
+        } else {
+            // No queue doc ID stored — skip to Firebase UID directly
+            loadAssignmentsFallback(sessionDriverId)
+        }
+    }
+
+    /**
+     * APPROACH 2: Fallback — query by Firebase UID.
+     * Called when approach 1 returned no results.
+     */
+    private fun loadAssignmentsFallback(sessionDriverId: String) {
+        assignmentsListener = db.collection("sap_assignments")
+            .whereEqualTo("driverId", sessionDriverId)
+            .addSnapshotListener { snaps, err ->
+                if (err != null || snaps == null) {
+                    Log.e(TAG, "loadAssignments (uid fallback) error: ${err?.message}")
+                    return@addSnapshotListener
+                }
+                if (isFinishing) return@addSnapshotListener
+
+                val list = snaps.documents.mapNotNull { snap ->
+                    buildAssignment(snap)
+                }
+                assignments = list
+                submitToAdapter(list)
+                updateAggregateBadge(list)
+            }
+    }
+
+    /**
+     * Loads driver-level requirements once per resume.
+     * Stored as a Map field DIRECTLY inside drivers/{driverId} (NOT a subcollection).
+     * Stamped into every assignment built while this Activity lives.
+     */
+    private fun loadRequirements() {
+        val driverId = sessionManager.getDriverId() ?: return
+        db.collection("drivers").document(driverId).get()
+            .addOnSuccessListener { snap ->
+                if (isFinishing || !snap.exists()) return@addOnSuccessListener
+
+                @Suppress("UNCHECKED_CAST")
+                val rawMap = snap.get("requirements")
+                val rawRequirements: Map<String, Boolean> = (rawMap as? Map<String, Boolean>) ?: emptyMap()
+
+                val loaded = mutableMapOf<String, Boolean>()
+
+                // Map each Firestore schema key to the adapter's expected key names
+                // Note: db field is "reflectorizedVest" — maps to adapter key "reflectorizedVest"
+                loaded["aircon"]           = rawRequirements["aircon"]           ?: false
+                loaded["closedShoes"]      = rawRequirements["closedShoes"]      ?: false
+                loaded["headcap"]         = rawRequirements["headcap"]          ?: false
+                loaded["pants"]           = rawRequirements["pants"]            ?: false
+                loaded["safetyShoes"]     = rawRequirements["safetyShoes"]      ?: false
+                loaded["reflectorizedVest"] = rawRequirements["reflectorizedVest"] ?: false
+
+                requirementsSnapshot = loaded
+                // Re-submit current assignments with requirements now populated
+                if (assignments.isNotEmpty()) {
+                    val updated = assignments.map { it.copy(requirements = loaded) }
+                    assignments = updated
+                    submitToAdapter(updated)
+                }
+            }
+    }
+
+    /**
+     * Opens ObdItemsBottomSheet for the tapped assignment's line items.
+     */
+    private fun openObdBottomSheet(assignment: Assignment) {
+        if (assignment.lineItems.isEmpty()) {
+            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Priority 2: generic load — shows whatever shipment exists (map icon, cardMyQueue, etc.)
-        currentAssignmentListener = db.collection("queue")
-            .whereEqualTo("driverId", sessionDriverId)
-            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
-            .addSnapshotListener { queueSnaps, queueError ->
-                if (queueError != null || queueSnaps == null || queueSnaps.isEmpty) {
-                    loadViaSapFallback(sessionDriverId)
-                    return@addSnapshotListener
-                }
-
-                val queueDoc = queueSnaps.documents[0]
-                val queueData = queueDoc.data ?: return@addSnapshotListener
-                val queueId = queueDoc.id
-                val driverId = queueData["driverId"] as? String ?: sessionDriverId
-                val truckType = queueData["truckType"] as? String ?: ""
-                val helper = queueData["helperName"] as? String ?: queueData["helper"] as? String ?: ""
-                val plateNumber = queueData["plateNumber"] as? String ?: ""
-                val status = queueData["status"] as? String ?: ""
-
-                db.collection("sap_assignments")
-                    .whereEqualTo("driverId", queueId)
-                    .get()
-                    .addOnSuccessListener { sapSnaps ->
-                        if (!sapSnaps.isEmpty) {
-                            val assignment = buildAssignment(sapSnaps.documents[0], null,
-                                queueId, driverId, status, truckType, helper, plateNumber)
-                            displayAssignment(assignment)
-                        } else {
-                            displayAssignment(Assignment(
-                                docId = "", queueId = queueId, driverId = driverId,
-                                status = status, tripStatus = null,
-                                plateNumber = plateNumber, truckType = truckType,
-                                helper = helper, guardVerified = false
-                            ))
-                        }
-                    }
-                    .addOnFailureListener {
-                        displayAssignment(Assignment(
-                            docId = "", queueId = queueId, driverId = driverId,
-                            status = status, tripStatus = null,
-                            plateNumber = plateNumber, truckType = truckType,
-                            helper = helper, guardVerified = false
-                        ))
-                    }
-            }
-    }
-
-    /**
-     * Loads a specific shipment by its sap_assignments document ID.
-     * Used when the driver taps a specific tab from the dashboard.
-     */
-    private fun loadSpecificShipment(docId: String) {
-        db.collection("sap_assignments").document(docId)
-            .get()
-            .addOnSuccessListener { snap ->
-                if (snap != null && snap.exists()) {
-                    displayAssignment(buildAssignment(snap, null))
-                } else {
-                    // Doc doesn't exist (possible if it was deleted)
-                    Log.w(TAG, "Shipment doc not found: $docId")
-                    Toast.makeText(this, "Shipment not found", Toast.LENGTH_SHORT).show()
-                    finish()
-                }
-            }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "Failed to load shipment $docId: ${e.message}")
-                Toast.makeText(this, "Failed to load shipment", Toast.LENGTH_SHORT).show()
-                finish()
-            }
-    }
-
-    private fun loadViaSapFallback(sessionDriverId: String) {
-        lifecycleScope.launch {
-            try {
-                val sapSnaps = db.collection("sap_assignments")
-                    .whereEqualTo("driverId", sessionDriverId)
-                    .get()
-                    .await()
-                if (sapSnaps.isEmpty) {
-                    // Show a blank placeholder — no shipments at all
-                    displayAssignment(Assignment(
-                        docId = "",
-                        queueId = "",
-                        driverId = sessionDriverId,
-                        status = "",
-                        tripStatus = null,
-                        plateNumber = "",
-                        truckType = "",
-                        helper = "",
-                        guardVerified = false
-                    ))
-                    return@launch
-                }
-                val assignment = buildAssignment(sapSnaps.documents[0], null)
-                displayAssignment(assignment)
-            } catch (e: Exception) {
-                Log.e(TAG, "sap fallback error: ${e.message}")
-            }
+        if (assignment.isInTransit) {
+            // In-transit shipment → each row navigates to MyTripActivity
+            ObdItemsBottomSheet.newInstance(assignment.lineItems) { item ->
+                val intent = Intent(this, MyTripActivity::class.java)
+                intent.putExtra("shipment_doc_id", assignment.docId)
+                startActivity(intent)
+            }.show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
+        } else {
+            // Pre-transit → read-only view of all OBD items
+            ObdItemsBottomSheet.newInstance(assignment.lineItems, null)
+                .show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
         }
     }
 
     private fun buildAssignment(
-        sapDoc: com.google.firebase.firestore.DocumentSnapshot,
-        queueDoc: com.google.firebase.firestore.DocumentSnapshot?,
-        queueIdOverride: String? = null,
-        driverIdOverride: String? = null,
-        queueStatusOverride: String? = null,
-        truckTypeOverride: String? = null,
-        helperOverride: String? = null,
-        plateNumberOverride: String? = null
+        snap: com.google.firebase.firestore.DocumentSnapshot
     ): Assignment {
-        val queueData = queueDoc?.data
-        val queueId = queueIdOverride ?: queueData?.get("driverId") as? String ?: ""
-        val driverId = driverIdOverride ?: sessionManager.getDriverId() ?: ""
-        val truckType = truckTypeOverride ?: queueData?.get("truckType") as? String
-            ?: sapDoc.getString("truckCompany") ?: ""
-        val helper = helperOverride ?: queueData?.get("helperName") as? String
-            ?: queueData?.get("helper") as? String ?: ""
-        val plateNumber = plateNumberOverride ?: queueData?.get("plateNumber") as? String
-            ?: sapDoc.getString("truckPlate") ?: ""
+        val queueId = snap.getString("driverId") ?: "" // queue doc ID (not Firebase UID)
 
-        val tripStatus = sapDoc.getString("tripStatus")
-        val guardVerified = sapDoc.getBoolean("guardVerified") ?: false
-        val delTs = sapDoc.getTimestamp("actualDelDate")
+        val tripStatus = snap.getString("tripStatus")
+        val guardVerified = snap.getBoolean("guardVerified") ?: false
+        val driverConfirmed = snap.getBoolean("driverConfirmed") ?: false
+        val guardFirstName = snap.getString("guardFirstName") ?: ""
+        val guardLastName = snap.getString("guardLastName") ?: ""
+        val guardSignature = snap.getString("guardSignature") ?: ""
+
+        // Extract shipmentNumber from ROOT document field (SAP field), not from lineItems
+        val shipmentNumberRaw = snap.getString("shipmentNumber") ?: ""
+
+        // lineItems[0].actualDelDate — OData format "/Date(millis)/"
+        val lineItems = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
+        val firstItem = lineItems.filterIsInstance<Map<String, Any?>>().firstOrNull()
+        val delTsRaw = firstItem?.get("actualDelDate") as? String
+        val deliveryTs = try {
+            delTsRaw?.removePrefix("/Date(")?.removeSuffix(")/")?.toLong() ?: 0L
+        } catch (e: Exception) { 0L }
+
+        val obdCount = lineItems.filterIsInstance<Map<String, Any?>>().size
+        val obdNumber = firstItem?.get("obdNumber") as? String ?: ""
 
         return Assignment(
-            docId = sapDoc.id,
+            docId = snap.id,
             queueId = queueId,
-            driverId = driverId,
-            status = queueStatusOverride ?: queueData?.get("status") as? String ?: "",
+            driverId = sessionManager.getDriverId() ?: "",
+            status = snap.getString("status") ?: "",
             tripStatus = tripStatus,
-            plateNumber = plateNumber,
-            truckType = truckType,
-            helper = helper,
+            plateNumber = snap.getString("truckPlate") ?: "",
+            truckType = snap.getString("truckCompany") ?: "",
+            helper = snap.getString("helperName") ?: "",
             guardVerified = guardVerified,
-            deliveryTimestamp = delTs?.toDate()?.time ?: 0L
+            driverConfirmed = driverConfirmed,
+            guardFirstName = guardFirstName,
+            guardLastName = guardLastName,
+            guardSignature = guardSignature,
+            deliveryTimestamp = deliveryTs,
+            obdCount = obdCount,
+            requirements = requirementsSnapshot,
+            lineItems = lineItems.filterIsInstance<Map<String, Any?>>() as List<Map<String, Any>>,
+            obdNumber = obdNumber,
+            shipmentNumberRaw = shipmentNumberRaw
         )
     }
 
-    /**
-     * Populates all binding fields from a single Assignment object.
-     * Called whenever a new assignment is loaded from Firestore.
-     */
-    private fun displayAssignment(assignment: Assignment) {
-        if (isFinishing) return
-        currentAssignment = assignment
+    private fun submitToAdapter(list: List<Assignment>) {
+        val sessionActiveDocId = sessionManager.getActiveSapDocId()
 
-        // ── Details fields ──
-        // Shipment Number: truncated docId for display
-        binding.tvShipmentNumber.text = if (assignment.docId.isNotEmpty()) {
-            assignment.docId.take(8).uppercase()
+        val adapter = (binding.rvAssignments.adapter as? AssignmentAdapter)
+            ?: AssignmentAdapter(
+                onTripActionClick = { assignment -> onAssignmentAction(assignment) },
+                onGuardPillTap = { assignment -> openGuardVerification(assignment) },
+                onObdTap = { assignment -> openObdBottomSheet(assignment) },
+                onVerificationAction = { assignment, guardVerified ->
+                    if (guardVerified) showGuardVerificationSheet(assignment)
+                    else openGuardVerification(assignment)
+                }
+            ).also { binding.rvAssignments.adapter = it }
+
+        // Always refresh sessionActiveDocId so bind() has the current value
+        adapter.sessionActiveDocId = sessionActiveDocId
+        adapter.submitList(list.toList())
+
+        if (list.isEmpty()) {
+            binding.rvAssignments.visibility = View.GONE
+            binding.emptyState.visibility = View.VISIBLE
         } else {
-            "—"
+            binding.rvAssignments.visibility = View.VISIBLE
+            binding.emptyState.visibility = View.GONE
         }
 
-        binding.tvPlateNo.text = assignment.plateNumber.ifEmpty { "—" }
-        binding.tvTruckType.text = assignment.truckType.ifEmpty { "—" }
-        binding.tvHelper.text = assignment.helper.ifEmpty { "—" }
+        // Second pass: load queue doc for truckType / helper / plateNumber
+        list.forEachIndexed { idx, assignment ->
+            if (assignment.queueId.isBlank()) return@forEachIndexed
+            db.collection("queue").document(assignment.queueId).get()
+                .addOnSuccessListener { queueDoc ->
+                    if (!queueDoc.exists()) return@addOnSuccessListener
+                    val plateNumber = queueDoc.getString("plateNumber") ?: assignment.plateNumber
+                    val truckType = queueDoc.getString("truckType") ?: assignment.truckType
+                    val helper = queueDoc.getString("helper") ?: assignment.helper
 
-        // ── Progress strip + button state ──
-        updateTripState(assignment)
+                    val updated = assignment.copy(
+                        plateNumber = plateNumber,
+                        truckType = truckType,
+                        helper = helper
+                    )
+                    val mutableList = assignments.toMutableList()
+                    if (idx < mutableList.size) {
+                        mutableList[idx] = updated
+                        assignments = mutableList
+                        adapter.sessionActiveDocId = sessionManager.getActiveSapDocId()
+                        adapter.submitList(assignments.toList())
+                    }
+                }
+        }
     }
 
     /**
-     * Updates the progress strip, subtitle, and bottom button
-     * based on the current trip status of the assignment.
-     *
-     * tripStatus states:
-     *   null / assigned / awaiting_verification → VERIFIED (step 1 active, button = START TRIP)
-     *   "in_transit" + this doc is active       → TRANSIT (step 2 active, button = END TRIP)
-     *   "completed"                             → DONE (step 3 done, button = disabled)
+     * Updates both header badge views:
+     * - Top bar pill (aggregateBadgeContainer / tvAggregateBadge)
+     * - Red banner pill (badgeDot / tvBadgeText)
      */
-    private fun updateTripState(assignment: Assignment) {
-        val isThisActive = assignment.isActive(sessionManager.getActiveSapDocId())
-        val tripStatus = assignment.tripStatus
-        val isInTransit = tripStatus == "in_transit"
-        val isCompleted = tripStatus == "completed"
-        val isNotYetStarted = !isInTransit && !isCompleted
+    private fun updateAggregateBadge(list: List<Assignment>) {
+        if (list.isEmpty()) {
+            binding.aggregateBadgeContainer.visibility = View.GONE
+            binding.badgeVerified.visibility = View.GONE
+            return
+        }
+        binding.aggregateBadgeContainer.visibility = View.VISIBLE
+        binding.badgeVerified.visibility = View.VISIBLE
 
-        // ── Progress dots ──
-        // Step 1: VERIFIED
-        if (isNotYetStarted) {
-            // Verified, waiting to start
-            binding.dotQueue.setBackgroundResource(R.drawable.bg_progress_step_active)
-            binding.numQueue.visibility = View.VISIBLE
-            binding.numQueue.text = "1"
-            binding.checkQueue.visibility = View.GONE
-            binding.lineQueueToLoading.setBackgroundColor(ContextCompat.getColor(this, R.color.divider))
+        val pendingCount = list.count { !it.guardVerified }
+        if (pendingCount == 0) {
+            binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvAggregateBadge.text = getString(R.string.assignment_badge_all_verified)
+            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_green)
+            binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.tvBadgeText.text = getString(R.string.assignment_badge_all_verified)
         } else {
-            // Already started or completed
-            binding.dotQueue.setBackgroundResource(R.drawable.bg_progress_step_done)
-            binding.numQueue.visibility = View.GONE
-            binding.checkQueue.visibility = View.VISIBLE
-            binding.lineQueueToLoading.setBackgroundColor(ContextCompat.getColor(this, R.color.transit_green))
-        }
-
-        // Step 2: TRANSIT
-        if (isInTransit || isCompleted) {
-            binding.dotLoading.setBackgroundResource(R.drawable.bg_progress_step_done)
-            binding.checkLoading.visibility = View.VISIBLE
-            binding.numLoading.visibility = View.GONE
-            if (!isCompleted) {
-                binding.lineLoadingToTransit.setBackgroundColor(ContextCompat.getColor(this, R.color.transit_green))
-            }
-        } else {
-            binding.dotLoading.setBackgroundResource(R.drawable.bg_progress_step_pending)
-            binding.checkLoading.visibility = View.GONE
-            binding.numLoading.visibility = View.VISIBLE
-            binding.numLoading.text = "2"
-            binding.numLoading.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
-        }
-
-        // Step 3: DONE
-        if (isCompleted) {
-            binding.dotTransit.setBackgroundResource(R.drawable.bg_progress_step_done)
-            binding.checkTransit.visibility = View.VISIBLE
-            binding.numTransit.visibility = View.GONE
-        } else {
-            binding.dotTransit.setBackgroundResource(R.drawable.bg_progress_step_pending)
-            binding.checkTransit.visibility = View.GONE
-            binding.numTransit.visibility = View.VISIBLE
-            binding.numTransit.text = "3"
-            binding.numTransit.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
-        }
-
-        // ── Status label ──
-        binding.tvSubStatus.text = when {
-            isCompleted -> "Trip completed"
-            isInTransit && isThisActive -> "Trip in progress — GPS tracking live"
-            assignment.guardVerified -> "Ready to start"
-            else -> "Waiting for guard verification"
-        }
-
-        // Header subtitle + tracking dot
-        binding.tvHeaderSubtitle.text = when {
-            isCompleted -> "Completed"
-            isInTransit && isThisActive -> "In transit"
-            assignment.guardVerified -> "Verified"
-            else -> "Pending"
-        }
-
-        // Tracking dot color in header
-        val (dotDrawable, dotColor) = when {
-            isCompleted -> R.drawable.bg_status_dot_green to R.color.transit_green
-            isInTransit && isThisActive -> R.drawable.bg_status_dot_green to R.color.transit_green
-            assignment.guardVerified -> R.drawable.bg_status_dot_green to R.color.transit_green
-            else -> R.drawable.bg_status_dot to R.color.text_muted
-        }
-        binding.trackingStateDot.setBackgroundResource(dotDrawable)
-        binding.trackingStateDot.backgroundTintList = ContextCompat.getColorStateList(this, dotColor)
-
-        // ── Bottom button ──
-        updateButtonState(assignment, isThisActive, isInTransit, isCompleted)
-    }
-
-    private fun updateButtonState(assignment: Assignment, isThisActive: Boolean, isInTransit: Boolean, isCompleted: Boolean) {
-        when {
-            isCompleted -> {
-                binding.btnStartTrip.text = "TRIP COMPLETED"
-                binding.btnStartTrip.isEnabled = false
-                binding.btnStartTrip.alpha = 0.5f
-                binding.btnStartTrip.backgroundTintList = ContextCompat.getColorStateList(this, R.color.text_muted)
-            }
-            isInTransit && isThisActive -> {
-                binding.btnStartTrip.text = "END TRIP"
-                binding.btnStartTrip.isEnabled = true
-                binding.btnStartTrip.alpha = 1f
-                binding.btnStartTrip.backgroundTintList = ContextCompat.getColorStateList(this, R.color.transit_green)
-            }
-            assignment.guardVerified -> {
-                binding.btnStartTrip.text = "START TRIP"
-                binding.btnStartTrip.isEnabled = true
-                binding.btnStartTrip.alpha = 1f
-                binding.btnStartTrip.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
-            }
-            else -> {
-                binding.btnStartTrip.text = "VERIFICATION PENDING"
-                binding.btnStartTrip.isEnabled = false
-                binding.btnStartTrip.alpha = 0.5f
-                binding.btnStartTrip.backgroundTintList = ContextCompat.getColorStateList(this, R.color.text_muted)
-            }
+            binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_queued)
+            binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_gold)
+            binding.tvAggregateBadge.text = getString(R.string.assignment_badge_pending)
+            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_queued)
+            binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_gold)
+            binding.tvBadgeText.text = getString(R.string.assignment_badge_pending)
         }
     }
 
-    // ─── Bouncing Circles (same pattern as QueueDetailsActivity / TransitActivity) ───
+    // ═══ Bouncing Circles + Pulse Rings ═══
 
     private fun startCircleAnimation() {
         binding.circleContainer.post {
@@ -489,8 +613,7 @@ class AssignmentActivity : AppCompatActivity() {
             if (containerW == 0 || containerH == 0) return@post
 
             val random = java.util.Random()
-            // 140dp height ÷ ~2 circles per row means ~3-6 small circles
-            val count = random.nextInt(4) + 3
+            val count = random.nextInt(4) + 3 // 3–6 circles
 
             for (i in 0 until count) {
                 val sizeDp = 28 + random.nextInt(61)
@@ -508,9 +631,44 @@ class AssignmentActivity : AppCompatActivity() {
                 }
                 binding.circleContainer.addView(circle)
                 circleViews.add(circle)
-                startBounceAnimation(circle, sizePx, containerW, containerH, minSpeed, maxSpeed, startX, startY, (i * 150L) + random.nextInt(500))
+                startBounceAnimation(circle, sizePx, containerW, containerH, minSpeed, maxSpeed,
+                    startX, startY, (i * 150L) + random.nextInt(500))
             }
         }
+    }
+
+    private fun startPulseRings() {
+        startPulseRing(binding.pulseRing1)
+        startPulseRing(binding.pulseRing2, delayMs = 1200L)
+    }
+
+    private fun startPulseRing(ring: View, delayMs: Long = 0L) {
+        ring.visibility = View.VISIBLE
+        ring.alpha = 0f
+
+        val scaleUp = android.animation.ObjectAnimator.ofFloat(ring, "scaleX", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val scaleUpY = android.animation.ObjectAnimator.ofFloat(ring, "scaleY", 0.3f, 1.5f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+        val fadeOut = android.animation.ObjectAnimator.ofFloat(ring, "alpha", 0.6f, 0f).apply {
+            duration = 2000L
+            repeatMode = android.animation.ObjectAnimator.RESTART
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            startDelay = delayMs
+        }
+
+        circleAnimators.addAll(listOf(scaleUp, scaleUpY, fadeOut))
+        scaleUp.start()
+        scaleUpY.start()
+        fadeOut.start()
     }
 
     private fun startBounceAnimation(

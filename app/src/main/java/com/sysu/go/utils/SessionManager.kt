@@ -24,6 +24,10 @@ class SessionManager(context: Context) {
         private const val KEY_TRACKING_ACTIVE = "tracking_active"
         /** Tracks the sap_assignments docId that is currently in_transit — used to lock Start buttons on other shipments */
         private const val KEY_ACTIVE_SAP_DOC_ID = "active_sap_doc_id"
+        /** Tracks the Firestore queue document ID of the current queue entry.
+         *  Used by AssignmentActivity as the first approach when querying sap_assignments
+         *  (many docs use queue doc ID as driverId, not Firebase UID). */
+        private const val KEY_CURRENT_QUEUE_DOC_ID = "current_queue_doc_id"
     }
 
     private val prefs: SharedPreferences =
@@ -194,4 +198,22 @@ class SessionManager(context: Context) {
      * or null if no trip is active.
      */
     fun getActiveSapDocId(): String? = prefs.getString(KEY_ACTIVE_SAP_DOC_ID, null)
+
+    /**
+     * Saves the Firestore document ID of the driver's current queue entry.
+     * Used by AssignmentActivity as the first lookup when loading assignments,
+     * since many sap_assignments docs store queue doc ID (not Firebase UID) as driverId.
+     */
+    fun saveCurrentQueueDocId(queueDocId: String?) {
+        prefs.edit {
+            if (queueDocId != null) putString(KEY_CURRENT_QUEUE_DOC_ID, queueDocId)
+            else remove(KEY_CURRENT_QUEUE_DOC_ID)
+        }
+    }
+
+    /**
+     * Returns the Firestore document ID of the driver's current queue entry,
+     * or null if not in queue.
+     */
+    fun getCurrentQueueDocId(): String? = prefs.getString(KEY_CURRENT_QUEUE_DOC_ID, null)
 }

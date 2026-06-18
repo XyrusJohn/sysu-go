@@ -73,4 +73,20 @@
         android:textColor="@color/text_secondary"
         android:fontFamily="@font/atkinson_hyperlegible_regular" />
 
+    <!-- SUBMIT confirmation button — 2nd tap commits the verification to Firestore -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnGuardVerificationSubmit"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/btn_height"
+        android:layout_marginTop="24dp"
+        android:text="SUBMIT VERIFICATION"
+        android:textAllCaps="false"
+        android:textColor="@color/white"
+        android:textSize="@dimen/text_size_button"
+        android:fontFamily="@font/atkinson_hyperlegible_bold"
+        app:elevation="4dp"
+        app:strokeWidth="0dp"
+        app:backgroundTint="@color/sysu_red"
+        app:cornerRadius="@dimen/corner_radius_button" />
+
 </LinearLayout>
