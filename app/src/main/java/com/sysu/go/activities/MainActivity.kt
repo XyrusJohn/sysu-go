@@ -595,10 +595,15 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnScanQR.setOnClickListener {
             when {
-                // CONFIRMED: All shipments verified and confirmed — Map Icon tapped → show start trip dialog
+                // ALL CONFIRMED: show My Trip tab — START TRIP dialog only triggers per-card
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
-                    showStartTripDialog()
+                    // Pretend Profile icon was tapped — show My Trip tab
+                    updateBottomNavSelectionForTab(isHomeTab = false)
+                    binding.cardScanCTA.visibility = View.GONE
+                    binding.tvScanHint.visibility = View.GONE
+                    binding.myTripTabContainer.visibility = View.VISIBLE
+                    fetchAndSetupMyTripCards()
                 }
                 // Shipment assigned → open AssignmentActivity (shows all assignments)
                 hasShipment -> {
@@ -1376,8 +1381,15 @@ class MainActivity : AppCompatActivity() {
                             Toast.makeText(this, "You already have an active trip.", Toast.LENGTH_SHORT).show()
                         }
                         else -> {
-                            // Trigger start trip for this shipment
-                            startSingleShipment(assignment.docId)
+                            // Show confirmation dialog for this specific shipment
+                            AlertDialog.Builder(this)
+                                .setTitle(R.string.confirm_start_trip_title)
+                                .setMessage(getString(R.string.confirm_start_trip_message))
+                                .setPositiveButton(R.string.btn_start_trip) { _, _ ->
+                                    startSingleShipment(assignment.docId)
+                                }
+                                .setNegativeButton(R.string.cancel, null)
+                                .show()
                         }
                     }
                 }
