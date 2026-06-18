@@ -10,6 +10,9 @@ import androidx.recyclerview.widget.RecyclerView
 import com.sysu.go.R
 import com.sysu.go.databinding.ItemMyTripTabCardBinding
 import com.sysu.go.model.Assignment
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MyTripTabAdapter(
     var hasActiveTrip: Boolean,
@@ -32,47 +35,148 @@ class MyTripTabAdapter(
         RecyclerView.ViewHolder(binding.root) {
 
         fun bind(assignment: Assignment) {
-            val context = binding.root.context
+            val ctx = binding.root.context
 
-            binding.tvPlateNumber.text = assignment.plateNumber.orEmpty()
-            binding.tvOrigin.text = assignment.shipmentNumber.ifBlank { assignment.docId }
-            binding.tvDestination.text = assignment.obdNumber.ifBlank { "-" }
-            binding.tvHelperName.text = "Helper: ${assignment.helper.orEmpty()}"
-            binding.tvObdCount.text = "${assignment.lineItems.size} OBDs"
+            // ─── Header fields (mirrors AssignmentAdapter exactly) ───────────────
+
+            binding.tvShipmentNumber.text = assignment.shipmentNumber
+
+            binding.tvPlateNo.text = assignment.plateNumber.ifEmpty { "—" }
+            binding.tvTruckType.text = assignment.truckType.ifEmpty { "—" }
+            binding.tvHelper.text = assignment.helper.ifEmpty { "—" }
+
+            // Delivery date
+            if (assignment.deliveryTimestamp > 0) {
+                val sdf = SimpleDateFormat("MMM dd, yyyy", Locale.US)
+                binding.tvDeliveryDate.text = sdf.format(Date(assignment.deliveryTimestamp))
+            } else {
+                binding.tvDeliveryDate.text = "—"
+            }
+
+            // OBD count
+            binding.tvObdCount.text = assignment.lineItems.size.toString()
+
+            // ─── Guard verified pill ───────────────────────────────────────────
+
+            binding.guardPillDot.background = ContextCompat.getDrawable(
+                ctx,
+                if (assignment.guardVerified) R.drawable.bg_status_dot_green
+                else R.drawable.bg_status_dot_gold
+            )
+            binding.guardPill.setBackgroundResource(
+                if (assignment.guardVerified) R.drawable.bg_status_pill_green
+                else R.drawable.bg_status_pill_amber
+            )
+            if (assignment.guardVerified) {
+                val guardName = buildString {
+                    if (assignment.guardFirstName.isNotEmpty()) {
+                        append(assignment.guardFirstName)
+                        if (assignment.guardLastName.isNotEmpty()) {
+                            append(" ${assignment.guardLastName.firstOrNull() ?: ""}.")
+                        }
+                    }
+                }
+                binding.tvGuardStatus.text = guardName.ifEmpty {
+                    ctx.getString(R.string.guard_status_verified)
+                }
+                binding.tvGuardStatus.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.white)
+                )
+            } else {
+                binding.tvGuardStatus.text = ctx.getString(R.string.guard_status_pending)
+                binding.tvGuardStatus.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.text_amber)
+                )
+            }
+
+            // ─── Driver confirmed pill (same logic as guard pill) ─────────────
+
+            binding.driverPillDot.background = ContextCompat.getDrawable(
+                ctx,
+                if (assignment.driverConfirmed) R.drawable.bg_status_dot_green
+                else R.drawable.bg_status_dot_gold
+            )
+            binding.driverPill.setBackgroundResource(
+                if (assignment.driverConfirmed) R.drawable.bg_status_pill_green
+                else R.drawable.bg_status_pill_amber
+            )
+            binding.tvDriverStatus.text = if (assignment.driverConfirmed) {
+                ctx.getString(R.string.guard_status_verified)
+            } else {
+                ctx.getString(R.string.guard_status_pending)
+            }
+            binding.tvDriverStatus.setTextColor(
+                ContextCompat.getColor(
+                    ctx,
+                    if (assignment.driverConfirmed) R.color.white else R.color.text_amber
+                )
+            )
+
+            // ─── Customer requirements table ────────────────────────────────
+
+            val reqMap = assignment.requirements
+            fun setReq(tv: android.widget.TextView, key: String) {
+                val checked = reqMap[key] ?: false
+                tv.text = if (checked) "✔" else "—"
+                tv.setTextColor(
+                    ContextCompat.getColor(
+                        ctx,
+                        if (checked) R.color.transit_green else R.color.text_muted
+                    )
+                )
+            }
+            setReq(binding.tvReqAircon, "aircon")
+            setReq(binding.tvReqVest, "reflectorizedVest")
+            setReq(binding.tvReqHeadcap, "headcap")
+            setReq(binding.tvReqSafetyShoes, "safetyShoes")
+            setReq(binding.tvReqPants, "pants")
+            setReq(binding.tvReqClosedShoes, "closedShoes")
+
+            // ─── Trip status badge + button state ──────────────────────────
 
             when (assignment.tripStatus) {
                 "in_transit" -> {
                     binding.tvTripStatusBadge.text = "IN TRANSIT"
                     binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_red)
-                    binding.tvTripStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.white))
+                    binding.tvTripStatusBadge.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
 
                     binding.btnTripAction.text = "VIEW OBD ITEMS"
                     binding.btnTripAction.isEnabled = true
                     binding.btnTripAction.alpha = 1.0f
-                    binding.cardOverlayLock.visibility = View.GONE
-                    binding.ivLockIcon.visibility = View.GONE
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+
+                    binding.btnShowVerification.visibility = View.GONE
                 }
                 "completed" -> {
                     binding.tvTripStatusBadge.text = "COMPLETED"
                     binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_green)
-                    binding.tvTripStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.white))
+                    binding.tvTripStatusBadge.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
 
                     binding.btnTripAction.text = "VIEW SUMMARY"
                     binding.btnTripAction.isEnabled = true
                     binding.btnTripAction.alpha = 1.0f
-                    binding.cardOverlayLock.visibility = View.GONE
-                    binding.ivLockIcon.visibility = View.GONE
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+
+                    binding.btnShowVerification.visibility = View.GONE
                 }
                 else -> {
-                    // pending / confirmed — show CONFIRMED badge if applicable
+                    // pending / confirmed
                     if (assignment.guardVerified && assignment.driverConfirmed) {
                         binding.tvTripStatusBadge.text = "CONFIRMED"
                         binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_amber)
-                        binding.tvTripStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.white))
+                        binding.tvTripStatusBadge.setTextColor(
+                            ContextCompat.getColor(ctx, R.color.white)
+                        )
                     } else {
                         binding.tvTripStatusBadge.text = assignment.tripStatus?.uppercase() ?: "PENDING"
                         binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_gray)
-                        binding.tvTripStatusBadge.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+                        binding.tvTripStatusBadge.setTextColor(
+                            ContextCompat.getColor(ctx, R.color.text_secondary)
+                        )
                     }
 
                     binding.btnTripAction.text = "START TRIP"
@@ -81,14 +185,30 @@ class MyTripTabAdapter(
                         // Lock: another trip is already running
                         binding.btnTripAction.isEnabled = false
                         binding.btnTripAction.alpha = 0.4f
-                        binding.cardOverlayLock.visibility = View.VISIBLE
-                        binding.ivLockIcon.visibility = View.VISIBLE
                     } else {
                         binding.btnTripAction.isEnabled = true
                         binding.btnTripAction.alpha = 1.0f
-                        binding.cardOverlayLock.visibility = View.GONE
-                        binding.ivLockIcon.visibility = View.GONE
                     }
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+
+                    // Show verification button if guard verified (to re-show saved verification)
+                    binding.btnShowVerification.visibility = if (assignment.guardVerified) {
+                        View.VISIBLE
+                    } else {
+                        View.GONE
+                    }
+                    binding.btnShowVerification.setOnClickListener {
+                        // For My Trip tab context: guard was already verified,
+                        // showing a dialog or bottom sheet of the guard signature.
+                        // Could open a GuardVerificationBottomSheet if available.
+                    }
+                }
+            }
+
+            // OBD row click → same as clicking btnTripAction
+            binding.rowObd.setOnClickListener {
+                if (assignment.tripStatus == "in_transit") {
+                    onTripActionClicked(assignment)
                 }
             }
 
@@ -97,6 +217,7 @@ class MyTripTabAdapter(
             }
 
             binding.root.setOnClickListener {
+                // Card tap: if in_transit, trigger OBD view; otherwise nop
                 if (assignment.tripStatus == "in_transit") {
                     onTripActionClicked(assignment)
                 }
