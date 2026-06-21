@@ -1540,36 +1540,39 @@ class MainActivity : AppCompatActivity() {
                 val inTransit = assignments.find { it.tripStatus == "in_transit" }
                 val hasActiveTrip = inTransit != null
 
-                val adapter = com.sysu.go.adapter.MyTripTabAdapter(
+                val shipmentAdapter = com.sysu.go.adapter.MyTripTabAdapter(
                     hasActiveTrip = hasActiveTrip,
-                    activeShipmentId = inTransit?.docId
-                ) { assignment ->
-                    when {
-                        assignment.tripStatus == "in_transit" -> {
-                            // Open MyTripActivity for the active shipment
-                            val intent = Intent(this, MyTripActivity::class.java)
-                            intent.putExtra("shipment_doc_id", assignment.docId)
-                            startActivity(intent)
+                    activeShipmentId = inTransit?.docId,
+                    onTripActionClicked = { assignment ->
+                        when {
+                            assignment.tripStatus == "in_transit" -> {
+                                val intent = Intent(this, MyTripActivity::class.java)
+                                intent.putExtra("shipment_doc_id", assignment.docId)
+                                startActivity(intent)
+                            }
+                            hasActiveTrip -> {
+                                Toast.makeText(this, "You already have an active trip.", Toast.LENGTH_SHORT).show()
+                            }
+                            else -> {
+                                AlertDialog.Builder(this)
+                                    .setTitle(R.string.confirm_start_trip_title)
+                                    .setMessage(getString(R.string.confirm_start_trip_message))
+                                    .setPositiveButton(R.string.btn_start_trip) { _, _ ->
+                                        startSingleShipment(assignment.docId)
+                                    }
+                                    .setNegativeButton(R.string.cancel, null)
+                                    .show()
+                            }
                         }
-                        hasActiveTrip -> {
-                            Toast.makeText(this, "You already have an active trip.", Toast.LENGTH_SHORT).show()
-                        }
-                        else -> {
-                            // Show confirmation dialog for this specific shipment
-                            AlertDialog.Builder(this)
-                                .setTitle(R.string.confirm_start_trip_title)
-                                .setMessage(getString(R.string.confirm_start_trip_message))
-                                .setPositiveButton(R.string.btn_start_trip) { _, _ ->
-                                    startSingleShipment(assignment.docId)
-                                }
-                                .setNegativeButton(R.string.cancel, null)
-                                .show()
-                        }
-                    }
-                }
+                    },
+                    onObdTap = { lineItems, docId ->
+                        openObdBottomSheet(lineItems, docId)
+                    },
+                    onShowVerification = { _ -> }
+                )
 
                 tabRv.layoutManager = LinearLayoutManager(this)
-                tabRv.adapter = adapter
+                tabRv.adapter = shipmentAdapter
 
                 // Update aggregate badge: show green "All Confirmed" if all trips ready
                 val allConfirmed = assignments.isNotEmpty() && assignments.all { it.guardVerified && it.driverConfirmed }
@@ -1596,6 +1599,22 @@ class MainActivity : AppCompatActivity() {
             .addOnFailureListener { e ->
                 Log.e(TAG, "fetchAndSetupMyTripCards: ${e.message}")
             }
+    }
+
+    /**
+     * Opens the OBD items bottom sheet for a given shipment.
+     */
+    private fun openObdBottomSheet(lineItems: List<Map<String, Any>>, shipmentDocId: String) {
+        if (lineItems.isEmpty()) {
+            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
+            return
+        }
+        ObdItemsBottomSheet.newInstance(
+            lineItems = lineItems,
+            shipmentDocId = shipmentDocId,
+            onItemClick = null,
+            onObdCameraTap = null  // no POD capture from MainActivity My Trip tab (read-only summary)
+        ).show(supportFragmentManager, ObdItemsBottomSheet.TAG)
     }
 
     /**

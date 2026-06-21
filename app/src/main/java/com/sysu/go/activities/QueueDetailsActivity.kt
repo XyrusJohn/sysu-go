@@ -193,8 +193,13 @@ class QueueDetailsActivity : AppCompatActivity() {
 
         // OBD items
         binding.cardObdItems.setOnClickListener {
-            val sheet = ObdItemsBottomSheet.newInstance(currentLineItems)
-            sheet.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
+            val sheet = ObdItemsBottomSheet.newInstance(
+            lineItems = currentLineItems,
+            shipmentDocId = currentSapDocId,
+            onItemClick = null,
+            onObdCameraTap = null
+        )
+        sheet.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
         }
     }
 

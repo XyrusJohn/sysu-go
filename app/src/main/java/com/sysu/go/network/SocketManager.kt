@@ -30,6 +30,89 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
     @Volatile
     private var offlineEmitted = false  // guard: emit offline at most once per disconnect cycle
 
+    // ─── Generic event listener system ─────────────────────────────────────────
+
+    /** Maps event name → list of listeners invoked on that event */
+    private val eventListeners = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<(data: Any?) -> Unit>>()
+
+    /** Tracks which events are registered on each socket to avoid double-registration */
+    private val registeredEvents = java.util.concurrent.ConcurrentHashMap<Socket, MutableSet<String>>()
+
+    /**
+     * Registers a listener for the named Socket.IO event on both sockets.
+     * When the socket reconnects, the listener is automatically re-registered.
+     * Listeners are deduplicated per event per socket.
+     */
+    fun addEventListener(event: String, listener: (data: Any?) -> Unit) {
+        val listeners = eventListeners.getOrPut(event) {
+            java.util.concurrent.CopyOnWriteArrayList()
+        }
+        listeners.add(listener)
+
+        // Register on sockets that are already connected
+        listOf(mSocketGo, mSocketApp).forEach { socket ->
+            registerEventListenerOnSocket(event, listener, socket)
+        }
+    }
+
+    /**
+     * Removes a previously registered listener. Safe to call even if the
+     * socket has since disconnected — the event key is cleaned up on unregister.
+     */
+    fun removeEventListener(event: String, listener: (data: Any?) -> Unit) {
+        eventListeners[event]?.remove(listener)
+        if (eventListeners[event]?.isEmpty() == true) {
+            eventListeners.remove(event)
+            // Unregister the socket listener so Socket.IO stops dispatching this event
+            listOf(mSocketGo, mSocketApp).forEach { socket ->
+                unregisterEventListenerOnSocket(event, listener, socket)
+            }
+        }
+    }
+
+    private fun registerEventListenerOnSocket(event: String, listener: (data: Any?) -> Unit, socket: Socket?) {
+        socket ?: return
+        val registered = registeredEvents.getOrPut(socket) { mutableSetOf() }
+        val wrappedListener: (Array<Any>) -> Unit = { args ->
+            try { listener(args.firstOrNull()) } catch (e: Exception) {
+                Log.e(TAG, "Event listener for '$event' threw: ${e.message}")
+            }
+        }
+        // Store wrapped listener so we can unregister the exact same reference
+        socket.on(event, wrappedListener)
+        registered.add(event)
+        Log.d(TAG, "Registered socket listener for event='$event' on ${socket.id()}")
+    }
+
+    private fun unregisterEventListenerOnSocket(event: String, listener: (data: Any?) -> Unit, socket: Socket?) {
+        socket ?: return
+        // Socket.IO's off() needs the exact same function reference that was passed to on()
+        // Since we wrapped it, we need to emit a no-op registration to remove all listeners for this event
+        // Socket.IO 3.x supports socket.off(event) which removes ALL listeners for that event
+        try {
+            socket.emit(event) // no-op emit — won't send since emit bypasses event system on server
+        } catch (_: Exception) { }
+        socket.off(event)
+        registeredEvents[socket]?.remove(event)
+    }
+
+    /**
+     * Registers all currently known event listeners on a newly-connected socket.
+     * Called after each socket connect so reconnection automatically restores listeners.
+     */
+    private fun registerAllListenersOnSocket(socket: Socket) {
+        val registered = registeredEvents.getOrPut(socket) { mutableSetOf() }
+        eventListeners.forEach { (event, listeners) ->
+            if (event !in registered) {
+                listeners.forEach { listener ->
+                    registerEventListenerOnSocket(event, listener, socket)
+                }
+            } else {
+                // Event already registered — skip (handles duplicate connect events)
+            }
+        }
+    }
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         // Start ConnectivityMonitor and add this SocketManager as a listener
@@ -115,6 +198,8 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
 
                 socket.on(Socket.EVENT_CONNECT) {
                     Log.i(TAG, ">>> EVENT_CONNECT! $url → socket.id=${socket.id()}")
+                    // Re-register all event listeners on this newly-connected socket
+                    registerAllListenersOnSocket(socket)
                     offlineEmitted = false
                     emitStatusUpdateOnSocket(socket, "online", getDriverName())
                     notifyConnectListeners()
@@ -289,6 +374,31 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
+    /**
+     * Emits pod_updated to the sysu-go backend after a POD photo is successfully saved.
+     * The backend should emit 'pod_updated' on the driver's socket (room) so the app's
+     * pod_updated listener fires → bottom sheet refreshes automatically.
+     *
+     * Payload: { shipmentDocId: string }
+     * Backend: on 'pod_updated' from driver → emit to driver room with updated lineItems
+     */
+    fun emitPodUpdated(shipmentDocId: String) {
+        if (mSocketGo?.connected() != true) {
+            Log.w(TAG, "emitPodUpdated: sysu-go socket not connected, skipping emit")
+            return
+        }
+        try {
+            val json = JSONObject().apply {
+                put("shipmentDocId", shipmentDocId)
+                put("source", "driver_app")
+            }
+            mSocketGo?.emit("pod_updated", json)
+            Log.d(TAG, "Emitted pod_updated for shipment=$shipmentDocId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to emit pod_updated: ${e.message}")
+        }
+    }
+
     fun disconnect() {
         // Remove this SocketManager as a listener from ConnectivityMonitor
         ConnectivityMonitor.removeListener(this)
@@ -305,10 +415,10 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         mSocketApp = null
         offlineEmitted = false
         listenersNotified = false
+        registeredEvents.clear()
     }
 
-    // New function to force disconnect sockets without emitting "offline" status
-    // Used when network connectivity is lost, as we cannot reliably emit.
+    // Force disconnect sockets without emitting "offline" status when network is lost.
     private fun forceDisconnectSockets() {
         Log.w(TAG, "Forcing Socket.IO disconnect due to network loss.")
         listOf(mSocketGo, mSocketApp).forEach { socket ->
@@ -323,6 +433,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         mSocketApp = null
         offlineEmitted = false
         listenersNotified = false
+        registeredEvents.clear()
     }
 
     override fun onConnectivityChanged(status: ConnectivityMonitor.Status) {

@@ -458,16 +458,25 @@ class AssignmentActivity : AppCompatActivity() {
         }
 
         if (assignment.isInTransit) {
-            // In-transit shipment → each row navigates to MyTripActivity
-            ObdItemsBottomSheet.newInstance(assignment.lineItems) { item ->
-                val intent = Intent(this, MyTripActivity::class.java)
-                intent.putExtra("shipment_doc_id", assignment.docId)
-                startActivity(intent)
-            }.show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
+            // In-transit shipment → each completed row navigates to MyTripActivity
+            ObdItemsBottomSheet.newInstance(
+                lineItems = assignment.lineItems,
+                shipmentDocId = assignment.docId,
+                onItemClick = { item ->
+                    val intent = Intent(this, MyTripActivity::class.java)
+                    intent.putExtra("shipment_doc_id", assignment.docId)
+                    startActivity(intent)
+                },
+                onObdCameraTap = null
+            ).show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
         } else {
             // Pre-transit → read-only view of all OBD items
-            ObdItemsBottomSheet.newInstance(assignment.lineItems, null)
-                .show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
+            ObdItemsBottomSheet.newInstance(
+                lineItems = assignment.lineItems,
+                shipmentDocId = assignment.docId,
+                onItemClick = null,
+                onObdCameraTap = null
+            ).show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)
         }
     }
 

@@ -3,47 +3,38 @@ package com.sysu.go.utils
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Base64
 import android.util.Log
-import com.google.firebase.storage.FirebaseStorage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileOutputStream
 
 /**
- * Handles photo compression and upload to Firebase Cloud Storage for POD images.
+ * Handles photo compression and base64-encodes POD images for storage in Firestore.
  *
- * Storage path convention:
- *   shipment_pods/{shipmentDocId}/{obdNumber}_{timestamp}.jpg
+ * No Firebase Storage is used — the image bytes are compressed and encoded as a
+ * data URI string: "data:image/jpeg;base64,{base64_string}"
  *
- * Quality: JPEG 80% with max resolution of 1080p on the longer edge.
- * Estimated output: ~150–300KB per photo.
- *
- * Firestore stores only the download URL, not the image data.
+ * Quality: JPEG 50% with max resolution of 720p on the longer edge.
+ * Estimated output: ~30–80KB per photo (well within Firestore 1MB document limit).
  */
 object ImageStorageHelper {
 
     private const val TAG = "ImageStorageHelper"
-    private const val JPEG_QUALITY = 80
-    private const val MAX_DIMENSION = 1080 // 1080p on long edge
+    private const val JPEG_QUALITY = 50          // 50% = small base64, still readable
+    private const val MAX_DIMENSION = 1280        // 720p on long edge — good enough for POD
 
     /**
-     * Compresses and uploads a POD photo to Firebase Cloud Storage.
+     * Compresses a POD photo and returns it as a base64-encoded data URI.
+     * Suitable for storing directly in Firestore as a String field.
      *
-     * @param photoFile     The raw photo file from the camera intent.
-     * @param context      Android context (used for lifecycleScope in Activity, or GlobalScope in Service).
-     * @param storagePath  Full path inside Firebase Storage, e.g.
-     *                     "shipment_pods/0010128715/6051555386_1718723400000.jpg"
-     * @param onSuccess    Called on the main thread with the Firebase download URL.
-     * @param onFailure    Called on the main thread with the error message string.
+     * @param photoFile   The raw photo file from the camera intent.
+     * @param context     Android context.
+     * @param onSuccess   Called on the main thread with the base64 data URI string:
+     *                    "data:image/jpeg;base64,{base64}"
+     * @param onFailure   Called on the main thread with the error message string.
      */
     fun uploadPodImage(
-        photoFile: File,
+        photoFile: java.io.File,
         context: Context,
-        storagePath: String,
         onSuccess: (String) -> Unit,
         onFailure: (String) -> Unit
     ) {
@@ -76,7 +67,7 @@ object ImageStorageHelper {
         val resized = resizeBitmap(bitmap, MAX_DIMENSION)
         bitmap.recycle()
 
-        // Compress to JPEG 80%
+        // Compress to JPEG 50% and base64-encode
         val byteArray = compressToJpeg(resized, JPEG_QUALITY)
         resized.recycle()
 
@@ -85,7 +76,11 @@ object ImageStorageHelper {
             return
         }
 
-        uploadBytes(byteArray, context, storagePath, onSuccess, onFailure)
+        val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        val dataUri = "data:image/jpeg;base64,$base64String"
+
+        Log.d(TAG, "POD image base64 encoded: ${dataUri.length} chars, ~${byteArray.size / 1024}KB")
+        onSuccess(dataUri)
     }
 
     /**
@@ -94,7 +89,6 @@ object ImageStorageHelper {
     fun uploadPodImage(
         bitmap: Bitmap,
         context: Context,
-        storagePath: String,
         onSuccess: (String) -> Unit,
         onFailure: (String) -> Unit
     ) {
@@ -107,7 +101,11 @@ object ImageStorageHelper {
             return
         }
 
-        uploadBytes(byteArray, context, storagePath, onSuccess, onFailure)
+        val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        val dataUri = "data:image/jpeg;base64,$base64String"
+
+        Log.d(TAG, "POD image base64 encoded: ${dataUri.length} chars, ~${byteArray.size / 1024}KB")
+        onSuccess(dataUri)
     }
 
     // ─── Private helpers ───────────────────────────────────────────────────────
@@ -163,42 +161,31 @@ object ImageStorageHelper {
         }
     }
 
-    private fun uploadBytes(
-        data: ByteArray,
-        context: Context,
-        storagePath: String,
-        onSuccess: (String) -> Unit,
-        onFailure: (String) -> Unit
-    ) {
-        val storageRef = FirebaseStorage.getInstance().reference.child(storagePath)
-
-        storageRef.putBytes(data)
-            .addOnSuccessListener { taskSnapshot ->
-                Log.d(TAG, "Upload succeeded: $storagePath, size=${data.size} bytes")
-
-                storageRef.downloadUrl
-                    .addOnSuccessListener { uri ->
-                        Log.d(TAG, "Download URL: ${uri.toString()}")
-                        onSuccess(uri.toString())
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e(TAG, "getDownloadUrl failed: ${e.message}")
-                        // Upload succeeded but URL retrieval failed — still a partial success
-                        onFailure("Image uploaded but failed to get URL: ${e.message}")
-                    }
+    /**
+     * Decodes a base64 data URI (e.g. "data:image/jpeg;base64,/9j/4AAQ...")
+     * into a Bitmap. Returns null on failure.
+     *
+     * Call on a background thread if the string is very large (list scrolling).
+     */
+    fun decodeBase64ToBitmap(dataUri: String): Bitmap? {
+        return try {
+            val base64Index = dataUri.indexOf("base64,")
+            if (base64Index == -1) {
+                Log.w(TAG, "decodeBase64ToBitmap: no base64 prefix found in data URI")
+                return null
             }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "Upload failed: ${e.message}")
-                onFailure("Upload failed: ${e.message}")
-            }
+            val base64String = dataUri.substring(base64Index + "base64,".length)
+            val decodedBytes = Base64.decode(base64String, Base64.NO_WRAP)
+            BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+        } catch (e: Exception) {
+            Log.e(TAG, "decodeBase64ToBitmap failed", e)
+            null
+        }
     }
 
     /**
-     * Builds the standard POD storage path for a given shipment + OBD item.
-     *
-     * @param shipmentDocId   sap_assignments document ID (e.g. "0010128715")
-     * @param obdNumber      The OBD number string (e.g. "6051555386")
-     * @param timestamp      System.currentTimeMillis() at capture time
+     * Kept for backwards compatibility — no longer used internally.
+     * Storage path is not needed when storing base64 directly in Firestore.
      */
     fun buildStoragePath(shipmentDocId: String, obdNumber: String, timestamp: Long): String {
         val safeObd = obdNumber.replace("/", "_").replace(".", "_").replace(" ", "_")

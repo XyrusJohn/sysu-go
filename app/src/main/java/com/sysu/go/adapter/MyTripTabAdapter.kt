@@ -17,7 +17,9 @@ import java.util.Locale
 class MyTripTabAdapter(
     var hasActiveTrip: Boolean,
     var activeShipmentId: String?,
-    private val onTripActionClicked: (Assignment) -> Unit
+    private val onTripActionClicked: (Assignment) -> Unit,
+    private val onObdTap: (List<Map<String, Any>>, String) -> Unit,
+    private val onShowVerification: (Assignment) -> Unit
 ) : ListAdapter<Assignment, MyTripTabAdapter.MyTripTabViewHolder>(AssignmentDiffCallback()) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MyTripTabViewHolder {
@@ -198,18 +200,14 @@ class MyTripTabAdapter(
                         View.GONE
                     }
                     binding.btnShowVerification.setOnClickListener {
-                        // For My Trip tab context: guard was already verified,
-                        // showing a dialog or bottom sheet of the guard signature.
-                        // Could open a GuardVerificationBottomSheet if available.
+                        onShowVerification(assignment)
                     }
                 }
             }
 
-            // OBD row click → same as clicking btnTripAction
+            // OBD row click → open the OBD items bottom sheet (all shipment states)
             binding.rowObd.setOnClickListener {
-                if (assignment.tripStatus == "in_transit") {
-                    onTripActionClicked(assignment)
-                }
+                onObdTap(assignment.lineItems, assignment.docId)
             }
 
             binding.btnTripAction.setOnClickListener {

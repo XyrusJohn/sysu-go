@@ -135,6 +135,16 @@
                     android:orientation="vertical"
                     android:paddingBottom="4dp">
 
+                    <!-- Loading / refreshing spinner -->
+                    <ProgressBar
+                        android:id="@+id/pbObdRefresh"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:layout_gravity="center_horizontal"
+                        android:layout_marginTop="48dp"
+                        android:indeterminate="true"
+                        android:visibility="gone" />
+
                     <!-- Empty state -->
                     <TextView
                         android:id="@+id/tvObdSheetEmpty"

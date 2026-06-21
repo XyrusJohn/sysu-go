@@ -40,4 +40,17 @@
     <!-- Amber / pending status -->
     <color name="amber_pill_bg">#FFF3E0</color>
     <color name="text_amber">#E65100</color>
+
+    <!-- Green / Delivered status -->
+    <color name="green_pill_bg">#E8F5E9</color>
+    <color name="text_green">#2E7D32</color>
+
+    <!-- Red / Rejected status -->
+    <color name="red_pill_bg">#FFEBEE</color>
+    <color name="text_red">#C62828</color>
+
+    <!-- Orange / Delivered w/ Rejection status -->
+    <color name="orange_pill_bg">#FFF3E0</color>
+    <color name="text_orange">#E65100</color>
+
 </resources>

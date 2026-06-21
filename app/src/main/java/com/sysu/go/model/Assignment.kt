@@ -31,6 +31,7 @@ data class Assignment(
     val tripStatus: String?,
     val plateNumber: String,
     val truckType: String,
+    val truckCompany: String = "",
     val helper: String,
     val guardVerified: Boolean,
     val driverConfirmed: Boolean = false,

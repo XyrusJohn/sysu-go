@@ -91,12 +91,13 @@
             tools:textColor="@color/text_amber"
             tools:background="@color/amber_pill_bg" />
 
-        <!-- POD camera indicator — shown if photo captured -->
+        <!-- POD indicator — camera when pending, checkmark or preview thumbnail when completed -->
         <ImageView
             android:id="@+id/ivPodIndicator"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:layout_marginStart="10dp"
+            android:scaleType="centerCrop"
             android:src="@drawable/ic_camera_pod"
             android:contentDescription="POD photo captured"
             android:visibility="gone"

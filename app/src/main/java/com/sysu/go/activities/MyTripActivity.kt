@@ -1,17 +1,30 @@
 package com.sysu.go.activities
 
+import android.Manifest
+import android.app.Dialog
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -20,13 +33,18 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
+import com.sysu.go.activities.ObdItemsBottomSheet
+import com.sysu.go.activities.GuardVerificationBottomSheet
 import com.sysu.go.activities.TransitActivity
 import com.sysu.go.adapter.MyTripTabAdapter
 import com.sysu.go.databinding.ActivityMyTripBinding
 import com.sysu.go.model.Assignment
+import com.sysu.go.network.SocketManager
+import com.sysu.go.utils.ImageStorageHelper
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.File
 
 /**
  * MY TRIP — shows all confirmed shipments (guardVerified && driverConfirmed)
@@ -60,6 +78,379 @@ class MyTripActivity : AppCompatActivity() {
     /** Prevents double-init of bouncing circles */
     private var circlesInitialized = false
 
+    // ─── POD Camera state ─────────────────────────────────────────────────────
+
+    private lateinit var takePictureLauncher: ActivityResultLauncher<Uri>
+    private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
+    private var pendingPodData: PendingPodData? = null
+    private var pendingPhotoFile: File? = null
+    private var uploadProgressDialog: android.app.AlertDialog? = null
+
+    /** Reference to the currently-open OBD items bottom sheet, so we can refresh it in-place */
+    private var currentObdBottomSheet: ObdItemsBottomSheet? = null
+
+    // Socket.IO event listeners — registered in onResume, removed in onPause
+    private val socketSapUpdatedListener: (data: Any?) -> Unit = { data ->
+        // Server emits sap_updated with the full driver assignment list after any change.
+        // Data shape: JSON array of assignment objects, each identical to a Firestore
+        // sap_assignments document fields.
+        runOnUiThread {
+            if (isFinishing) return@runOnUiThread
+            try {
+                val list = parseSapAssignmentsFromSocket(data)
+                val sessionDriverId = sessionManager.getDriverId() ?: return@runOnUiThread
+                fetchDriverData(sessionDriverId, list) { enriched ->
+                    enrichWithQueueData(enriched) { final ->
+                        val intentDocId = intent.getStringExtra("shipment_doc_id")
+                        handleAssignmentList(final, intentDocId)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "sap_updated listener parse error: ${e.message}")
+            }
+        }
+    }
+
+    private val socketPodUpdatedListener: (data: Any?) -> Unit = { data ->
+        // Server emits pod_updated after a POD photo is successfully saved to MySQL.
+        // Data shape: { "shipmentDocId": "...", "lineItems": [...] }
+        runOnUiThread {
+            try {
+                if (data is org.json.JSONObject) {
+                    val shipmentDocId = data.optString("shipmentDocId")
+                    val bottomSheet = currentObdBottomSheet
+                    if (bottomSheet != null && shipmentDocId.isNotBlank()) {
+                        // Re-fetch fresh lineItems from Firestore (POD write succeeded, data is fresh)
+                        lifecycleScope.launch {
+                            try {
+                                val docSnap = db.collection("sap_assignments")
+                                    .document(shipmentDocId)
+                                    .get()
+                                    .await()
+                                val fresh = docSnap.get("lineItems") as? List<Map<String, Any>>
+                                if (!fresh.isNullOrEmpty()) {
+                                    bottomSheet.refreshWith(fresh.filterIsInstance<Map<String, Any?>>())
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "pod_updated refresh failed: ${e.message}")
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "pod_updated listener error: ${e.message}")
+            }
+        }
+    }
+
+    /** Holds the camera → status selection → upload pipeline state */
+    private data class PendingPodData(
+        val status: String,
+        val lineItem: Map<String, Any?>,
+        val shipmentDocId: String,
+        val capturedAtMillis: Long
+    )
+
+    // Register camera result handler before onCreate finishes
+    private fun registerCameraLauncher() {
+        cameraPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            if (isGranted) {
+                // Camera permission granted — proceed to camera
+                pendingPodData?.let { takePicture() }
+            } else {
+                pendingPodData = null
+                pendingPhotoFile = null
+                Toast.makeText(
+                    this,
+                    "Camera permission is required to capture POD photos.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
+        takePictureLauncher = registerForActivityResult(
+            ActivityResultContracts.TakePicture()
+        ) { success ->
+            handleCameraResult(success)
+        }
+    }
+
+    private fun showUploadProgress() {
+        uploadProgressDialog = android.app.AlertDialog.Builder(this)
+            .setMessage("Uploading photo…")
+            .setCancelable(false)
+            .create().apply { show() }
+    }
+
+    private fun hideUploadProgress() {
+        runOnUiThread {
+            uploadProgressDialog?.dismiss()
+            uploadProgressDialog = null
+        }
+    }
+
+    // ─── Camera launch + handling ─────────────────────────────────────────────
+
+    /** Creates a temp JPEG file, gets a FileProvider content:// URI, launches camera. */
+    private fun takePicture(): Boolean {
+        val capturedAtMillis = pendingPodData?.capturedAtMillis ?: System.currentTimeMillis()
+        val picturesDir = getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+            ?: return false
+        if (!picturesDir.exists()) picturesDir.mkdirs()
+
+        val photoFile = File(picturesDir, "pod_${capturedAtMillis}.jpg")
+        pendingPhotoFile = photoFile
+
+        val photoUri = FileProvider.getUriForFile(
+            this,
+            "${packageName}.fileprovider",
+            photoFile
+        )
+
+        takePictureLauncher.launch(photoUri)
+        return true
+    }
+
+    /**
+     * Opens ObdStatusBottomSheet (status selection), then launches the camera
+     * via the registered TakePicture launcher. Handles runtime CAMERA permission.
+     */
+    private fun showObdStatusSheet(
+        item: Map<String, Any?>,
+        shipmentDocId: String
+    ) {
+        val capturedAtMillis = System.currentTimeMillis()
+
+        ObdStatusBottomSheet.newInstance(item, shipmentDocId).apply {
+            onConfirmWithStatus = { status, lineItem, docId ->
+                pendingPodData = PendingPodData(
+                    status = status,
+                    lineItem = lineItem,
+                    shipmentDocId = docId,
+                    capturedAtMillis = capturedAtMillis
+                )
+
+                if (ContextCompat.checkSelfPermission(
+                        this@MyTripActivity,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    val launched = takePicture()
+                    if (!launched) {
+                        pendingPodData = null
+                        pendingPhotoFile = null
+                        Toast.makeText(
+                            this@MyTripActivity,
+                            "Camera not available. Please try again.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } else {
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+            }
+        }.show(supportFragmentManager, ObdStatusBottomSheet.TAG)
+    }
+
+    /**
+     * Decodes a base64 data URI and shows it as a full-screen preview dialog.
+     * Called when tapping a green thumbnail square on a completed OBD row.
+     */
+    /**
+     * Opens a fullscreen black overlay dialog showing the POD photo.
+     * The image is decoded from a base64 data URI string.
+     *
+     * Layout: dialog_image_preview.xml — semi-transparent black background,
+     * center-fitted ImageView, accessible close (X) button top-right.
+     *
+     * @param base64ImageString Full base64 data URI (data:image/jpeg;base64,...).
+     *                           The prefix is stripped before decoding.
+     */
+    private fun showPodFullScreenPreview(base64ImageString: String) {
+        val tag = "showPodFullScreenPreview"
+        Log.d(tag, "dataUri length=${base64ImageString.length}")
+
+        val bitmap: Bitmap? = decodeBase64ToBitmap(base64ImageString)
+        if (bitmap == null) {
+            Log.e(tag, "decodeBase64ToBitmap returned null")
+            Toast.makeText(this, "Could not load photo preview", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Log.d(tag, "bitmap decoded: ${bitmap.width}x${bitmap.height}")
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(R.layout.dialog_image_preview)
+
+        val previewImageView = dialog.findViewById<ImageView>(R.id.previewImageView)
+            .apply { setImageBitmap(bitmap) }
+
+        val closeBtn = dialog.findViewById<ImageButton>(R.id.closePreviewButton)
+        closeBtn.setOnClickListener { dialog.dismiss() }
+
+        // Tap anywhere on the image to dismiss
+        previewImageView.setOnClickListener { dialog.dismiss() }
+
+        dialog.show()
+    }
+
+    /**
+     * Decodes a base64-encoded data URI string into a Bitmap.
+     *
+     * Handles the optional "data:image/jpeg;base64," prefix that Firestore
+     * stores alongside the raw base64 bytes.
+     *
+     * @param base64Str  A base64 string, optionally prefixed with
+     *                    "data:image/jpeg;base64," or similar.
+     * @return Decoded Bitmap, or null on failure (bad data, OOM, etc.)
+     */
+    private fun decodeBase64ToBitmap(base64Str: String): Bitmap? {
+        return try {
+            // Strip the "data:image/jpeg;base64," prefix if present
+            val cleanBase64 = if (base64Str.contains(",")) {
+                base64Str.substring(base64Str.indexOf(",") + 1)
+            } else {
+                base64Str
+            }
+            val decodedBytes = Base64.decode(cleanBase64, Base64.NO_WRAP)
+            BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+        } catch (e: Exception) {
+            Log.e(TAG, "decodeBase64ToBitmap failed: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun handleCameraResult(success: Boolean) {
+        val podData = pendingPodData
+        val photoFile = pendingPhotoFile
+
+        if (!success || podData == null || photoFile == null) {
+            // Camera was cancelled or failed
+            pendingPodData = null
+            pendingPhotoFile = null
+            return
+        }
+
+        pendingPodData = null
+        pendingPhotoFile = null
+
+        showUploadProgress()
+
+        // Compress + base64-encode; no Firebase Storage needed
+        ImageStorageHelper.uploadPodImage(
+            photoFile = photoFile,
+            context = this,
+            onSuccess = { base64DataUri ->
+                Log.d(TAG, "POD image base64 encoded: ${base64DataUri.length} chars")
+
+                lifecycleScope.launch {
+                    try {
+                        updateObdLineItemInFirestore(
+                            shipmentDocId = podData.shipmentDocId,
+                            lineItem = podData.lineItem,
+                            status = podData.status,
+                            podImageUrl = base64DataUri,
+                            capturedAtMillis = podData.capturedAtMillis
+                        )
+                        hideUploadProgress()
+
+                        // ── Real-time socket broadcast ─────────────────────────
+                        // Tell the server this POD was saved so it can emit pod_updated.
+                        // When backend migrates to MySQL: the REST/PUT endpoint should
+                        // emit pod_updated with {shipmentDocId, lineItems} to this driver's socket.
+                        SocketManager.emitPodUpdated(podData.shipmentDocId)
+
+                        // ── Immediate bottom sheet refresh ─────────────────────
+                        // Two-path update guarantees the status pill updates even if the
+                        // socket event is lost or arrives after the sheet is reopened.
+                        //
+                        // Path 1 — socket listener: socketPodUpdatedListener re-fetches
+                        //          Firestore and calls bottomSheet.refreshWith() (reliable).
+                        // Path 2 — showRefreshing() fallback: shows spinner and fires
+                        //          onRefreshRequest, which does a direct Firestore read
+                        //          and calls refreshWith (covers race conditions).
+                        val bottomSheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
+                            as? ObdItemsBottomSheet)
+                        bottomSheet?.showRefreshing()  // spinner ON immediately
+                        bottomSheet?.onRefreshRequest?.invoke()  // triggers Firestore reload
+
+                        Toast.makeText(
+                            this@MyTripActivity,
+                            "Status updated!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } catch (e: Exception) {
+                        hideUploadProgress()
+                        Log.e(TAG, "Firestore update failed: ${e.message}")
+                        Toast.makeText(
+                            this@MyTripActivity,
+                            "Photo captured but status save failed. Retry.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            },
+            onFailure = { errorMsg ->
+                hideUploadProgress()
+                Log.e(TAG, "POD image processing failed: $errorMsg")
+                Toast.makeText(
+                    this@MyTripActivity,
+                    "Photo processing failed: $errorMsg",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        )
+    }
+
+    /**
+     * Firestore transaction: finds the correct OBD item in lineItems by obdNumber
+     * and atomically updates that array element with deliveryStatus, podImageUrl,
+     * podCapturedAt, and isPodCompleted.
+     */
+    private suspend fun updateObdLineItemInFirestore(
+        shipmentDocId: String,
+        lineItem: Map<String, Any?>,
+        status: String,
+        podImageUrl: String,
+        capturedAtMillis: Long
+    ) {
+        val obdNumber = lineItem["obdNumber"] as? String
+            ?: throw IllegalArgumentException("Missing obdNumber in lineItem")
+
+        val docRef = db.collection("sap_assignments").document(shipmentDocId)
+
+        db.runTransaction { transaction ->
+            val snap = transaction.get(docRef)
+            if (!snap.exists()) {
+                throw IllegalStateException("Shipment document not found: $shipmentDocId")
+            }
+
+            val lineItemsRaw = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
+            val lineItems = lineItemsRaw.filterIsInstance<Map<String, Any?>>().toMutableList()
+
+            // Find and update the matching OBD item by obdNumber
+            val targetIndex = lineItems.indexOfFirst { item ->
+                (item["obdNumber"] as? String) == obdNumber
+            }
+
+            if (targetIndex == -1) {
+                throw IllegalStateException("OBD item not found in lineItems: $obdNumber")
+            }
+
+            val original = lineItems[targetIndex].toMutableMap()
+            original["deliveryStatus"] = status
+            original["podImageUrl"] = podImageUrl
+            original["podCapturedAt"] = Timestamp.now()
+            original["isPodCompleted"] = true
+
+            lineItems[targetIndex] = original
+            transaction.update(docRef, "lineItems", lineItems)
+        }.await()
+
+        Log.d(TAG, "OBD lineItem updated for obdNumber=$obdNumber in doc=$shipmentDocId")
+    }
+
     companion object {
         private const val TAG = "MyTripActivity"
     }
@@ -76,10 +467,17 @@ class MyTripActivity : AppCompatActivity() {
             insets
         }
 
+        // Register camera result BEFORE adapter so callbacks can use it
+        registerCameraLauncher()
+
         // Create adapter once — stored as class field so we can update state without re-creating
-        shipmentAdapter = MyTripTabAdapter(hasActiveTrip = false, activeShipmentId = null) { assignment ->
-            onTripActionClicked(assignment)
-        }
+        shipmentAdapter = MyTripTabAdapter(
+            hasActiveTrip = false,
+            activeShipmentId = null,
+            onTripActionClicked = { assignment -> onTripActionClicked(assignment) },
+            onObdTap = { lineItems, docId -> openObdBottomSheet(lineItems, docId) },
+            onShowVerification = { assignment -> showGuardVerificationSheet(assignment) }
+        )
 
         setupRecyclerView()
         setupUI()
@@ -89,7 +487,27 @@ class MyTripActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // ── Register Socket.IO listeners ──────────────────────────────────────
+        // sap_updated  → rebuilds the full shipment list in real-time
+        // pod_updated  → refreshes the bottom sheet in-place after POD capture
+        // Both fire immediately when the backend starts emitting (after MySQL migration).
+        // MyTripActivity stays in sync without needing Firestore addSnapshotListener.
+        SocketManager.addEventListener("sap_updated", socketSapUpdatedListener)
+        SocketManager.addEventListener("pod_updated", socketPodUpdatedListener)
+
+        // ── Load initial data ─────────────────────────────────────────────────
+        // Falls back to Firestore only if the server hasn't emitted sap_updated yet
+        // (e.g., during development before backend MySQL migration is complete).
+        // Once MySQL migration is done, server emits sap_updated immediately on connect.
         loadAssignments()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Remove socket listeners so we don't get callbacks while paused.
+        // The socket connection itself stays alive (managed by LocationServices/TransitActivity).
+        SocketManager.removeEventListener("sap_updated", socketSapUpdatedListener)
+        SocketManager.removeEventListener("pod_updated", socketPodUpdatedListener)
     }
 
     override fun onDestroy() {
@@ -99,6 +517,8 @@ class MyTripActivity : AppCompatActivity() {
         circleViews.forEach { binding.circleContainer.removeView(it) }
         circleViews.clear()
         assignmentsListener?.remove()
+        uploadProgressDialog?.dismiss()
+        uploadProgressDialog = null
     }
 
     // ─── UI setup ──────────────────────────────────────────────────────────────
@@ -120,16 +540,15 @@ class MyTripActivity : AppCompatActivity() {
         }
     }
 
-    // ─── Firestore loading ─────────────────────────────────────────────────────
+    // ─── Firestore loading (Socket.IO fallback / pre-MySQL fallback) ───────────
 
     /**
-     * Loads all confirmed shipments for this driver.
-     * Two-approach pattern matching AssignmentActivity:
-     *   1. Try queue doc ID (sap_assignments.driverId = queue doc ID)
-     *   2. Fall back to Firebase UID
+     * Loads assignments via Firestore snapshot listener. Used as a one-shot fallback
+     * when Socket.IO hasn't delivered an initial sap_updated event yet (e.g., before
+     * the backend MySQL migration is complete, or during initial app load).
      *
-     * If an in_transit shipment exists or a shipment_doc_id was passed in the
-     * intent, delegates to the in-transit delivery screen automatically.
+     * Once sap_updated events start flowing from the server, they replace all
+     * subsequent Firestore updates — socket data is the source of truth post-migration.
      */
     private fun loadAssignments() {
         assignmentsListener?.remove()
@@ -146,10 +565,16 @@ class MyTripActivity : AppCompatActivity() {
                         return@addSnapshotListener
                     }
                     if (isFinishing) return@addSnapshotListener
-                    val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                    // Enrich with driver doc data (truckType/truckingCompany + requirements + helper)
+                    val list = snaps.documents.mapNotNull { snap ->
+                        // Reuse buildAssignmentFromMap — .data is a Map
+                        @Suppress("UNCHECKED_CAST")
+                        val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
+                        buildAssignmentFromMap(data + ("docId" to snap.id))
+                    }
                     fetchDriverData(sessionDriverId, list) { enriched ->
-                        handleAssignmentList(enriched, intentDocId)
+                        enrichWithQueueData(enriched) { final ->
+                            handleAssignmentList(final, intentDocId)
+                        }
                     }
                 }
         } else {
@@ -166,22 +591,72 @@ class MyTripActivity : AppCompatActivity() {
                     return@addSnapshotListener
                 }
                 if (isFinishing) return@addSnapshotListener
-                val list = snaps.documents.mapNotNull { buildAssignment(it) }
-                // Enrich with driver doc data (truckType/truckingCompany + requirements + helper)
+                val list = snaps.documents.mapNotNull { snap ->
+                    @Suppress("UNCHECKED_CAST")
+                    val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
+                    buildAssignmentFromMap(data + ("docId" to snap.id))
+                }
                 fetchDriverData(sessionDriverId, list) { enriched ->
-                    handleAssignmentList(enriched, intentDocId)
+                    enrichWithQueueData(enriched) { final ->
+                        handleAssignmentList(final, intentDocId)
+                    }
                 }
             }
+
+    }
+
+    /**
+     * Second pass: fetch the queue document (source of truth for truckType and helper).
+     * Sap_assignments only holds a driverId reference pointing to the queue doc;
+     * the queue doc itself carries the canonical truckType ("AUV") and helper ("Hshs A. Dnzb").
+     * Mirrors AssignmentActivity.submitToAdapter's queue lookup pattern.
+     *
+     * This is a fire-and-forget parallel fetch — each assignment fires its own
+     * queue doc lookup; all results are collected before the onReady callback fires.
+     */
+    private fun enrichWithQueueData(
+        assignments: List<Assignment>,
+        onReady: (List<Assignment>) -> Unit
+    ) {
+        val empty = assignments.isEmpty()
+        if (empty) { onReady(assignments); return }
+
+        val mutableList = assignments.toMutableList()
+        var pending = assignments.count { it.queueId.isNotBlank() }
+
+        // No assignments have a queueId — skip the queue doc fetch entirely
+        if (pending == 0) { onReady(assignments); return }
+
+        for (idx in assignments.indices) {
+            val assignment = assignments[idx]
+            if (assignment.queueId.isBlank()) continue
+            val queueId = assignment.queueId
+            db.collection("queue").document(queueId).get()
+                .addOnSuccessListener { queueDoc ->
+                    if (queueDoc.exists()) {
+                        mutableList[idx] = assignment.copy(
+                            truckType = queueDoc.getString("truckType") ?: assignment.truckType,
+                            helper = queueDoc.getString("helper") ?: assignment.helper
+                        )
+                    }
+                    pending--
+                    if (pending <= 0) onReady(mutableList.toList())
+                }
+                .addOnFailureListener {
+                    pending--
+                    if (pending <= 0) onReady(mutableList.toList())
+                }
+        }
     }
 
     /**
      * Fetches driver metadata from the drivers/{driverId} document:
      *   - requirements: Map<String, Boolean>  (aircon, reflectorizedVest, etc.)
-     *   - truckingCompany: String             → Assignment.truckType
-     *   - helper: String?                      → Assignment.helper (optional field in driver doc)
+     *   - truckingCompany: String             → Assignment.truckCompany (company name, separate from truckType)
      *
-     * The driver doc is the source of truth for truckType (truckingCompany)
-     * and requirements; sap_assignments only has driverId reference.
+     * truckType ("AUV") and helper ("Hshs A. Dnzb") come from the queue document
+     * in the second pass (applied after this call). This function only provides
+     * the requirements map and company name.
      */
     private fun fetchDriverData(
         driverId: String,
@@ -193,16 +668,16 @@ class MyTripActivity : AppCompatActivity() {
             .addOnSuccessListener { doc ->
                 val reqMap = doc.get("requirements") as? Map<String, Boolean> ?: emptyMap()
                 val truckingCompany = doc.getString("truckingCompany") ?: ""
-                // helper may live in the driver doc or fallback to sap_assignments (already set by buildAssignment)
-                val driverHelper = doc.getString("helper") ?: ""
 
                 // Enrich each assignment with driver-sourced fields
                 val enriched = assignments.map { assignment ->
                     assignment.copy(
                         requirements = reqMap,
-                        truckType = truckingCompany.ifBlank { assignment.truckType },
-                        // Helper: driver doc wins if present, else keep what buildAssignment extracted
-                        helper = driverHelper.ifBlank { assignment.helper }
+                        // truckingCompany (driver doc) → truckCompany field only;
+                        // truckType ("AUV") is preserved as-is — updated via queue doc in second pass
+                        truckCompany = truckingCompany.ifBlank { assignment.truckCompany },
+                        truckType = assignment.truckType,
+                        helper = assignment.helper
                     )
                 }
                 onReady(enriched)
@@ -388,38 +863,151 @@ class MyTripActivity : AppCompatActivity() {
         finish()
     }
 
+    /**
+     * Opens the OBD items bottom sheet for any shipment state.
+     * For in-transit shipments, tapping a row navigates to that shipment.
+     * For confirmed/not-yet-in-transit shipments, items are read-only.
+     * Pending OBD rows show a camera button that triggers showObdStatusSheet().
+     */
+    private fun openObdBottomSheet(lineItems: List<Map<String, Any>>, shipmentDocId: String) {
+        if (lineItems.isEmpty()) {
+            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val bottomSheet = ObdItemsBottomSheet.newInstance(
+            lineItems = lineItems,
+            shipmentDocId = shipmentDocId,
+            onItemClick = { item ->
+                val isCompleted = item["isPodCompleted"] as? Boolean ?: false
+                val dataUri = item["podImageUrl"] as? String ?: ""
+                Log.d(TAG, "onItemClick: isCompleted=$isCompleted, dataUri len=${dataUri.length}")
+                if (isCompleted && dataUri.isNotBlank()) {
+                    showPodFullScreenPreview(dataUri)
+                }
+            },
+            onObdCameraTap = { item, docId ->
+                showObdStatusSheet(item, docId)
+            }
+        ).also { sheet ->
+            // SAFETY NET: if socket pod_updated never fires (race, server issue, app kill),
+            // this fallback re-fetches the shipment doc directly from Firestore and calls
+            // sheet.refreshWith() to update status pills in real-time without reopening the sheet.
+            // Uses lifecycleScope so the coroutine outlives any UI state changes.
+            sheet.onRefreshRequest = {
+                Log.d(TAG, "onRefreshRequest: re-fetching lineItems for shipment=$shipmentDocId")
+                lifecycleScope.launch {
+                    try {
+                        val docSnap = db.collection("sap_assignments")
+                            .document(shipmentDocId)
+                            .get()
+                            .await()
+                        @Suppress("UNCHECKED_CAST")
+                        val fresh = docSnap.get("lineItems") as? List<Map<String, Any?>>
+                        if (!fresh.isNullOrEmpty()) {
+                            sheet.refreshWith(fresh)
+                            Log.d(TAG, "onRefreshRequest: refreshWith called, ${fresh.size} items")
+                        } else {
+                            Log.w(TAG, "onRefreshRequest: lineItems was null/empty in Firestore")
+                            sheet.hideRefreshing()
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "onRefreshRequest: Firestore reload failed: ${e.message}")
+                        sheet.hideRefreshing()
+                    }
+                }
+            }
+        }
+
+        currentObdBottomSheet = bottomSheet
+        bottomSheet.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
+    }
+
+    /**
+     * Fetches current guard verification data from Firestore and shows the
+     * GuardVerificationBottomSheet in read-only mode.
+     * Safe to call even if the data is stale in the local Assignment object.
+     */
+    private fun showGuardVerificationSheet(assignment: Assignment) {
+        lifecycleScope.launch {
+            try {
+                val docSnap = db.collection("sap_assignments")
+                    .document(assignment.docId)
+                    .get()
+                    .await()
+
+                if (!docSnap.exists()) {
+                    Toast.makeText(this@MyTripActivity, "Verification data not found", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                val firstName = docSnap.getString("guardFirstName") ?: assignment.guardFirstName
+                val lastName  = docSnap.getString("guardLastName")  ?: assignment.guardLastName
+                val mi        = docSnap.getString("guardMI") ?: ""
+                val sigBase64 = docSnap.getString("guardSignatureBase64")
+                    ?: assignment.guardSignature.ifBlank { docSnap.getString("guardSignature") ?: "" }
+
+                val ts = docSnap.getTimestamp("guardVerifiedAt")
+                val verifiedAt = ts?.toDate()?.time ?: 0L
+
+                GuardVerificationBottomSheet.newInstance(
+                    firstName  = firstName,
+                    lastName   = lastName,
+                    mi         = mi,
+                    signature  = sigBase64,
+                    verifiedAt = verifiedAt
+                ).apply {
+                    onSubmitConfirmed = { }  // read-only; guard already confirmed
+                }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
+            } catch (e: Exception) {
+                Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
+                Toast.makeText(this@MyTripActivity, "Failed to load verification details", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // ─── Assignment builder ────────────────────────────────────────────────────
 
-    private fun buildAssignment(snap: com.google.firebase.firestore.DocumentSnapshot): Assignment? {
+    /**
+     * Builds Assignment from a Map (used by both Firestore DocumentSnapshot
+     * and Socket.IO JSON data — the data shape is identical).
+     * Handles docId differently:
+     *   - Firestore path: snap.id (auto-generated Firestore document ID)
+     *   - Socket path   : data["docId"] explicitly sent by server
+     */
+    private fun buildAssignmentFromMap(data: Map<String, Any?>): Assignment? {
         return try {
-            val queueId = snap.getString("driverId") ?: ""
-            val tripStatus = snap.getString("tripStatus")
-            val guardVerified = snap.getBoolean("guardVerified") ?: false
-            val driverConfirmed = snap.getBoolean("driverConfirmed") ?: false
-            val guardFirstName = snap.getString("guardFirstName") ?: ""
-            val guardLastName = snap.getString("guardLastName") ?: ""
-            val guardSignature = snap.getString("guardSignature") ?: ""
-            val shipmentNumberRaw = snap.getString("shipmentNumber") ?: ""
+            // docId: Firestore sends it via snap.id; socket sends it in the data map as "docId"
+            val queueId = data["driverId"] as? String ?: ""
+            val tripStatus = data["tripStatus"] as? String
+            val guardVerified = data["guardVerified"] as? Boolean ?: false
+            val driverConfirmed = data["driverConfirmed"] as? Boolean ?: false
+            val guardFirstName = data["guardFirstName"] as? String ?: ""
+            val guardLastName = data["guardLastName"] as? String ?: ""
+            val guardSignature = data["guardSignature"] as? String ?: ""
+            val shipmentNumberRaw = data["shipmentNumber"] as? String ?: ""
 
-            val lineItems = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
-            val firstItem = lineItems.filterIsInstance<Map<String, Any?>>().firstOrNull()
+            val lineItemsList = data["lineItems"] as? List<*> ?: emptyList<Any>()
+            val lineItems = lineItemsList.filterIsInstance<Map<String, Any?>>()
+            val firstItem = lineItems.firstOrNull()
             val delTsRaw = firstItem?.get("actualDelDate") as? String
             val deliveryTs = try {
                 delTsRaw?.removePrefix("/Date(")?.removeSuffix(")/")?.toLong() ?: 0L
             } catch (e: Exception) { 0L }
 
-            val obdCount = lineItems.filterIsInstance<Map<String, Any?>>().size
+            val obdCount = lineItems.size
             val obdNumber = firstItem?.get("obdNumber") as? String ?: ""
 
             Assignment(
-                docId = snap.id,
+                docId = (data["docId"] as? String) ?: queueId, // socket sends "docId", fallback to driverId
                 queueId = queueId,
                 driverId = sessionManager.getDriverId() ?: "",
-                status = snap.getString("status") ?: "",
+                status = data["status"] as? String ?: "",
                 tripStatus = tripStatus,
-                plateNumber = snap.getString("truckPlate") ?: "",
-                truckType = snap.getString("truckCompany") ?: snap.getString("truckType") ?: "",
-                helper = snap.getString("helperName") ?: snap.getString("helper") ?: "",
+                plateNumber = data["truckPlate"] as? String ?: "",
+                truckType = data["truckType"] as? String ?: "",
+                truckCompany = "",
+                helper = data["helper"] as? String ?: "",
                 guardVerified = guardVerified,
                 driverConfirmed = driverConfirmed,
                 guardFirstName = guardFirstName,
@@ -428,13 +1016,44 @@ class MyTripActivity : AppCompatActivity() {
                 deliveryTimestamp = deliveryTs,
                 obdCount = obdCount,
                 requirements = emptyMap(),
-                lineItems = lineItems.filterIsInstance<Map<String, Any?>>() as List<Map<String, Any>>,
+                lineItems = lineItems as List<Map<String, Any>>,
                 obdNumber = obdNumber,
                 shipmentNumberRaw = shipmentNumberRaw
             )
         } catch (e: Exception) {
-            Log.e(TAG, "buildAssignment error: ${e.message}")
+            Log.e(TAG, "buildAssignmentFromMap error: ${e.message}")
             null
+        }
+    }
+
+    private fun parseSapAssignmentsFromSocket(data: Any?): List<Assignment> {
+        return when (data) {
+            is org.json.JSONArray -> {
+                val result = mutableListOf<Assignment>()
+                for (i in 0 until data.length()) {
+                    val obj = data.getJSONObject(i)
+                    val map = mutableMapOf<String, Any?>()
+                    obj.keys().forEach { key ->
+                        val value = obj.get(key)
+                        map[key] = if (value == org.json.JSONObject.NULL) null else value
+                    }
+                    buildAssignmentFromMap(map)?.let { result.add(it) }
+                }
+                result
+            }
+            is org.json.JSONObject -> {
+                // Single object (edge case — server sent one assignment)
+                val map = mutableMapOf<String, Any?>()
+                data.keys().forEach { key ->
+                    val value = data.get(key)
+                    map[key] = if (value == org.json.JSONObject.NULL) null else value
+                }
+                listOfNotNull(buildAssignmentFromMap(map))
+            }
+            else -> {
+                Log.w(TAG, "sap_updated: unexpected data type ${data?.javaClass?.name}")
+                emptyList()
+            }
         }
     }
 
