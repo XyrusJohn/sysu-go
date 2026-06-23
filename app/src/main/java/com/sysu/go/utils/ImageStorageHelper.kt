@@ -300,11 +300,11 @@ object ImageStorageHelper {
      * Returns a NEW bitmap (caller must recycle it) with the watermark drawn on top.
      * The original bitmap is NOT modified.
      *
-     * Watermark style:
-     *   - Background strip: #CC000000, 8dp corner radius, 12dp horizontal / 8dp vertical padding
-     *   - Text: 13sp, white (#FFFFFF), system sans-serif
+     * Watermark style (Shopee-style — large and visible):
+     *   - Background strip: #CC000000, 8dp corner radius, 18dp horizontal / 12dp vertical padding
+     *   - Text: 22sp, bold white (#FFFFFF), system sans-serif
      *   - Format: "Jun 23, 2026 • 2:30:45 PM"
-     *   - Position: 16px margin from bottom edge, left-aligned
+     *   - Position: 24px margin from bottom edge, left-aligned
      */
     private fun drawTimestampOverlay(bitmap: Bitmap, timestampMillis: Long): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
@@ -314,23 +314,23 @@ object ImageStorageHelper {
         val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm:ss a", java.util.Locale.US)
         val dateStr = dateFormat.format(java.util.Date(timestampMillis))
 
-        // Text paint
+        // Text paint — 22sp bold
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
-            textSize = 13f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
-            typeface = android.graphics.Typeface.DEFAULT
+            textSize = 22f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
 
         // Measure text to size the background strip
         val textWidth = textPaint.measureText(dateStr)
         val textHeight = textPaint.descent() - textPaint.ascent()
-        val textBottomY = result.height - 16f
+        val textBottomY = result.height - 24f
 
         // Background strip rect: left = 0, right = text + horizontal padding
         val stripLeft = 0f
-        val stripRight = textWidth + 24f  // 12dp horizontal padding each side
-        val stripTop = textBottomY - textHeight - 16f  // 8dp vertical padding
-        val stripBottom = textBottomY + 8f
+        val stripRight = textWidth + 36f  // 18dp horizontal padding each side
+        val stripTop = textBottomY - textHeight - 24f  // 12dp vertical padding
+        val stripBottom = textBottomY + 16f
 
         val stripRect = RectF(stripLeft, stripTop, stripRight, stripBottom)
 
@@ -341,7 +341,7 @@ object ImageStorageHelper {
         canvas.drawRoundRect(stripRect, 8f, 8f, bgPaint)
 
         // Draw text on top of background
-        val textX = stripLeft + 12f  // 12dp left padding inside strip
+        val textX = stripLeft + 18f  // 18dp left padding inside strip
         val textY = stripBottom - 8f - textPaint.descent()  // align baseline
         canvas.drawText(dateStr, textX, textY, textPaint)
 
