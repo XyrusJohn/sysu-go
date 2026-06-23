@@ -31,6 +31,21 @@ private const val TAG = "LocationServices"
 private const val CHANNEL_ID = "LocationServiceChannel"
 private const val NOTIFICATION_ID = 1
 
+// Static shared state — updated on every valid GPS fix.
+// MyTripActivity reads these to stamp POD photos with location.
+private var lastKnownLat: Double? = null
+private var lastKnownLng: Double? = null
+
+/**
+ * Returns the most recently cached GPS location, or null if LocationServices
+ * has not yet received a fix (e.g., app freshly opened without transit).
+ */
+fun getLastKnownLocationPair(): Pair<Double, Double>? {
+    val lat = lastKnownLat ?: return null
+    val lng = lastKnownLng ?: return null
+    return lat to lng
+}
+
 class LocationServices : Service() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -91,6 +106,10 @@ class LocationServices : Service() {
     }
 
     private fun handleLocation(lat: Double, lng: Double) {
+        // Update shared static cache for POD timestamp overlay
+        lastKnownLat = lat
+        lastKnownLng = lng
+
         val currentTime = System.currentTimeMillis()
 
         // Throttle: emit at most every 5 seconds during transit

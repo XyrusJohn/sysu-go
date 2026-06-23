@@ -42,6 +42,7 @@ import com.sysu.go.model.Assignment
 import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.ImageStorageHelper
 import com.sysu.go.utils.SessionManager
+import com.sysu.go.services.getLastKnownLocationPair as getLocationPair
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.io.File
@@ -148,7 +149,9 @@ class MyTripActivity : AppCompatActivity() {
         val status: String,
         val lineItem: Map<String, Any?>,
         val shipmentDocId: String,
-        val capturedAtMillis: Long
+        val capturedAtMillis: Long,
+        val latitude: Double? = null,
+        val longitude: Double? = null
     )
 
     // Register camera result handler before onCreate finishes
@@ -223,13 +226,24 @@ class MyTripActivity : AppCompatActivity() {
     ) {
         val capturedAtMillis = System.currentTimeMillis()
 
+        // Capture GPS position via LocationServices foreground-service cache.
+        // LocationServices runs throughout transit and caches the last valid GPS fix
+        // in a companion object — a near-instant read, no permission prompt needed
+        // (LocationServices already holds fine location permission).
+        val locationPair: Pair<Double, Double>? = getLocationPair()
+        val locationLabel: String? = if (locationPair != null) {
+            ImageStorageHelper.formatLocationLabel(locationPair.first, locationPair.second, this)
+        } else null
+
         ObdStatusBottomSheet.newInstance(item, shipmentDocId).apply {
             onConfirmWithStatus = { status, lineItem, docId ->
                 pendingPodData = PendingPodData(
                     status = status,
                     lineItem = lineItem,
                     shipmentDocId = docId,
-                    capturedAtMillis = capturedAtMillis
+                    capturedAtMillis = capturedAtMillis,
+                    latitude = locationPair?.first,
+                    longitude = locationPair?.second
                 )
 
                 if (ContextCompat.checkSelfPermission(
@@ -1280,6 +1294,16 @@ class MyTripActivity : AppCompatActivity() {
             return
         }
 
+        // Fetch lat/lng from pendingPodData before entering a lambda chain (smart-cast
+        // is not available inside a let lambda as pendingPodData is captured).
+        val podLat: Double? = pendingPodData?.latitude
+        val podLng: Double? = pendingPodData?.longitude
+        val locationLabel: String? = podLat?.let { lat ->
+            podLng?.let { lng ->
+                ImageStorageHelper.formatLocationLabel(lat, lng, this@MyTripActivity)
+            }
+        }
+
         ImageStorageHelper.uploadPodImage(
             bitmap = bitmap,
             timestampMillis = timestampMillis,
@@ -1291,7 +1315,8 @@ class MyTripActivity : AppCompatActivity() {
             onFailure = { errorMsg ->
                 bitmap.recycle()
                 onFailure(errorMsg)
-            }
+            },
+            locationLabel = locationLabel
         )
     }
 

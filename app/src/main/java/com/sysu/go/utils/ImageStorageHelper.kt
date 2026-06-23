@@ -159,31 +159,35 @@ object ImageStorageHelper {
     }
 
     /**
-     * Compresses a POD photo with a visible timestamp overlay and returns it as a
-     * base64-encoded data URI. Suitable for storing directly in Firestore.
+     * Compresses a POD photo with a visible timestamp overlay (and optional
+     * location label) and returns it as a base64-encoded data URI. Suitable for
+     * storing directly in Firestore.
      *
      * Flow:
-     *   1. Draw timestamp watermark (bottom-left, white-on-black strip)
+     *   1. Draw timestamp watermark + location (bottom-left, white-on-black strip)
      *   2. Resize to ≤1280px max dimension
      *   3. Compress to JPEG 50%
      *   4. Base64-encode to data URI
      *
      * @param bitmap         The raw photo bitmap to process.
      * @param timestampMillis Epoch millis for the timestamp shown in the watermark.
-     * @param context        Android context (for display metrics).
+     * @param context        Android context (for Geocoder reverse-geocoding).
      * @param onSuccess      Called on main thread with the base64 data URI string.
      * @param onFailure      Called on main thread with the error message string.
+     * @param locationLabel   Optional location string, e.g. "📍 Dasmarinas, Cavite".
+     *                        Pass null to show timestamp only.
      */
     fun uploadPodImage(
         bitmap: Bitmap,
         timestampMillis: Long,
         context: Context,
         onSuccess: (String) -> Unit,
-        onFailure: (String) -> Unit
+        onFailure: (String) -> Unit,
+        locationLabel: String? = null
     ) {
-        // Step 1: Draw timestamp overlay (bottom-left corner, white on 80% black strip)
+        // Step 1: Draw timestamp overlay + location (bottom-left corner, white on 90% black strip)
         val stampedBitmap = try {
-            drawTimestampOverlay(bitmap, timestampMillis)
+            drawTimestampOverlay(bitmap, timestampMillis, locationLabel)
         } catch (e: Exception) {
             Log.w(TAG, "drawTimestampOverlay failed — encoding without watermark: ${e.message}")
             // Fallback: use original bitmap if overlay drawing fails
@@ -302,11 +306,21 @@ object ImageStorageHelper {
      *
      * Watermark style (Shopee/Lalamove-standard — large and instantly readable):
      *   - Background strip: #E6000000 (90% black), full-width, tall padding
-     *   - Text: 32sp bold, white (#FFFFFF), system sans-serif
-     *   - Format: "Jun 23, 2026 • 2:30:45 PM"
-     *   - Position: 24px margin from bottom edge, left-aligned, 24px left padding
+     *   - Text line 1: 32sp bold, white (#FFFFFF), system sans-serif — datetime
+     *   - Text line 2: 22sp normal, white (#FFFFFF), system sans-serif — location
+     *   - Format: "Jun 23, 2026 • 2:30:45 PM" / "📍 Dasmarinas, Cavite"
+     *   - Position: 24px margin from bottom edge, left-aligned
+     *
+     * @param bitmap          The source photo bitmap.
+     * @param timestampMillis Epoch millis for the timestamp string.
+     * @param locationLabel   Optional location string, e.g. "📍 Dasmarinas, Cavite".
+     *                        If null, only the timestamp line is drawn.
      */
-    private fun drawTimestampOverlay(bitmap: Bitmap, timestampMillis: Long): Bitmap {
+    private fun drawTimestampOverlay(
+        bitmap: Bitmap,
+        timestampMillis: Long,
+        locationLabel: String? = null
+    ): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
 
@@ -314,37 +328,96 @@ object ImageStorageHelper {
         val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm:ss a", java.util.Locale.US)
         val dateStr = dateFormat.format(java.util.Date(timestampMillis))
 
-        // Text paint — 32sp BOLD, always same physical size regardless of screen density
+        // Text paint — 32sp BOLD timestamp
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
             textSize = 32f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
 
-        // Measure text to size the background strip
-        val textWidth = textPaint.measureText(dateStr)
+        // Location text paint — 22sp normal (smaller, secondary info)
+        val locationPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 22f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            typeface = android.graphics.Typeface.DEFAULT
+            alpha = 230  // slightly less than full white for visual hierarchy
+        }
+
+        // Measure text widths — use the wider of timestamp vs location for strip width
+        val tsWidth = textPaint.measureText(dateStr)
+        val locWidth = locationLabel?.let { locationPaint.measureText(it) } ?: 0f
+        val maxTextWidth = maxOf(tsWidth, locWidth)
         val textHeight = textPaint.descent() - textPaint.ascent()
+        val locLineHeight = locationLabel?.let { (locationPaint.descent() - locationPaint.ascent()) } ?: 0f
         val textBottomY = result.height - 24f
 
-        // Background strip rect: full-width strip to accommodate large text
+        // Background strip rect — height varies if location is present
         val stripLeft = 0f
-        val stripRight = textWidth + 48f  // 24dp horizontal padding each side
-        val stripTop = textBottomY - textHeight - 24f  // 12dp vertical padding above text
+        val stripRight = maxTextWidth + 48f  // 24dp horizontal padding each side
+        val verticalPadding = 24f  // 12dp top+bottom internal padding
+        val stripTop = if (locationLabel != null) {
+            textBottomY - textHeight - 16f - locLineHeight - verticalPadding
+        } else {
+            textBottomY - textHeight - verticalPadding
+        }
         val stripBottom = textBottomY + 16f
 
         val stripRect = RectF(stripLeft, stripTop, stripRight, stripBottom)
 
-        // Draw background strip — 90% black, a bit taller for 32sp text
+        // Draw background strip
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xE6000000.toInt()  // #E6000000 — 90% black, more opaque than before
+            color = 0xE6000000.toInt()  // #E6000000 — 90% black
         }
-        canvas.drawRoundRect(stripRect, 8f, 8f, bgPaint)
+        canvas.drawRoundRect(stripRect, 32f, 32f, bgPaint)  // 32dp corner radius
 
-        // Draw text on top of background
-        val textX = stripLeft + 24f  // 24dp left padding inside strip
-        val textY = stripBottom - 16f - textPaint.descent()  // align baseline
-        canvas.drawText(dateStr, textX, textY, textPaint)
+        // Draw timestamp — baseline at stripBottom - 16f
+        val textX = stripLeft + 24f  // 24dp left padding
+        val tsBaseline = stripBottom - 16f - textPaint.descent()
+        canvas.drawText(dateStr, textX, tsBaseline, textPaint)
+
+        // Draw location line below timestamp
+        if (locationLabel != null) {
+            val locBaseline = tsBaseline + 8f + locLineHeight
+            canvas.drawText(locationLabel, textX, locBaseline, locationPaint)
+        }
 
         return result
+    }
+
+    /**
+     * Converts decimal GPS coordinates to a human-readable locality + region string
+     * using Android's Geocoder (uses network/local database — no internet needed
+     * for local geocoding, just needs Location permission).
+     *
+     * Falls back to decimal-degree string "12.3456, 98.7654" if Geocoder fails.
+     *
+     * @return A string like "📍 Dasmarinas, Cavite" or "📍 14.5995, 120.9842"
+     */
+    fun formatLocationLabel(latitude: Double, longitude: Double, context: Context): String {
+        return try {
+            val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+            val addresses = geocoder.getFromLocation(latitude, longitude, 1)
+            if (!addresses.isNullOrEmpty()) {
+                val addr = addresses[0]
+                val locality = addr.locality ?: addr.subAdminArea ?: addr.adminArea ?: ""
+                val region = addr.adminArea ?: ""
+                val label = if (locality.isNotBlank() && region.isNotBlank()) {
+                    "$locality, $region"
+                } else if (locality.isNotBlank()) {
+                    locality
+                } else if (region.isNotBlank()) {
+                    region
+                } else {
+                    // Fall back to decimal degrees
+                    String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)
+                }
+                "📍 $label"
+            } else {
+                "📍 ${String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)}"
+            }
+        } catch (e: Exception) {
+            // Geocoder can fail on flight mode or if service unavailable
+            "📍 ${String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)}"
+        }
     }
 }
