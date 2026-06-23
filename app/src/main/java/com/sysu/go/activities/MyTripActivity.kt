@@ -652,6 +652,22 @@ class MyTripActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MyTripActivity"
+        // Bundle keys for savedInstanceState (survives Activity restart from permission dialog)
+        private const val KEY_PENDING_OBD_ITEM = "pending_obd_item"
+        private const val KEY_PENDING_SHIPMENT_DOC_ID = "pending_obd_shipment_doc_id"
+        private const val KEY_PENDING_CAPTURED_AT = "pending_captured_at_millis"
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Persist the pending OBD state so if the Activity is restarted while
+        // the location permission dialog is showing (e.g., memory pressure, OEM
+        // behavior), these values are available in onCreate for the fresh instance.
+        pendingObdItem?.let { outState.putSerializable(KEY_PENDING_OBD_ITEM, HashMap(it)) }
+        pendingObdShipmentDocId?.let { outState.putString(KEY_PENDING_SHIPMENT_DOC_ID, it) }
+        if (pendingCapturedAtMillis != 0L) {
+            outState.putLong(KEY_PENDING_CAPTURED_AT, pendingCapturedAtMillis)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -659,6 +675,21 @@ class MyTripActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMyTripBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Restore savedInstanceState from before the permission-dialog restart.
+        // When the location permission dialog appears, the Activity is STOPPED and
+        // CAN be recreated (e.g., memory pressure, some OEM implementations).
+        // Without this restore, the new Activity instance has null pendingObdItem
+        // and the GPS fix → camera flow silently falls through with no location.
+        savedInstanceState?.let { bundle ->
+            @Suppress("UNCHECKED_CAST")
+            (bundle.getSerializable(KEY_PENDING_OBD_ITEM) as? HashMap<String, Any?>)?.let {
+                pendingObdItem = it
+            }
+            pendingObdShipmentDocId = bundle.getString(KEY_PENDING_SHIPMENT_DOC_ID)
+            pendingCapturedAtMillis = bundle.getLong(KEY_PENDING_CAPTURED_AT, 0L)
+            Log.d(TAG, "Restored pending state from savedInstanceState: item=${pendingObdItem?.get("obdNumber")}, docId=$pendingObdShipmentDocId")
+        }
 
         // FusedLocationProviderClient for one-shot GPS fixes during POD capture
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
