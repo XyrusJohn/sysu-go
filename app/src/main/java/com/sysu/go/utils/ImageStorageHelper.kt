@@ -13,18 +13,33 @@ import java.io.ByteArrayOutputStream
  * No Firebase Storage is used — the image bytes are compressed and encoded as a
  * data URI string: "data:image/jpeg;base64,{base64_string}"
  *
- * Quality: JPEG 50% with max resolution of 720p on the longer edge.
- * Estimated output: ~30–80KB per photo (well within Firestore 1MB document limit).
+ * Two-pass compression:
+ *   Primary:   1280px max, JPEG 50% → ~30–80KB base64
+ *   Fallback:   960px max,  JPEG 30% → smaller still
+ *
+ * Resilient to OOM and encode failures via automatic fallback pass.
  */
 object ImageStorageHelper {
 
     private const val TAG = "ImageStorageHelper"
-    private const val JPEG_QUALITY = 50          // 50% = small base64, still readable
-    private const val MAX_DIMENSION = 1280        // 720p on long edge — good enough for POD
+    private const val JPEG_QUALITY_PRIMARY = 50 // 50% = ~30–80KB base64 — first attempt
+    private const val JPEG_QUALITY_FALLBACK = 30  // 30% = smaller still — second attempt on failure
+    private const val MAX_DIMENSION_PRIMARY = 1280   // 720p on long edge — first attempt
+    private const val MAX_DIMENSION_FALLBACK = 960   // smaller — second attempt on failure
+    // Shared convenience constant for single-pass callers (e.g. bitmap overload)
+    private const val MAX_DIMENSION = MAX_DIMENSION_PRIMARY
+    private const val JPEG_QUALITY = JPEG_QUALITY_PRIMARY
 
     /**
      * Compresses a POD photo and returns it as a base64-encoded data URI.
      * Suitable for storing directly in Firestore as a String field.
+     *
+     * Uses a two-pass approach for resilience:
+     *   1. Primary: MAX_DIMENSION_PRIMARY (1280px) + JPEG_QUALITY_PRIMARY (50%)
+     *   2. Fallback: MAX_DIMENSION_FALLBACK (960px) + JPEG_QUALITY_FALLBACK (30%)
+     *
+     * If the primary pass fails (OOM, encode failure), the fallback pass is tried
+     * automatically before returning onFailure.
      *
      * @param photoFile   The raw photo file from the camera intent.
      * @param context     Android context.
@@ -38,49 +53,81 @@ object ImageStorageHelper {
         onSuccess: (String) -> Unit,
         onFailure: (String) -> Unit
     ) {
-        // Decode file to bitmap — use options to avoid OOM on large photos
-        val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
-        BitmapFactory.decodeFile(photoFile.absolutePath, options)
-
-        // Calculate inSampleSize to fit within MAX_DIMENSION
-        val sampleSize = calculateInSampleSize(options, MAX_DIMENSION, MAX_DIMENSION)
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
+        // ── Step 1: Decode + resize at primary resolution ─────────────────────
+        val primaryBitmap = decodeAndResize(photoFile, MAX_DIMENSION_PRIMARY)
+        if (primaryBitmap == null) {
+            onFailure("Photo too large to load. Please try a smaller photo.")
+            return
         }
 
-        val bitmap = try {
-            BitmapFactory.decodeFile(photoFile.absolutePath, decodeOptions)
+        // ── Step 2: Compress + encode ─────────────────────────────────────────
+        var encoded: String? = compressToBase64DataUri(primaryBitmap, JPEG_QUALITY_PRIMARY)
+        primaryBitmap.recycle()
+
+        if (encoded == null) {
+            Log.w(TAG, "Primary encode failed — attempting fallback compression (960px / 30%)")
+            // ── Fallback pass: smaller image, lower quality ─────────────────
+            val fallbackBitmap = decodeAndResize(photoFile, MAX_DIMENSION_FALLBACK)
+            if (fallbackBitmap != null) {
+                encoded = compressToBase64DataUri(fallbackBitmap, JPEG_QUALITY_FALLBACK)
+                fallbackBitmap.recycle()
+            }
+        }
+
+        if (encoded != null) {
+            Log.d(TAG, "POD image encoded: ${encoded.length} chars (~${encoded.substringAfter("base64,").length / 1024}KB raw)")
+            onSuccess(encoded)
+        } else {
+            onFailure("Failed to process photo. Please try again.")
+        }
+    }
+
+    /**
+     * Decodes a photo file to Bitmap, resized so the longer edge ≤ maxDimension.
+     * Returns null on OOM or decode failure.
+     * Must be called on a background thread for large files.
+     */
+    private fun decodeAndResize(photoFile: java.io.File, maxDimension: Int): Bitmap? {
+        return try {
+            // Calculate inSampleSize to avoid OOM during decode
+            val boundOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(photoFile.absolutePath, boundOptions)
+
+            val sampleSize = calculateInSampleSize(boundOptions, maxDimension, maxDimension)
+            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+
+            val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath, decodeOptions)
+                ?: return null
+
+            // Resize to exact max dimension (maintaining aspect ratio)
+            val resized = resizeBitmap(bitmap, maxDimension)
+            if (resized !== bitmap) bitmap.recycle()
+            resized
         } catch (e: OutOfMemoryError) {
-            Log.e(TAG, "OOM decoding photo: ${photoFile.name}", e)
-            onFailure("Photo too large. Please try again.")
-            return
+            Log.e(TAG, "OOM decoding photo (maxDimension=$maxDimension): ${photoFile.name}", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "decodeAndResize failed: ${e.message}", e)
+            null
         }
+    }
 
-        if (bitmap == null) {
-            onFailure("Failed to decode photo.")
-            return
+    /**
+     * Compresses bitmap to JPEG at given quality and returns as base64 data URI.
+     * Returns null on compress/encode failure.
+     */
+    private fun compressToBase64DataUri(bitmap: Bitmap, quality: Int): String? {
+        return try {
+            val byteArray = ByteArrayOutputStream().use { baos ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                baos.toByteArray()
+            }
+            val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+            "data:image/jpeg;base64,$base64String"
+        } catch (e: Exception) {
+            Log.e(TAG, "JPEG compress/encode failed (quality=$quality)", e)
+            null
         }
-
-        // Resize to max MAX_DIMENSION on the longer edge (maintain aspect ratio)
-        val resized = resizeBitmap(bitmap, MAX_DIMENSION)
-        bitmap.recycle()
-
-        // Compress to JPEG 50% and base64-encode
-        val byteArray = compressToJpeg(resized, JPEG_QUALITY)
-        resized.recycle()
-
-        if (byteArray == null) {
-            onFailure("Failed to compress photo.")
-            return
-        }
-
-        val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
-        val dataUri = "data:image/jpeg;base64,$base64String"
-
-        Log.d(TAG, "POD image base64 encoded: ${dataUri.length} chars, ~${byteArray.size / 1024}KB")
-        onSuccess(dataUri)
     }
 
     /**
@@ -190,5 +237,60 @@ object ImageStorageHelper {
     fun buildStoragePath(shipmentDocId: String, obdNumber: String, timestamp: Long): String {
         val safeObd = obdNumber.replace("/", "_").replace(".", "_").replace(" ", "_")
         return "shipment_pods/${shipmentDocId}/${safeObd}_${timestamp}.jpg"
+    }
+
+    /**
+     * Draws a timestamp watermark in the bottom-left corner of the given bitmap.
+     * Returns a NEW bitmap (caller must recycle it) with the watermark drawn on top.
+     * The original bitmap is NOT modified.
+     *
+     * Watermark style:
+     *   - Background strip: #CC000000, 4dp corner radius, 12dp horizontal / 8dp vertical padding
+     *   - Text: 13sp, white (#FFFFFF), system sans-serif
+     *   - Format: "Jun 23, 2026 • 2:30:45 PM"
+     *   - Position: 16px margin from bottom and left edges
+     */
+    private fun drawTimestampOverlay(bitmap: Bitmap, timestampMillis: Long): Bitmap {
+        val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(result)
+
+        // Format timestamp
+        val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm:ss a", java.util.Locale.US)
+        val dateStr = dateFormat.format(java.util.Date(timestampMillis))
+
+        // Text paint
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 13f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            typeface = android.graphics.Typeface.DEFAULT
+        }
+
+        // Measure text to size the background strip
+        val textWidth = textPaint.measureText(dateStr)
+        val textHeight = textPaint.descent() - textPaint.ascent()
+        val textBottomY = result.height - 16f
+
+        // Background strip rect: left = 0, right = text + horizontal padding
+        val stripLeft = 0f
+        val stripRight = textWidth + 24f  // 12dp horizontal padding each side
+        val stripTop = textBottomY - textHeight - 16f  // 8dp vertical padding
+        val stripBottom = textBottomY + 8f
+
+        val stripRect = android.graphics.RectF(
+            stripLeft, stripTop, stripRight, stripBottom
+        )
+
+        // Draw background strip
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xCC000000.toInt()  // #CC000000 — 80% black
+        }
+        canvas.drawRoundRect(stripRect, 8f, 8f, bgPaint)
+
+        // Draw text on top of background
+        val textX = stripLeft + 12f  // 12dp left padding inside strip
+        val textY = stripBottom - 8f - textPaint.descent()  // align baseline
+        canvas.drawText(dateStr, textX, textY, textPaint)
+
+        return result
     }
 }
