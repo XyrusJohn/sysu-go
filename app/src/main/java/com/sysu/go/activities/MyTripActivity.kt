@@ -1,6 +1,8 @@
 package com.sysu.go.activities
 
 import android.Manifest
+import android.Manifest.permission.ACCESS_FINE_LOCATION
+import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -30,6 +32,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
@@ -83,6 +87,15 @@ class MyTripActivity : AppCompatActivity() {
 
     private lateinit var takePictureLauncher: ActivityResultLauncher<Uri>
     private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var locationPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    /** Carries the selected item+shipment while location permission is being resolved */
+    private var pendingObdItem: Map<String, Any?>? = null
+    /** Carries the shipment docId while location permission is being resolved */
+    private var pendingObdShipmentDocId: String? = null
+    /** Captured timestamp while awaiting location resolution */
+    private var pendingCapturedAtMillis: Long = 0L
+    // ⚠️ These three are the main camera-flow state — still used throughout the camera path
     private var pendingPodData: PendingPodData? = null
     private var pendingPhotoFile: File? = null
     private var uploadProgressDialog: android.app.AlertDialog? = null
@@ -165,6 +178,8 @@ class MyTripActivity : AppCompatActivity() {
             } else {
                 pendingPodData = null
                 pendingPhotoFile = null
+                pendingObdItem = null
+                pendingObdShipmentDocId = null
                 Toast.makeText(
                     this,
                     "Camera permission is required to capture POD photos.",
@@ -177,6 +192,20 @@ class MyTripActivity : AppCompatActivity() {
             ActivityResultContracts.TakePicture()
         ) { success ->
             handleCameraResult(success)
+        }
+
+        // Location permission launcher — requests fine location for GPS stamp on POD.
+        // Uses the captured item/shipment args stored in pendingObdItem/pendingObdShipmentDocId.
+        locationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            if (isGranted) {
+                // Permission granted — do a one-shot GPS fix, then resume showObdStatusSheet
+                requestFreshLocationAndProceed()
+            } else {
+                // Denied — proceed without location stamp
+                proceedToCamera(null, null)
+            }
         }
     }
 
@@ -192,6 +221,116 @@ class MyTripActivity : AppCompatActivity() {
             uploadProgressDialog?.dismiss()
             uploadProgressDialog = null
         }
+    }
+
+    // ─── Location helpers for GPS stamp ───────────────────────────────────────
+
+    /**
+     * Called by the location permission launcher callback after permission is granted.
+     * Attempts a fresh one-shot GPS fix via FusedLocationProviderClient, then proceeds
+     * to show the OBD status sheet with the resolved lat/lng.
+     *
+     * If getLastLocation() returns null (no active LocationServices fix in flight),
+     * registers a brief single-update callback that resolves within ~2s of a GPS lock.
+     * Falls back to the LocationServices cache (getLocationPair()) if all else fails.
+     */
+    private fun requestFreshLocationAndProceed() {
+        val capturedAtMillis = pendingCapturedAtMillis
+        val item = pendingObdItem
+        val shipmentDocId = pendingObdShipmentDocId
+        if (item == null || shipmentDocId == null) {
+            proceedToCamera(null, null)
+            return
+        }
+
+        @SuppressLint("MissingPermission")
+        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            if (location != null) {
+                Log.d(TAG, "Fresh GPS fix from FusedLocationProviderClient: ${location.latitude}, ${location.longitude}")
+                proceedToCamera(location.latitude, location.longitude, capturedAtMillis, item, shipmentDocId)
+            } else {
+                // No cached fix available — request a single fresh update.
+                // This takes ~1-3s after GPS lock. Register a one-shot callback.
+                Log.d(TAG, "No cached fix; requesting single GPS update...")
+                requestOneShotLocation(item, shipmentDocId, capturedAtMillis)
+            }
+        }.addOnFailureListener {
+            Log.e(TAG, "getLastLocation failed: ${it.message}")
+            // Fall back to LocationServices cache
+            val cachePair = getLocationPair()
+            proceedToCamera(
+                cachePair?.first, cachePair?.second,
+                capturedAtMillis, item, shipmentDocId
+            )
+        }
+    }
+
+    /**
+     * Does a one-shot GPS update (Priority.PRIORITY_HIGH_ACCURACY, 10s timeout).
+     * On success: calls proceedToCamera with fresh lat/lng.
+     * On timeout or failure: falls back to LocationServices cache → proceedToCamera.
+     *
+     * This bridges the gap when the driver is NOT in transit mode
+     * (i.e., LocationServices never ran, so getLocationPair() returned null).
+     */
+    @SuppressLint("MissingPermission")
+    private fun requestOneShotLocation(
+        item: Map<String, Any?>,
+        shipmentDocId: String,
+        capturedAtMillis: Long
+    ) {
+        val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+            10000L  // interval doesn't matter for one-shot
+        ).setMaxUpdates(1).setMinUpdateIntervalMillis(1000).build()
+
+        val oneShotCallback = object : com.google.android.gms.location.LocationCallback() {
+            override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                val loc = result.lastLocation
+                if (loc != null) {
+                    Log.d(TAG, "One-shot GPS resolve: ${loc.latitude}, ${loc.longitude}")
+                    proceedToCamera(loc.latitude, loc.longitude, capturedAtMillis, item, shipmentDocId)
+                } else {
+                    val cached = getLocationPair()
+                    proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+                }
+                fusedLocationClient.removeLocationUpdates(this)
+            }
+        }
+
+        fusedLocationClient.requestLocationUpdates(
+            locationRequest,
+            oneShotCallback,
+            mainLooper
+        ).addOnFailureListener {
+            Log.e(TAG, "One-shot location request failed: ${it.message}")
+            val cached = getLocationPair()
+            proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+        }
+
+        // Timeout fallback: if no GPS fix within 10s, use cache and proceed
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                fusedLocationClient.removeLocationUpdates(oneShotCallback)
+            } catch (_: Exception) { }
+            val cached = getLocationPair()
+            proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+        }, 10_000L)
+    }
+
+    /**
+     * Ends the location-request flow by showing the OBD status bottom sheet
+     * with the resolved/resolved lat/lng baked into the pendingPodData.
+     */
+    private fun proceedToCamera(
+        lat: Double?,
+        lng: Double?,
+        capturedAtMillis: Long = pendingCapturedAtMillis,
+        item: Map<String, Any?>? = pendingObdItem,
+        shipmentDocId: String? = pendingObdShipmentDocId
+    ) {
+        if (item == null || shipmentDocId == null) return
+        showObdStatusSheetWithLocation(item, shipmentDocId, capturedAtMillis, lat, lng)
     }
 
     // ─── Camera launch + handling ─────────────────────────────────────────────
@@ -218,7 +357,16 @@ class MyTripActivity : AppCompatActivity() {
 
     /**
      * Opens ObdStatusBottomSheet (status selection), then launches the camera
-     * via the registered TakePicture launcher. Handles runtime CAMERA permission.
+     * via the registered TakePicture launcher. Handles runtime CAMERA + LOCATION
+     * permissions. GPS stamp flow:
+     *
+     *   1. Store item/docId as pending for use after permission resolves.
+     *   2. Check if ACCESS_FINE_LOCATION is already granted.
+     *   3. If granted → request fresh GPS fix (FusedLocationProviderClient), or use
+     *      LocationServices cache if the driver is already in transit mode.
+     *   4. If not granted → request permission.
+     *   5. After GPS is resolved → show ObdStatusBottomSheet with lat/lng baked
+     *      into PendingPodData so the POD timestamp watermark includes the location.
      */
     private fun showObdStatusSheet(
         item: Map<String, Any?>,
@@ -226,13 +374,43 @@ class MyTripActivity : AppCompatActivity() {
     ) {
         val capturedAtMillis = System.currentTimeMillis()
 
-        // Capture GPS position via LocationServices foreground-service cache.
-        // LocationServices runs throughout transit and caches the last valid GPS fix
-        // in a companion object — a near-instant read, no permission prompt needed
-        // (LocationServices already holds fine location permission).
-        val locationPair: Pair<Double, Double>? = getLocationPair()
-        val locationLabel: String? = if (locationPair != null) {
-            ImageStorageHelper.formatLocationLabel(locationPair.first, locationPair.second, this)
+        // Store args so the permission-callback lambda can access them
+        pendingObdItem = item
+        pendingObdShipmentDocId = shipmentDocId
+        pendingCapturedAtMillis = capturedAtMillis
+
+        val hasLocationPermission = ContextCompat.checkSelfPermission(
+            this, ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasLocationPermission) {
+            // Permission already granted — go straight to GPS fix + show sheet
+            requestFreshLocationAndProceed()
+        } else {
+            // First GPS permission request — show rationale toast, then request
+            Toast.makeText(
+                this,
+                "Location is needed to stamp your POD photo with the delivery address.",
+                Toast.LENGTH_LONG
+            ).show()
+            locationPermissionLauncher.launch(ACCESS_FINE_LOCATION)
+        }
+    }
+
+    /**
+     * Internal: called after a GPS fix is obtained (either from cache, one-shot fix,
+     * or fallback). Shows the OBD status bottom sheet with lat/lng embedded.
+     */
+    private fun showObdStatusSheetWithLocation(
+        item: Map<String, Any?>,
+        shipmentDocId: String,
+        capturedAtMillis: Long,
+        lat: Double?,
+        lng: Double?
+    ) {
+        // Reverse-geocode — uses Android's on-device Geocoder, no internet needed (~30ms)
+        val locationLabel: String? = if (lat != null && lng != null) {
+            ImageStorageHelper.formatLocationLabel(lat, lng, this)
         } else null
 
         ObdStatusBottomSheet.newInstance(item, shipmentDocId).apply {
@@ -242,8 +420,8 @@ class MyTripActivity : AppCompatActivity() {
                     lineItem = lineItem,
                     shipmentDocId = docId,
                     capturedAtMillis = capturedAtMillis,
-                    latitude = locationPair?.first,
-                    longitude = locationPair?.second
+                    latitude = lat,
+                    longitude = lng
                 )
 
                 if (ContextCompat.checkSelfPermission(
@@ -255,6 +433,8 @@ class MyTripActivity : AppCompatActivity() {
                     if (!launched) {
                         pendingPodData = null
                         pendingPhotoFile = null
+                        pendingObdItem = null
+                        pendingObdShipmentDocId = null
                         Toast.makeText(
                             this@MyTripActivity,
                             "Camera not available. Please try again.",
@@ -474,6 +654,9 @@ class MyTripActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMyTripBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // FusedLocationProviderClient for one-shot GPS fixes during POD capture
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
