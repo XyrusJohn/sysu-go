@@ -245,6 +245,7 @@ class MyTripActivity : AppCompatActivity() {
 
         @SuppressLint("MissingPermission")
         fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            Log.d(TAG, "requestFreshLocationAndProceed: getLastLocation result = $location")
             if (location != null) {
                 Log.d(TAG, "Fresh GPS fix from FusedLocationProviderClient: ${location.latitude}, ${location.longitude}")
                 proceedToCamera(location.latitude, location.longitude, capturedAtMillis, item, shipmentDocId)
@@ -287,6 +288,7 @@ class MyTripActivity : AppCompatActivity() {
         val oneShotCallback = object : com.google.android.gms.location.LocationCallback() {
             override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
                 val loc = result.lastLocation
+                Log.d(TAG, "requestOneShotLocation onLocationResult: loc=$loc")
                 if (loc != null) {
                     Log.d(TAG, "One-shot GPS resolve: ${loc.latitude}, ${loc.longitude}")
                     proceedToCamera(loc.latitude, loc.longitude, capturedAtMillis, item, shipmentDocId)
@@ -378,6 +380,7 @@ class MyTripActivity : AppCompatActivity() {
         pendingObdItem = item
         pendingObdShipmentDocId = shipmentDocId
         pendingCapturedAtMillis = capturedAtMillis
+        Log.d(TAG, "showObdStatusSheet: stored item=${item["obdNumber"]}, docId=$shipmentDocId, capturedAt=$capturedAtMillis")
 
         val hasLocationPermission = ContextCompat.checkSelfPermission(
             this, ACCESS_FINE_LOCATION
@@ -408,6 +411,7 @@ class MyTripActivity : AppCompatActivity() {
         lat: Double?,
         lng: Double?
     ) {
+        Log.d(TAG, "showObdStatusSheetWithLocation: lat=$lat, lng=$lng, capturedAt=$capturedAtMillis, item=${item["obdNumber"]}")
         // Reverse-geocode — uses Android's on-device Geocoder, no internet needed (~30ms)
         val locationLabel: String? = if (lat != null && lng != null) {
             ImageStorageHelper.formatLocationLabel(lat, lng, this)
@@ -423,6 +427,7 @@ class MyTripActivity : AppCompatActivity() {
                     latitude = lat,
                     longitude = lng
                 )
+                Log.d(TAG, "onConfirmWithStatus: lat=$lat, lng=$lng, status=$status, obdNumber=${(lineItem["obdNumber"] as? String) ?: "?"}")
 
                 if (ContextCompat.checkSelfPermission(
                         this@MyTripActivity,
@@ -1481,11 +1486,13 @@ class MyTripActivity : AppCompatActivity() {
         // is not available inside a let lambda as pendingPodData is captured).
         val podLat: Double? = pendingPodData?.latitude
         val podLng: Double? = pendingPodData?.longitude
+        Log.d(TAG, "encodePodImageWithTimestamp: podLat=$podLat, podLng=$podLng, timestampMillis=$timestampMillis")
         val locationLabel: String? = podLat?.let { lat ->
             podLng?.let { lng ->
                 ImageStorageHelper.formatLocationLabel(lat, lng, this@MyTripActivity)
             }
         }
+        Log.d(TAG, "encodePodImageWithTimestamp: locationLabel=${locationLabel ?: "null"}")
 
         ImageStorageHelper.uploadPodImage(
             bitmap = bitmap,
