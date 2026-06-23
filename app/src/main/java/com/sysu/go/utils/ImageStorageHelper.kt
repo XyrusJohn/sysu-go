@@ -155,6 +155,59 @@ object ImageStorageHelper {
         onSuccess(dataUri)
     }
 
+    /**
+     * Compresses a POD photo with a visible timestamp overlay and returns it as a
+     * base64-encoded data URI. Suitable for storing directly in Firestore.
+     *
+     * Flow:
+     *   1. Draw timestamp watermark (bottom-left, white-on-black strip)
+     *   2. Resize to ≤1280px max dimension
+     *   3. Compress to JPEG 50%
+     *   4. Base64-encode to data URI
+     *
+     * @param bitmap         The raw photo bitmap to process.
+     * @param timestampMillis Epoch millis for the timestamp shown in the watermark.
+     * @param context        Android context (for display metrics).
+     * @param onSuccess      Called on main thread with the base64 data URI string.
+     * @param onFailure      Called on main thread with the error message string.
+     */
+    fun uploadPodImage(
+        bitmap: Bitmap,
+        timestampMillis: Long,
+        context: Context,
+        onSuccess: (String) -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        // Step 1: Draw timestamp overlay (bottom-left corner, white on 80% black strip)
+        val stampedBitmap = try {
+            drawTimestampOverlay(bitmap, timestampMillis)
+        } catch (e: Exception) {
+            Log.w(TAG, "drawTimestampOverlay failed — encoding without watermark: ${e.message}")
+            // Fallback: use original bitmap if overlay drawing fails
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
+        // Step 2: Resize (same logic as existing single-bitmap overload)
+        val resized = resizeBitmap(stampedBitmap, MAX_DIMENSION)
+        if (resized !== stampedBitmap) stampedBitmap.recycle()
+
+        // Step 3: Compress to JPEG
+        val byteArray = compressToJpeg(resized, JPEG_QUALITY)
+        resized.recycle()
+
+        if (byteArray == null) {
+            onFailure("Failed to compress photo.")
+            return
+        }
+
+        // Step 4: Base64-encode
+        val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        val dataUri = "data:image/jpeg;base64,$base64String"
+
+        Log.d(TAG, "POD timestamped image encoded: ${dataUri.length} chars, ~${byteArray.size / 1024}KB")
+        onSuccess(dataUri)
+    }
+
     // ─── Private helpers ───────────────────────────────────────────────────────
 
     private fun calculateInSampleSize(
