@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<com.google.android.material.card.MaterialCardView
+    android:id="@+id/cardRoot"
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -63,18 +65,19 @@
                 tools:text="Juan dela Cruz — 123 Adel St." />
         </LinearLayout>
 
-        <!-- Quantity -->
+        <!-- Quantity — removed from My Trip bottom sheet row; ObdTripAdapter controls its own visibility if needed -->
         <TextView
             android:id="@+id/tvQuantity"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:minWidth="36dp"
-            android:gravity="center"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone"
+            android:minWidth="0dp"
+            android:gravity="start"
             android:textColor="@color/text_primary"
             android:textSize="@dimen/text_size_body"
             android:textStyle="bold"
-            tools:text="229" />
+            tools:text="229"
+            tools:visibility="gone" />
 
         <!-- Delivery status pill — color-coded -->
         <TextView
@@ -87,7 +90,7 @@
             android:textSize="@dimen/text_size_caption"
             android:textStyle="bold"
             android:letterSpacing="0.05"
-            tools:text="PENDING"
+            tools:text="DELIVERED"
             tools:textColor="@color/text_amber"
             tools:background="@color/amber_pill_bg" />
 
@@ -103,6 +106,17 @@
             android:visibility="gone"
             tools:visibility="visible"
             app:tint="@color/transit_green" />
+
+        <!-- Per-row loading indicator — visible while status is being reloaded -->
+        <ProgressBar
+            android:id="@+id/pbItemLoading"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_marginStart="8dp"
+            android:indeterminate="true"
+            android:visibility="gone"
+            tools:visibility="visible"
+            android:indeterminateTint="@color/sysu_red" />
 
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

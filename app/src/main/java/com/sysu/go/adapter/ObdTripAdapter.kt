@@ -45,8 +45,12 @@ class ObdTripAdapter(
         fun bind(item: Map<String, Any?>, position: Int) {
             val ctx = binding.root.context
 
-            // OBD number
-            binding.tvObdNumber.text = item["obdNumber"] as? String ?: "—"
+            // OBD number — handle numeric (Long/Integer) stored in Firestore
+            binding.tvObdNumber.text = when (val nn = item["obdNumber"]) {
+                is String -> nn.ifBlank { "—" }
+                is Number -> nn.toString()
+                else -> (nn as? String)?.ifBlank { "—" } ?: "—"
+            }
 
             // Customer name — combine name + address if both exist
             val customerName = item["customerName"] as? String ?: "—"
@@ -61,8 +65,8 @@ class ObdTripAdapter(
                 "—"
             }
 
-            // Delivery status pill — color-coded
-            val deliveryStatus = item["deliveryStatus"] as? String
+            // Delivery Status — delivered/rejected/delivered_w_rej are compared case-insensitively
+            val deliveryStatus = (item["deliveryStatus"] as? String)?.trim()?.uppercase() ?: ""
             bindStatusPill(binding, ctx, deliveryStatus)
 
             // POD camera indicator — visible only after photo is captured
@@ -80,18 +84,19 @@ class ObdTripAdapter(
             ctx: android.content.Context,
             status: String?
         ) {
-            val (text, textColor, bgDrawable) = when (status) {
-                ctx.getString(R.string.pod_status_delivered) -> Triple(
+            // All comparisons use .uppercase() on both sides — status is already upper-cased by caller.
+            val (text, textColor, bgDrawable) = when (status?.uppercase()) {
+                ctx.getString(R.string.pod_status_delivered).uppercase() -> Triple(
                     ctx.getString(R.string.pod_delivered_label),
                     R.color.white,
                     R.drawable.bg_status_pill_green
                 )
-                ctx.getString(R.string.pod_status_rejected) -> Triple(
+                ctx.getString(R.string.pod_status_rejected).uppercase() -> Triple(
                     ctx.getString(R.string.pod_rejected_label),
                     R.color.white,
                     R.drawable.bg_status_pill_red
                 )
-                ctx.getString(R.string.pod_status_delivered_rejection) -> Triple(
+                ctx.getString(R.string.pod_status_delivered_rejection).uppercase() -> Triple(
                     ctx.getString(R.string.pod_delivered_with_rejection_label),
                     R.color.white,
                     R.drawable.bg_status_pill_amber

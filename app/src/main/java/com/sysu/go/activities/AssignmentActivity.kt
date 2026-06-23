@@ -462,6 +462,8 @@ class AssignmentActivity : AppCompatActivity() {
             ObdItemsBottomSheet.newInstance(
                 lineItems = assignment.lineItems,
                 shipmentDocId = assignment.docId,
+                rowLayoutType = RowLayoutType.DETAIL,
+                podCaptureEnabled = false,  // read-only view of OBD items
                 onItemClick = { item ->
                     val intent = Intent(this, MyTripActivity::class.java)
                     intent.putExtra("shipment_doc_id", assignment.docId)
@@ -474,6 +476,8 @@ class AssignmentActivity : AppCompatActivity() {
             ObdItemsBottomSheet.newInstance(
                 lineItems = assignment.lineItems,
                 shipmentDocId = assignment.docId,
+                rowLayoutType = RowLayoutType.DETAIL,
+                podCaptureEnabled = false,  // read-only
                 onItemClick = null,
                 onObdCameraTap = null
             ).show(supportFragmentManager, ObdItemsBottomSheet::class.java.simpleName)

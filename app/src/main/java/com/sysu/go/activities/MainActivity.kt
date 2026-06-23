@@ -1612,8 +1612,10 @@ class MainActivity : AppCompatActivity() {
         ObdItemsBottomSheet.newInstance(
             lineItems = lineItems,
             shipmentDocId = shipmentDocId,
+            rowLayoutType = RowLayoutType.DETAIL,
+            podCaptureEnabled = false,  // read-only in My Queue tab
             onItemClick = null,
-            onObdCameraTap = null  // no POD capture from MainActivity My Trip tab (read-only summary)
+            onObdCameraTap = null
         ).show(supportFragmentManager, ObdItemsBottomSheet.TAG)
     }
 

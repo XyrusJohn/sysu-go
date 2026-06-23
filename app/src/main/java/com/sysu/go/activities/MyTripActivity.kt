@@ -1001,7 +1001,6 @@ class MyTripActivity : AppCompatActivity() {
             binding.aggregateBadgeContainer.visibility = View.GONE
         } else if (listEmpty) {
             // Assignments exist but none confirmed yet
-private fun updateEmptyState
             binding.rvShipments.visibility = View.GONE
             binding.emptyState.visibility = View.VISIBLE
         } else {

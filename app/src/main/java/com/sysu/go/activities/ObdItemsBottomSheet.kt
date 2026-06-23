@@ -5,67 +5,89 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.card.MaterialCardView
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FirebaseFirestore
+import android.util.Log
 import com.sysu.go.R
 import com.sysu.go.databinding.DialogObdItemsBinding
-import com.sysu.go.utils.ImageStorageHelper
 
 /**
- * Displays OBD items for a shipment as clickable/active rows.
+ * Which row layout to inflate per item.
  *
- * Row layout: item_my_trip_obd.xml — shows status pill + camera POD indicator per item.
+ * POD    — item_my_trip_obd.xml  : OBD# + customer + status pill + left red bar
+ *                                        Camera icon (pending) + badge (completed) gated by podCaptureEnabled.
+ *                                        Used by MyTripActivity.
  *
- * State logic per row:
- *   - !isPodCompleted  → "PENDING" pill (amber) + camera icon (ivPodIndicator) clickable
- *   - DELIVERED        → "DELIVERED" pill (green) + checkmark; non-clickable
- *   - REJECTED         → "REJECTED" pill (red) + checkmark; non-clickable
- *   - DELIVERED W/ REJ → "DELIVERED W/ REJ" pill (orange) + checkmark; non-clickable
- *
- * Card tap → onItemClick (if set, for in-transit navigation)
- * Camera tap (PENDING) → onObdCameraTap (fires MyTripActivity's POD capture flow)
+ * DETAIL — item_obd_detail.xml    : OBD# + customer name + volume row + qty row + top status bar
+ *                                        Circular badge only (completed). Used by MainActivity, etc.
  */
+enum class RowLayoutType {
+    POD,    // OBD# + customer + status pill  (left-red-bar style, podCaptureEnabled gates camera)
+    DETAIL  // OBD# + customer + volume + qty rows  (top-status-bar style, read-only)
+}
+
+/**
+ * Visual appearance for a completed delivery status — badge bg, pill bg, pill text color, label.
+ */
+private data class StatusAppearance(
+    val badgeBg: Int,
+    val pillBg: Int,
+    val pillTextColor: Int,
+    val label: String
+)
+
 class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
     private var _binding: DialogObdItemsBinding? = null
     private val binding get() = _binding!!
 
     private var lineItems: List<Map<String, Any?>> = emptyList()
-
-    /** The sap_assignments document ID — needed by onObdCameraTap for Firestore update */
     private var shipmentDocId: String = ""
+    private var rowLayoutType: RowLayoutType = RowLayoutType.POD
 
-    /** Called when a completed row is tapped (in-transit navigation back to shipment) */
+    /** When false: hides the camera icon for pending rows entirely — used in non-MyTrip tabs. */
+    private var podCaptureEnabled: Boolean = true
+
+    /** OBD numbers currently being reloaded — shown with per-row spinner. */
+    private val loadingForObdNumbers: MutableSet<String> = mutableSetOf()
+
     var onItemClick: ((item: Map<String, Any?>) -> Unit)? = null
-
-    /** Called when the camera button is tapped on a PENDING row.
-     *  Arguments: (lineItem, shipmentDocId) — driver is ready to capture POD. */
     var onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
-
-    /** Called when the sheet needs to reload its lineItems from fresh Firestore data.
-     *  Triggers a direct Firestore re-fetch + refreshWith().
-     *  Shows a spinner while reloading so the driver knows data is being updated. */
     var onRefreshRequest: (() -> Unit)? = null
 
-    /** Shows spinner indicating a background refresh is in progress.
-     *  Called immediately when the user needs feedback that an update is happening. */
-    fun showRefreshing() {
+    /**
+     * Shows loading feedback while data is being refreshed.
+     *
+     * Per-row mode (obdNumber != null):
+     *   - All rows stay visible with normal colors
+     *   - Loading row shows pbItemLoading spinner + ivPodIndicator dims to 40% alpha
+     *   - Sheet-level spinner is hidden
+     *
+     * Full-sheet mode (obdNumber == null):
+     *   - All rows hidden; sheet-level ProgressBar shown centered
+     */
+    fun showRefreshing(obdNumber: String? = null) {
         if (_binding == null) return
-        binding.pbObdRefresh.visibility = View.VISIBLE
+        if (obdNumber != null) {
+            // Per-row mode: track the specific row, show per-row spinner, keep rows visible
+            loadingForObdNumbers.add(obdNumber)
+            binding.pbObdRefresh.visibility = View.GONE
+        } else {
+            // Full-sheet mode: hide rows, show centered spinner
+            binding.pbObdRefresh.visibility = View.VISIBLE
+        }
         binding.tvObdSheetEmpty.visibility = View.GONE
-        binding.llObdSheetContainer.visibility = View.GONE
     }
 
-    /** Hides spinner after background refresh completes. */
     fun hideRefreshing() {
         if (_binding == null) return
         binding.pbObdRefresh.visibility = View.GONE
+        loadingForObdNumbers.clear()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,7 +121,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
     private fun populateData() {
         binding.tvObdSheetCount.text = lineItems.size.toString()
-        binding.pbObdRefresh.visibility = View.GONE  // hide spinner on every repopulation
+        binding.pbObdRefresh.visibility = View.GONE
 
         val container = binding.llObdSheetContainer
         container.removeAllViews()
@@ -113,180 +135,291 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         binding.tvObdSheetEmpty.isVisible = false
         binding.llObdSheetContainer.isVisible = true
 
+        val rowInflater = LayoutInflater.from(requireContext())
+
         lineItems.forEachIndexed { index, item ->
-            // Inflate row using the existing item_my_trip_obd.xml layout
-            val rowView = LayoutInflater.from(requireContext())
-                .inflate(R.layout.item_my_trip_obd, container, false) as MaterialCardView
+            val rowView: View = when (rowLayoutType) {
+                RowLayoutType.POD    -> inflatePodRow(rowInflater, container, item)
+                RowLayoutType.DETAIL -> inflateDetailRow(rowInflater, container, item)
+            }
 
             if (index % 2 == 1) {
-                rowView.setCardBackgroundColor(
+                rowView.findViewById<MaterialCardView>(R.id.cardRoot)?.setCardBackgroundColor(
                     ContextCompat.getColor(requireContext(), R.color.surface2)
                 )
-            }
-
-            // ─── Bind field values ─────────────────────────────────────────
-
-            val tvObdNumber = rowView.findViewById<TextView>(R.id.tvObdNumber)
-            val tvCustomerName = rowView.findViewById<TextView>(R.id.tvCustomerName)
-            val tvQuantity = rowView.findViewById<TextView>(R.id.tvQuantity)
-            val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
-            val ivPodIndicator = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
-
-            tvObdNumber.text = item["obdNumber"] as? String ?: "—"
-
-            val qty = (item["quantity"] as? Number)?.toDouble()
-            tvQuantity.text = if (qty != null) {
-                if (qty == qty.toLong().toDouble()) {
-                    qty.toLong().toString()
-                } else {
-                    qty.toString()
-                }
-            } else {
-                "—"
-            }
-
-            tvCustomerName.text = item["customerName"] as? String ?: "—"
-
-            // ─── State: delivery status pill + ivPodIndicator ─────────────
-            val isPodCompleted = item["isPodCompleted"] as? Boolean ?: false
-            val deliveryStatus = item["deliveryStatus"] as? String ?: ""
-            val podImageUrl = item["podImageUrl"] as? String ?: ""
-
-            tvDeliveryStatus.post {
-                configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, podImageUrl)
-            }
-
-            // ─── Click handling ───────────────────────────────────────────
-
-            if (isPodCompleted) {
-                // Completed rows: thumbnail (green square) tap → open fullscreen preview.
-                // The ivPodIndicator may display a base64 thumbnail; tapping it triggers the
-                // fullscreen preview regardless of which part of the card is tapped.
-                ivPodIndicator.isClickable = true
-                ivPodIndicator.setOnClickListener {
-                    onItemClick?.invoke(item)
-                }
-                rowView.setOnClickListener {
-                    onItemClick?.invoke(item)
-                }
-            } else {
-                // Pending rows: camera button tap → trigger POD capture flow
-                ivPodIndicator.setOnClickListener {
-                    onObdCameraTap?.invoke(item, shipmentDocId)
-                }
-                // Card tap → camera (same action as icon tap for pending items)
-                rowView.setOnClickListener {
-                    onObdCameraTap?.invoke(item, shipmentDocId)
-                }
             }
 
             container.addView(rowView)
         }
     }
 
-    /**
-     * Replaces the displayed lineItems with fresh data and rebuilds the list UI.
-     * Hides any visible refresh spinner as soon as data is available — called by
-     * the socket pod_updated listener OR the onRefreshRequest fallback in MyTripActivity.
-     */
-    fun refreshWith(newLineItems: List<Map<String, Any?>>) {
-        lineItems = newLineItems
-        hideRefreshing()  // hide spinner ASAP once data arrives
-        if (_binding != null) {
-            binding.pbObdRefresh.visibility = View.GONE
-            populateData()
+    // ─── POD row — item_my_trip_obd.xml ─────────────────────────────────────────
+
+    private fun inflatePodRow(inflater: LayoutInflater, container: ViewGroup, item: Map<String, Any?>): View {
+        val rowView = inflater.inflate(R.layout.item_my_trip_obd, container, false) as MaterialCardView
+
+        val tvObdNumber    = rowView.findViewById<TextView>(R.id.tvObdNumber)
+        val tvCustomerName = rowView.findViewById<TextView>(R.id.tvCustomerName)
+        val tvQuantity     = rowView.findViewById<TextView>(R.id.tvQuantity)
+        val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
+        val ivPodIndicator = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
+        val pbItemLoading  = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
+
+        val obd = safeObdNumber(item["obdNumber"])
+
+        // OBD number
+        tvObdNumber.text = obd
+        tvCustomerName.text = item["customerName"] as? String ?: "—"
+
+        // Quantity — gone from bottom sheet but tvQuantity is in the layout (unused here via width/height 0dp)
+        tvQuantity.text = formatQuantityForDisplay(item["quantity"])
+
+        // State
+        val isPodCompleted = item["isPodCompleted"] as? Boolean ?: false
+        val deliveryStatus  = (item["deliveryStatus"] as? String)?.trim()?.uppercase() ?: ""
+        val podImageUrl     = item["podImageUrl"] as? String ?: ""
+
+        // Per-row loading state
+        val isLoading = loadingForObdNumbers.contains(obd)
+        pbItemLoading.isVisible = isLoading
+
+        // Dim the indicator when this row is loading else configure normally
+        if (!isLoading) {
+            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, podImageUrl)
+        } else {
+            // Loading: keep status pill but dim the indicator
+            tvDeliveryStatus.alpha = 1f
+            ivPodIndicator.alpha = 0.35f
+        }
+
+        // Click handling — disabled while loading
+        if (!isLoading) {
+            if (isPodCompleted) {
+                ivPodIndicator.isClickable = true
+                ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
+                rowView.setOnClickListener { onItemClick?.invoke(item) }
+            } else {
+                if (podCaptureEnabled) {
+                    ivPodIndicator.setOnClickListener { onObdCameraTap?.invoke(item, shipmentDocId) }
+                    rowView.setOnClickListener { onObdCameraTap?.invoke(item, shipmentDocId) }
+                }
+            }
+        } else {
+            ivPodIndicator.isClickable = false
+            rowView.setOnClickListener(null)
+        }
+
+        return rowView
+    }
+
+    // ─── DETAIL row — item_obd_detail.xml ──────────────────────────────────────
+
+    private fun inflateDetailRow(inflater: LayoutInflater, container: ViewGroup, item: Map<String, Any?>): View {
+        val rowView = inflater.inflate(R.layout.item_obd_detail, container, false) as MaterialCardView
+
+        val tvObdNumber      = rowView.findViewById<TextView>(R.id.tvObdNumber)
+        val tvCustomerName   = rowView.findViewById<TextView>(R.id.tvCustomerName)
+        val tvVolume         = rowView.findViewById<TextView>(R.id.tvVolume)
+        val tvDetailQuantity = rowView.findViewById<TextView>(R.id.tvDetailQuantity)
+        val viewStatusBar    = rowView.findViewById<View>(R.id.viewStatusBar)
+        val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
+        val ivPodIndicator   = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
+        val pbItemLoading    = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
+
+        val obd = safeObdNumber(item["obdNumber"])
+
+        // Fields
+        tvObdNumber.text = obd
+        tvCustomerName.text = item["customerName"] as? String ?: "—"
+
+        // Volume — stored as numeric in Firestore
+        tvVolume.text = formatVolumeForDisplay(item["volume"])
+
+        // Quantity — stored as string "39.000" or numeric 39
+        tvDetailQuantity.text = formatQuantityForDisplay(item["quantity"])
+
+        // State
+        val isPodCompleted = item["isPodCompleted"] as? Boolean ?: false
+        val deliveryStatus = (item["deliveryStatus"] as? String)?.trim()?.uppercase() ?: ""
+        val podImageUrl    = item["podImageUrl"] as? String ?: ""
+
+        // Per-row loading state
+        val isLoading = loadingForObdNumbers.contains(obd)
+        pbItemLoading.isVisible = isLoading
+
+        // Dim the indicator during loading
+        if (!isLoading) {
+            bindStatusBar(viewStatusBar, isPodCompleted, deliveryStatus)
+            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, podImageUrl)
+        } else {
+            viewStatusBar.alpha = 0.4f
+            tvDeliveryStatus.alpha = 1f
+            ivPodIndicator.alpha = 0.35f
+        }
+
+        // Click: all rows tap to item detail — disabled while loading
+        if (!isLoading) {
+            ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
+            rowView.setOnClickListener { onItemClick?.invoke(item) }
+        } else {
+            ivPodIndicator.isClickable = false
+            rowView.setOnClickListener(null)
+        }
+
+        return rowView
+    }
+
+    // ─── Shared helpers ─────────────────────────────────────────────────────────
+
+    private fun safeObdNumber(raw: Any?): String = when (raw) {
+        is String -> raw.ifBlank { "—" }
+        is Number -> raw.toString()
+        else -> (raw as? String)?.ifBlank { "—" } ?: "—"
+    }
+
+    private fun formatQuantityForDisplay(raw: Any?): String {
+        return when (raw) {
+            is String -> raw.ifBlank { "—" }
+            is Number -> raw.toString()
+            else -> "—"
         }
     }
 
+    private fun formatVolumeForDisplay(raw: Any?): String {
+        val num = when (raw) {
+            is Number -> raw.toDouble()
+            is String -> raw.toDoubleOrNull()
+            else -> null
+        }
+        return if (num != null) String.format("%.3f m³", num) else "—"
+    }
+
     /**
-     * Sets tvDeliveryStatus pill text/color/bg and ivPodIndicator icon based on state.
-     * Non-clickable for completed rows (no camera re-shoot by default).
-     * When podImageUrl is available on a completed item, ivPodIndicator shows a
-     * thumbnail of the captured POD photo instead of a checkmark icon.
+     * Top status bar color — DETAIL rows only.
+     * POD rows use the left red accent bar already baked into item_my_trip_obd.xml.
+     */
+    private fun bindStatusBar(viewStatusBar: View, isPodCompleted: Boolean, deliveryStatus: String) {
+        val ctx = requireContext()
+        val color = when {
+            !isPodCompleted || deliveryStatus.isBlank() -> R.color.sysu_red
+            deliveryStatus == getString(R.string.pod_status_delivered).uppercase() -> R.color.sysu_green
+            deliveryStatus == getString(R.string.pod_status_rejected).uppercase() -> R.color.text_red
+            deliveryStatus == getString(R.string.pod_status_delivered_rejection).uppercase() -> R.color.sysu_gold
+            else -> R.color.sysu_red
+        }
+        viewStatusBar.setBackgroundColor(ContextCompat.getColor(ctx, color))
+        viewStatusBar.alpha = 1f
+    }
+
+    /**
+     * Status pill text/color + ivPodIndicator appearance.
+     *
+     * POD layout (podCaptureEnabled-gated):
+     *   - PENDING: amber camera icon with amber bg; tap fires onObdCameraTap
+     *   - COMPLETED: circular badge + checkmark; tap fires onItemClick
+     *
+     * DETAIL layout:
+     *   - PENDING: amber "PENDING" pill; no pod indicator
+     *   - COMPLETED: colored pill + circular badge; tap fires onItemClick
+     *
+     * Thumbnail decode is NEVER shown inline — only the circular badge.
+     * Full photo preview fires via onItemClick.
      */
     private fun configureStatusPill(
         tvDeliveryStatus: TextView,
         ivPodIndicator: ImageView,
         isPodCompleted: Boolean,
         deliveryStatus: String,
-        podImageUrl: String = ""
+        @Suppress("UNUSED_PARAMETER") podImageUrl: String = ""
     ) {
         val ctx = requireContext()
-
-        // Attempt to decode the POD thumbnail if a base64 data URI is present
-        val thumbnailBitmap = if (podImageUrl.isNotBlank()) {
-            try {
-                ImageStorageHelper.decodeBase64ToBitmap(podImageUrl)
-            } catch (e: Exception) {
-                null
-            }
-        } else null
 
         if (!isPodCompleted || deliveryStatus.isBlank()) {
             // ── PENDING ──
             tvDeliveryStatus.text = "PENDING"
             tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
             tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
+            tvDeliveryStatus.alpha = 1f
 
-            ivPodIndicator.visibility = View.VISIBLE
-            ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
-            ivPodIndicator.imageTintList = ContextCompat.getColorStateList(ctx, R.color.text_amber)
-            ivPodIndicator.isClickable = true
-        } else {
-            // ── COMPLETED states: show photo thumbnail if available ──────
-            when (deliveryStatus) {
-                getString(R.string.pod_status_delivered) -> {
-                    tvDeliveryStatus.text = "DELIVERED"
-                    tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_green)
-                    tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.white))
-
-                    ivPodIndicator.visibility = View.VISIBLE
-                    if (thumbnailBitmap != null) {
-                        ivPodIndicator.setImageBitmap(thumbnailBitmap)
-                    } else {
-                        ivPodIndicator.setImageResource(R.drawable.ic_checkmark_white)
-                    }
-                    ivPodIndicator.isClickable = true
-                }
-                getString(R.string.pod_status_rejected) -> {
-                    tvDeliveryStatus.text = "REJECTED"
-                    tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_red)
-                    tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.white))
-
-                    ivPodIndicator.visibility = View.VISIBLE
-                    if (thumbnailBitmap != null) {
-                        ivPodIndicator.setImageBitmap(thumbnailBitmap)
-                    } else {
-                        ivPodIndicator.setImageResource(R.drawable.ic_checkmark_white)
-                    }
-                    ivPodIndicator.isClickable = true
-                }
-                getString(R.string.pod_status_delivered_rejection) -> {
-                    tvDeliveryStatus.text = "DELIVERED W/ REJ"
-                    tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_orange)
-                    tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.white))
-
-                    ivPodIndicator.visibility = View.VISIBLE
-                    if (thumbnailBitmap != null) {
-                        ivPodIndicator.setImageBitmap(thumbnailBitmap)
-                    } else {
-                        ivPodIndicator.setImageResource(R.drawable.ic_checkmark_white)
-                    }
-                    ivPodIndicator.isClickable = true
-                }
-                else -> {
-                    // Fallback: show PENDING indicator
-                    tvDeliveryStatus.text = "PENDING"
-                    tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
-                    tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
-
-                    ivPodIndicator.visibility = View.VISIBLE
-                    ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
-                    ivPodIndicator.imageTintList = ContextCompat.getColorStateList(ctx, R.color.text_amber)
-                    ivPodIndicator.isClickable = true
-                }
+            if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
+                // POD layout: show amber camera icon
+                ivPodIndicator.visibility = View.VISIBLE
+                ivPodIndicator.alpha = 1f
+                ivPodIndicator.setBackgroundResource(R.drawable.bg_badge_amber)
+                ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
+                ivPodIndicator.imageTintList = null
+                ivPodIndicator.isClickable = true
+            } else {
+                // DETAIL layout: no pod indicator for pending rows
+                ivPodIndicator.visibility = View.GONE
+                ivPodIndicator.isClickable = false
             }
+        } else {
+            // ── COMPLETED states: circular badge only, no thumbnail in row ──
+            val statusUpper = deliveryStatus.uppercase().trim()
+            val appearance: StatusAppearance = when {
+                statusUpper == getString(R.string.pod_status_delivered).uppercase() ->
+                    StatusAppearance(R.drawable.bg_badge_green, R.drawable.bg_status_pill_green, R.color.white, "DELIVERED")
+                statusUpper == getString(R.string.pod_status_rejected).uppercase() ->
+                    StatusAppearance(R.drawable.bg_badge_red, R.drawable.bg_status_pill_red, R.color.white, "REJECTED")
+                statusUpper == getString(R.string.pod_status_delivered_rejection).uppercase() ->
+                    StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, "DEL. W/ REJ")
+                else ->
+                    StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, "PENDING")
+            }
+
+            tvDeliveryStatus.text = appearance.label
+            tvDeliveryStatus.setBackgroundResource(appearance.pillBg)
+            tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, appearance.pillTextColor))
+            tvDeliveryStatus.alpha = 1f
+
+            // Never show thumbnail in row — always the circular badge
+            ivPodIndicator.visibility = View.VISIBLE
+            ivPodIndicator.alpha = 1f
+            ivPodIndicator.setBackgroundResource(appearance.badgeBg)
+            ivPodIndicator.setImageResource(R.drawable.ic_checkmark_white)
+            ivPodIndicator.imageTintList = null
+            ivPodIndicator.isClickable = true
         }
+    }
+
+    /**
+     * Replaces lineItems with fresh data and refreshes the list UI.
+     *
+     * Per-row mode (calling showRefreshing(obdNumber) first):
+     *   - Clears loading state for that specific OBD only
+     *   - Sheet-level spinner stays hidden
+     *   - Only the updated row changes — no full repaint flicker
+     *
+     * Full-sheet mode (calling showRefreshing() first, no obdNumber):
+     *   - Clears all loading, hides sheet spinner
+     *   - Full populateData() repaint
+     *
+     * Guard: if the sheet has been dismissed (_binding == null), this is a no-op.
+     */
+    fun refreshWith(
+        newLineItems: List<Map<String, Any?>>,
+        obdNumberToClear: String? = null
+    ) {
+        lineItems = newLineItems
+
+        // Clear loading state for targeted OBD, or all if null
+        if (obdNumberToClear != null) {
+            loadingForObdNumbers.remove(obdNumberToClear)
+        } else {
+            loadingForObdNumbers.clear()
+        }
+
+        // If any OBD is still loading (async in-flight from another update), keep sheet spinner
+        if (loadingForObdNumbers.isEmpty()) {
+            binding.pbObdRefresh.visibility = View.GONE
+        }
+
+        if (_binding == null) {
+            Log.w(TAG, "refreshWith: sheet dismissed, skipping UI rebuild")
+            return
+        }
+        populateData()
     }
 
     override fun onDestroyView() {
@@ -297,18 +430,19 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     companion object {
         const val TAG = "ObdItemsBottomSheet"
 
-        private const val ARG_LINE_ITEMS = "arg_line_items"
-        private const val ARG_SHIPMENT_DOC_ID = "arg_shipment_doc_id"
-
         fun newInstance(
             lineItems: List<Map<String, Any?>>,
             shipmentDocId: String,
+            rowLayoutType: RowLayoutType = RowLayoutType.POD,
+            podCaptureEnabled: Boolean = true,
             onItemClick: ((item: Map<String, Any?>) -> Unit)? = null,
             onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
         ): ObdItemsBottomSheet {
             return ObdItemsBottomSheet().apply {
                 this.lineItems = lineItems
                 this.shipmentDocId = shipmentDocId
+                this.rowLayoutType = rowLayoutType
+                this.podCaptureEnabled = podCaptureEnabled
                 this.onItemClick = onItemClick
                 this.onObdCameraTap = onObdCameraTap
             }

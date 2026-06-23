@@ -191,6 +191,10 @@
     <string name="my_trip_no_active_trip">No active trip found.</string>
     <string name="my_trip_loading">Loading shipment detailsâ€¦</string>
 
+    <!-- OBD row field labels -->
+    <string name="label_volume">Volume</string>
+    <string name="label_quantity">Qty</string>
+
     <!-- Per-OBD POD Status -->
     <string name="pod_status_delivered">Delivered</string>
     <string name="pod_status_rejected">Rejected</string>

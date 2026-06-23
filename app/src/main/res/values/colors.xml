@@ -50,7 +50,8 @@
     <color name="text_red">#C62828</color>
 
     <!-- Orange / Delivered w/ Rejection status -->
-    <color name="orange_pill_bg">#FFF3E0</color>
+    <color name="orange_pill_bg">#FFE0B2</color>
+    <color name="orange_badge_bg">#FF6D00</color>
     <color name="text_orange">#E65100</color>
 
 </resources>

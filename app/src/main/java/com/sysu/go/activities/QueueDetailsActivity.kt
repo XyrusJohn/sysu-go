@@ -196,6 +196,8 @@ class QueueDetailsActivity : AppCompatActivity() {
             val sheet = ObdItemsBottomSheet.newInstance(
             lineItems = currentLineItems,
             shipmentDocId = currentSapDocId,
+            rowLayoutType = RowLayoutType.DETAIL,
+            podCaptureEnabled = false,  // read-only in Queue Details
             onItemClick = null,
             onObdCameraTap = null
         )
