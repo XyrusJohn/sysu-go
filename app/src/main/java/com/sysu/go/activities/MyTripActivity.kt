@@ -611,7 +611,7 @@ class MyTripActivity : AppCompatActivity() {
 
             original["deliveryStatus"] = status
             original["podImageUrl"] = podImageUrl
-            original["podCapturedAt"] = Timestamp.now()
+            original["podCapturedAt"] = Timestamp(java.util.Date(capturedAtMillis))
             original["isPodCompleted"] = true
 
             lineItems[targetIndex] = original
