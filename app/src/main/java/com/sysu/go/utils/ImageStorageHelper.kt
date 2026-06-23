@@ -3,6 +3,9 @@ package com.sysu.go.utils
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -329,7 +332,7 @@ object ImageStorageHelper {
         val stripTop = textBottomY - textHeight - 16f  // 8dp vertical padding
         val stripBottom = textBottomY + 8f
 
-        val stripRect = android.graphics.RectF(
+        val stripRect = RectF(
             stripLeft, stripTop, stripRight, stripBottom
         )
 

@@ -1543,8 +1543,6 @@ private fun updateEmptyState
     }
 
     /**
-
-    /**
      * Copy of BitmapFactory's calculateInSampleSize for use with File decode path.
      * Mirrors the logic already in ImageStorageHelper.decodeAndResize() — kept here
      * so encodePodImageWithTimestamp is fully self-contained.
