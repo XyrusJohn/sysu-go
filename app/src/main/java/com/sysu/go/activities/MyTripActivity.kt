@@ -52,10 +52,17 @@ import java.io.File
  *
  * Red banner: bouncing circles + pulse rings (same animation as AssignmentActivity).
  * RecyclerView: one card per confirmed shipment using item_my_trip_tab_card.
- * Tapping START TRIP on a card → confirmShipment() + startSingleShipment()
- * → saves activeSapDocId → launches MyTripActivity (OBD delivery execution).
- * Tapping "VIEW OBD ITEMS" on an in_transit card → launches MyTripActivity
- * scoped to that shipment.
+ *
+ * Navigation flow:
+ *   - START TRIP (confirmed, not yet in_transit) → confirmShipment() + confirmAndStartTrip()
+ *     → saves session state → launches TransitActivity (live map / OBD delivery execution).
+ *   - Tapping "VIEW OBD ITEMS" on an in_transit card → openObdBottomSheet() → ObdItemsBottomSheet.
+ *
+ * Real-time sync:
+ *   - sap_updated socket event rebuilds the full shipment list (primary source of truth).
+ *   - pod_updated socket event refreshes the open ObdItemsBottomSheet in-place.
+ *   - Intent-shipped shipment_doc_id is consumed once on first load, then cleared so
+   socket updates show the full list (prevents UI from being locked to one shipment).
  *
  * Bouncing circles and pulse rings are cleaned up in onDestroy.
  */
@@ -89,6 +96,33 @@ class MyTripActivity : AppCompatActivity() {
     /** Reference to the currently-open OBD items bottom sheet, so we can refresh it in-place */
     private var currentObdBottomSheet: ObdItemsBottomSheet? = null
 
+    /**
+     * Cached copy of the launching shipment_doc_id.
+     *
+     * Captured ONCE in onCreate and consumed by the first handleAssignmentList() call
+     * (via loadAssignments / socketSapUpdatedListener), causing loadSpecificShipment() to
+     * render that single shipment. After that first load, it is cleared (set to null) so
+     * that all subsequent sap_updated socket events render the full list — not a single
+     * locked shipment.
+     *
+     * Without this, every sap_updated re-reads intent.getStringExtra() and every
+     * handleAssignmentList call does loadSpecificShipment() → UI stays stuck on one
+     * shipment indefinitely.
+     */
+    private var intentShipmentDocId: String? = null
+
+    /**
+     * Clears intentShipmentDocId after the first handleAssignmentList call.
+     * After this is called, subsequent handleAssignmentList calls receive null
+     * so sap_updated events render the full shipment list, not a single shipment.
+     */
+    private fun consumeIntentDocId() {
+        if (intentShipmentDocId != null) {
+            Log.d(TAG, "consumeIntentDocId: consumed=${intentShipmentDocId}, subsequent updates will show full list")
+        }
+        intentShipmentDocId = null
+    }
+
     // Socket.IO event listeners — registered in onResume, removed in onPause
     private val socketSapUpdatedListener: (data: Any?) -> Unit = { data ->
         // Server emits sap_updated with the full driver assignment list after any change.
@@ -101,8 +135,8 @@ class MyTripActivity : AppCompatActivity() {
                 val sessionDriverId = sessionManager.getDriverId() ?: return@runOnUiThread
                 fetchDriverData(sessionDriverId, list) { enriched ->
                     enrichWithQueueData(enriched) { final ->
-                        val intentDocId = intent.getStringExtra("shipment_doc_id")
-                        handleAssignmentList(final, intentDocId)
+                        // intentShipmentDocId is consumed on first load only — see onCreate init.
+                        handleAssignmentList(final, intentShipmentDocId)
                     }
                 }
             } catch (e: Exception) {
@@ -120,7 +154,8 @@ class MyTripActivity : AppCompatActivity() {
                     val shipmentDocId = data.optString("shipmentDocId")
                     val bottomSheet = currentObdBottomSheet
                     if (bottomSheet != null && shipmentDocId.isNotBlank()) {
-                        // Re-fetch fresh lineItems from Firestore (POD write succeeded, data is fresh)
+                        // Show loading feedback immediately so driver knows data is refreshing
+                        bottomSheet.showRefreshing()
                         lifecycleScope.launch {
                             try {
                                 val docSnap = db.collection("sap_assignments")
@@ -129,10 +164,11 @@ class MyTripActivity : AppCompatActivity() {
                                     .await()
                                 val fresh = docSnap.get("lineItems") as? List<Map<String, Any>>
                                 if (!fresh.isNullOrEmpty()) {
-                                    bottomSheet.refreshWith(fresh.filterIsInstance<Map<String, Any?>>())
+                                    bottomSheet.refreshWith(fresh.filterIsInstance<Map<String, Any?>>(), null)
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "pod_updated refresh failed: ${e.message}")
+                                bottomSheet.hideRefreshing()
                             }
                         }
                     }
@@ -251,7 +287,7 @@ class MyTripActivity : AppCompatActivity() {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
             }
-        }.show(supportFragmentManager, ObdStatusBottomSheet.TAG)
+        }.show(supportFragmentManager, ObdItemsBottomSheet.TAG)
     }
 
     /**
@@ -325,82 +361,179 @@ class MyTripActivity : AppCompatActivity() {
         val podData = pendingPodData
         val photoFile = pendingPhotoFile
 
-        if (!success || podData == null || photoFile == null) {
-            // Camera was cancelled or failed
+        Log.d(TAG, "handleCameraResult: success=$success, podData=${podData != null}, photoFile=${photoFile?.exists()}")
+
+        fun clearPending() {
             pendingPodData = null
             pendingPhotoFile = null
+        }
+
+        // ── Early exit: camera cancelled or state corrupted ────────────────────
+        if (!success || podData == null || photoFile == null) {
+            Log.d(TAG, "handleCameraResult: early-exit — camera cancelled or state null")
+            clearPending()
             return
         }
 
-        pendingPodData = null
-        pendingPhotoFile = null
+        Log.d(TAG, "  → podData: shipmentDocId=${podData.shipmentDocId}, obdNumber=${podData.lineItem["obdNumber"]}, status=${podData.status}")
 
         showUploadProgress()
 
-        // Compress + base64-encode; no Firebase Storage needed
-        ImageStorageHelper.uploadPodImage(
+        // ── Upload + Firestore update with retry ──────────────────────────────
+        // Decode the photo file to a Bitmap, resized to 1280px max dimension
+        val boundOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(photoFile.absolutePath, boundOptions)
+
+        encodePodImageWithTimestamp(
             photoFile = photoFile,
-            context = this,
-            onSuccess = { base64DataUri ->
-                Log.d(TAG, "POD image base64 encoded: ${base64DataUri.length} chars")
+            boundOptions = boundOptions,
+            timestampMillis = podData.capturedAtMillis,
+            onSuccess = { dataUri ->
+                Log.d(TAG, "POD image encoded SUCCESS: ${dataUri.length} chars. Proceeding to Firestore update...")
+                Log.d(TAG, "  → shipmentDocId=${podData.shipmentDocId}, obdNumber=${podData.lineItem["obdNumber"]}, status=${podData.status}")
 
                 lifecycleScope.launch {
-                    try {
-                        updateObdLineItemInFirestore(
-                            shipmentDocId = podData.shipmentDocId,
-                            lineItem = podData.lineItem,
-                            status = podData.status,
-                            podImageUrl = base64DataUri,
-                            capturedAtMillis = podData.capturedAtMillis
-                        )
-                        hideUploadProgress()
+                    var attempts = 0
+                    val maxAttempts = MAX_FIRESTORE_RETRY_ATTEMPTS
+                    var lastError: Exception? = null
 
-                        // ── Real-time socket broadcast ─────────────────────────
-                        // Tell the server this POD was saved so it can emit pod_updated.
-                        // When backend migrates to MySQL: the REST/PUT endpoint should
-                        // emit pod_updated with {shipmentDocId, lineItems} to this driver's socket.
-                        SocketManager.emitPodUpdated(podData.shipmentDocId)
-
-                        // ── Immediate bottom sheet refresh ─────────────────────
-                        // Two-path update guarantees the status pill updates even if the
-                        // socket event is lost or arrives after the sheet is reopened.
-                        //
-                        // Path 1 — socket listener: socketPodUpdatedListener re-fetches
-                        //          Firestore and calls bottomSheet.refreshWith() (reliable).
-                        // Path 2 — showRefreshing() fallback: shows spinner and fires
-                        //          onRefreshRequest, which does a direct Firestore read
-                        //          and calls refreshWith (covers race conditions).
-                        val bottomSheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
-                            as? ObdItemsBottomSheet)
-                        bottomSheet?.showRefreshing()  // spinner ON immediately
-                        bottomSheet?.onRefreshRequest?.invoke()  // triggers Firestore reload
-
-                        Toast.makeText(
-                            this@MyTripActivity,
-                            "Status updated!",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    } catch (e: Exception) {
-                        hideUploadProgress()
-                        Log.e(TAG, "Firestore update failed: ${e.message}")
-                        Toast.makeText(
-                            this@MyTripActivity,
-                            "Photo captured but status save failed. Retry.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                    // Retry loop: transient Firestore errors (network blip, timeout) don't have to mean failure
+                    while (attempts < maxAttempts) {
+                        attempts++
+                        try {
+                            updateObdLineItemInFirestore(
+                                shipmentDocId = podData.shipmentDocId,
+                                lineItem = podData.lineItem,
+                                status = podData.status,
+                                podImageUrl = dataUri,
+                                capturedAtMillis = podData.capturedAtMillis
+                            )
+                            lastError = null
+                            break  // success
+                        } catch (e: Exception) {
+                            lastError = e
+                            Log.w(TAG, "  Firestore update attempt $attempts/$maxAttempts failed: ${e.message}")
+                            if (attempts < maxAttempts) {
+                                val delay = RETRY_DELAY_BASE_MS * (1 shl (attempts - 1))  // exponential backoff
+                                Log.d(TAG, "  Retrying in ${delay}ms...")
+                                kotlinx.coroutines.delay(delay)
+                            }
+                        }
                     }
+
+                    hideUploadProgress()
+                    deletePhotoFile(photoFile)  // clean up temp file on success or permanent failure
+
+                    if (lastError != null) {
+                        // All retries exhausted — show specific error
+                        Log.e(TAG, "❌ PodUpload all $maxAttempts retries FAILED: ${lastError?.message}", lastError)
+                        showToast("Photo captured but save failed (${lastError?.message}). Please try again.")
+                    } else {
+                        // ── Success path ──────────────────────────────────────
+                        Log.d(TAG, "✅ POD saved successfully for obdNumber=${podData.lineItem["obdNumber"]}")
+
+                        // Immediate Firestore re-fetch — the Firestore write is ALREADY DONE
+                        // so data is fresh. Trigger showRefreshing immediately so driver sees feedback
+                        // even on fast connections. Then update UI when data arrives.
+                        val affectedObdNumber = podData.lineItem["obdNumber"]?.toString() ?: ""
+                        val sheet = currentObdBottomSheet
+
+                        if (sheet != null) {
+                            Log.d(TAG, "↻ Bottom sheet found — triggering showRefreshing + Firestore re-fetch for OBD=$affectedObdNumber")
+                            sheet.showRefreshing(affectedObdNumber)
+                            lifecycleScope.launch {
+                                try {
+                                    val docSnap = db.collection("sap_assignments")
+                                        .document(podData.shipmentDocId)
+                                        .get()
+                                        .await()
+                                    @Suppress("UNCHECKED_CAST")
+                                    val fresh = docSnap.get("lineItems") as? List<Map<String, Any?>>
+                                    if (!fresh.isNullOrEmpty()) {
+                                        Log.d(TAG, "  ↻ Firestore re-fetch done — ${fresh.size} items, calling refreshWith")
+                                        sheet.refreshWith(fresh, affectedObdNumber)
+                                    } else {
+                                        Log.d(TAG, "  ↻ Firestore re-fetch: empty — calling refreshWith with empty list")
+                                        sheet.refreshWith(emptyList(), affectedObdNumber)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  ❌ Firestore re-fetch FAILED: ${e.message}")
+                                    sheet.refreshWith(emptyList(), affectedObdNumber)
+                                }
+                            }
+                        } else {
+                            // Bottom sheet not open — try to find it by tag (cross-check)
+                            Log.d(TAG, "⚠ currentObdBottomSheet is null — trying findFragmentByTag fallback")
+                            try {
+                                val fallback = supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG) as? ObdItemsBottomSheet
+                                if (fallback != null) {
+                                    Log.d(TAG, "↻ Fallback found sheet — same refresh cascade")
+                                    fallback.showRefreshing(affectedObdNumber)
+                                    lifecycleScope.launch {
+                                        try {
+                                            val docSnap = db.collection("sap_assignments")
+                                                .document(podData.shipmentDocId)
+                                                .get()
+                                                .await()
+                                            @Suppress("UNCHECKED_CAST")
+                                            val fresh = docSnap.get("lineItems") as? List<Map<String, Any?>>
+                                            if (!fresh.isNullOrEmpty()) {
+                                                fallback.refreshWith(fresh, affectedObdNumber)
+                                            } else {
+                                                fallback.refreshWith(emptyList(), affectedObdNumber)
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Fallback Firestore FAILED: ${e.message}")
+                                            fallback.refreshWith(emptyList(), affectedObdNumber)
+                                        }
+                                    }
+                                } else {
+                                    Log.w(TAG, "❌ NO bottom sheet found — refresh skipped (was sheet closed?)")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Bottom sheet refresh error: ${e.message}")
+                            }
+                        }
+
+                        SocketManager.emitPodUpdated(podData.shipmentDocId)
+                        showToast("Status updated!")
+                    }
+
+                    clearPending()
                 }
             },
             onFailure = { errorMsg ->
+                Log.e(TAG, "❌ POD image encoding FAILED: $errorMsg")
                 hideUploadProgress()
-                Log.e(TAG, "POD image processing failed: $errorMsg")
-                Toast.makeText(
-                    this@MyTripActivity,
-                    "Photo processing failed: $errorMsg",
-                    Toast.LENGTH_LONG
-                ).show()
+                deletePhotoFile(photoFile)
+                clearPending()
+                showToast("Photo processing failed: $errorMsg")
             }
         )
+        // Note: pending state is cleared inside each exit path above (clearPending())
+        // Do NOT set pendingPodData/pendingPhotoFile = null here — the async callbacks own this.
+    }
+
+    /**
+     * Deletes the temp photo file after upload completes or fails.
+     * Quietly fails if the file is already gone (benign).
+     */
+    private fun deletePhotoFile(file: File?) {
+        file?.let {
+            try {
+                if (it.exists()) {
+                    val deleted = it.delete()
+                    Log.d(TAG, "deletePhotoFile: ${if (deleted) "deleted" else "FAILED to delete"} ${it.name}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "deletePhotoFile: failed to delete ${it.name}: ${e.message}")
+            }
+        }
+    }
+
+    /** Shortcut to show toast from any thread (runOnUiThread). */
+    private fun showToast(message: String) {
+        runOnUiThread { Toast.makeText(this@MyTripActivity, message, Toast.LENGTH_LONG).show() }
     }
 
     /**
@@ -415,30 +548,67 @@ class MyTripActivity : AppCompatActivity() {
         podImageUrl: String,
         capturedAtMillis: Long
     ) {
-        val obdNumber = lineItem["obdNumber"] as? String
-            ?: throw IllegalArgumentException("Missing obdNumber in lineItem")
+        // Type-safe obdNumber extraction — handles Number (Long/Integer) from raw data.
+        val rawObdNumber = lineItem["obdNumber"]
+        val obdNumber = when (rawObdNumber) {
+            is String -> rawObdNumber.trim()
+            is Number -> rawObdNumber.toString().trim()
+            else -> (rawObdNumber as? String)?.trim() ?: ""
+        }
+        if (obdNumber.isBlank()) {
+            throw IllegalArgumentException("Missing/empty obdNumber in lineItem. Actual type=${rawObdNumber?.javaClass?.name}, value=$rawObdNumber")
+        }
+
+        Log.d(TAG, "updateObdLineItemInFirestore: docId=$shipmentDocId, searching obdNumber=[$obdNumber]")
 
         val docRef = db.collection("sap_assignments").document(shipmentDocId)
 
         db.runTransaction { transaction ->
             val snap = transaction.get(docRef)
             if (!snap.exists()) {
-                throw IllegalStateException("Shipment document not found: $shipmentDocId")
+                throw IllegalStateException("Shipment document not found in Firestore: $shipmentDocId")
             }
 
+            @Suppress("UNCHECKED_CAST")
             val lineItemsRaw = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
-            val lineItems = lineItemsRaw.filterIsInstance<Map<String, Any?>>().toMutableList()
+            val lineItems = lineItemsRaw.toMutableList()
 
-            // Find and update the matching OBD item by obdNumber
-            val targetIndex = lineItems.indexOfFirst { item ->
-                (item["obdNumber"] as? String) == obdNumber
+            Log.d(TAG, "  Firestore lineItems count=${lineItems.size}")
+
+            // Safely coerce any numeric or string obdNumber to comparable String.
+            // Handles Firestore storing obdNumber as Integer/Long (from numeric data import).
+            fun coerceToObdString(value: Any?): String = when (value) {
+                is String -> value.trim()
+                is Number -> value.toString().trim()
+                else -> (value as? String)?.trim() ?: ""
+            }
+
+            // ── Diagnostic: log every obdNumber in Firestore with its actual type ──
+            for (rawItem in lineItems) {
+                val item = rawItem as? Map<String, Any?> ?: continue
+                val rawNn = item["obdNumber"]
+                Log.d(TAG, "  [OBD] value=${rawNn} type=${rawNn?.javaClass?.name} coerced=[${coerceToObdString(rawNn)}]")
+            }
+
+            // Find matching OBD item: string comparison after type-safe coercion
+            val targetIndex = lineItems.indexOfFirst { rawItem ->
+                val item = rawItem as? Map<String, Any?> ?: return@indexOfFirst false
+                coerceToObdString(item["obdNumber"]) == obdNumber
             }
 
             if (targetIndex == -1) {
-                throw IllegalStateException("OBD item not found in lineItems: $obdNumber")
+                val allObdNumbers = lineItems.mapNotNull { raw ->
+                    (raw as? Map<String, Any?>)?.get("obdNumber")?.let { coerceToObdString(it) }.takeIf { it?.isNotBlank() == true }
+                }
+                Log.e(TAG, "  OBD item NOT FOUND. Looking for=[$obdNumber], available=$allObdNumbers")
+                throw IllegalStateException("OBD item not found: $obdNumber — available=$allObdNumbers")
             }
 
-            val original = lineItems[targetIndex].toMutableMap()
+            @Suppress("UNCHECKED_CAST")
+            val rawItem = lineItems[targetIndex] as? Map<String, Any?>
+                ?: throw IllegalStateException("lineItems[$targetIndex] is not a Map, actual type=${lineItems[targetIndex]?.javaClass?.name}")
+            val original = rawItem.toMutableMap()
+
             original["deliveryStatus"] = status
             original["podImageUrl"] = podImageUrl
             original["podCapturedAt"] = Timestamp.now()
@@ -446,13 +616,17 @@ class MyTripActivity : AppCompatActivity() {
 
             lineItems[targetIndex] = original
             transaction.update(docRef, "lineItems", lineItems)
+
+            Log.d(TAG, "  ✅ Transaction updated lineItems[$targetIndex] for obdNumber=[$obdNumber]")
         }.await()
 
-        Log.d(TAG, "OBD lineItem updated for obdNumber=$obdNumber in doc=$shipmentDocId")
+        Log.d(TAG, "updateObdLineItemInFirestore: SUCCESS for obdNumber=[$obdNumber] in doc=$shipmentDocId")
     }
 
     companion object {
         private const val TAG = "MyTripActivity"
+        private const val MAX_FIRESTORE_RETRY_ATTEMPTS = 3  // retry Firestore transaction up to 3 times
+        private const val RETRY_DELAY_BASE_MS = 1500L       // 1.5s base delay, exponential backoff (1.5s, 3s, 6s)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -483,6 +657,11 @@ class MyTripActivity : AppCompatActivity() {
         setupUI()
         startCircleAnimation()
         startPulseRings()
+
+        // Capture and consume the launching shipment_doc_id ONCE.
+        // Cleared after the first load so socket updates show the full list.
+        intentShipmentDocId = intent.getStringExtra("shipment_doc_id")
+        Log.d(TAG, "onCreate: intentShipmentDocId=${intentShipmentDocId}")
     }
 
     override fun onResume() {
@@ -519,6 +698,17 @@ class MyTripActivity : AppCompatActivity() {
         assignmentsListener?.remove()
         uploadProgressDialog?.dismiss()
         uploadProgressDialog = null
+
+        // ── Clean up any orphaned temp photo files ─────────────────────────────
+        // If os killed the activity mid-upload (e.g., after user pressed Home),
+        // pendingPhotoFile still exists on disk but upload never completed.
+        // Delete it to prevent storage leaks.
+        if (pendingPhotoFile != null) {
+            Log.d(TAG, "onDestroy: cleaning orphaned photo file: ${pendingPhotoFile?.name}")
+            deletePhotoFile(pendingPhotoFile)
+        }
+        pendingPodData = null
+        pendingPhotoFile = null
     }
 
     // ─── UI setup ──────────────────────────────────────────────────────────────
@@ -553,8 +743,8 @@ class MyTripActivity : AppCompatActivity() {
     private fun loadAssignments() {
         assignmentsListener?.remove()
         val sessionDriverId = sessionManager.getDriverId() ?: return
-        val intentDocId = intent.getStringExtra("shipment_doc_id")
-
+        // Use cached intentShipmentDocId — cleared after first load.
+        val intentDocId = intentShipmentDocId
         val queueDocId = sessionManager.getCurrentQueueDocId()
         if (!queueDocId.isNullOrBlank()) {
             assignmentsListener = db.collection("sap_assignments")
@@ -573,6 +763,7 @@ class MyTripActivity : AppCompatActivity() {
                     }
                     fetchDriverData(sessionDriverId, list) { enriched ->
                         enrichWithQueueData(enriched) { final ->
+                            consumeIntentDocId()  // clear after first consume
                             handleAssignmentList(final, intentDocId)
                         }
                     }
@@ -583,26 +774,83 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun loadAssignmentsFallback(sessionDriverId: String, intentDocId: String?) {
+        // Fallback chain mirrors MainActivity's dual-approach pattern:
+        //   Approach A: driverId == Queue Doc ID   (older docs)
+        //   Approach B: driverId == Firebase UID (newer docs)
+        val queueDocId = sessionManager.getCurrentQueueDocId()
+
+        // Approach A: Query by Queue Doc ID
+        if (!queueDocId.isNullOrBlank()) {
+            Log.d(TAG, "loadAssignmentsFallback: trying Approach A (Queue Doc ID=$queueDocId)")
+            assignmentsListener = db.collection("sap_assignments")
+                .whereEqualTo("driverId", queueDocId)
+                .addSnapshotListener { snaps, err ->
+                    if (err != null || snaps == null || snaps.isEmpty) {
+                        Log.d(TAG, "loadAssignmentsFallback: Approach A empty/err — trying Approach B (Firebase UID=$sessionDriverId)")
+                        listenToAssignmentsViaFirebaseUid(sessionDriverId, intentDocId)
+                        return@addSnapshotListener
+                    }
+                    if (isFinishing) return@addSnapshotListener
+                    syncAndHandle(snaps, sessionDriverId, intentDocId)
+                }
+        } else {
+            // No queueDocId available — skip Approach A and go straight to Firebase UID
+            Log.d(TAG, "loadAssignmentsFallback: no queueDocId — going straight to Approach B (Firebase UID=$sessionDriverId)")
+            listenToAssignmentsViaFirebaseUid(sessionDriverId, intentDocId)
+        }
+    }
+
+    /**
+     * Approach B (Firebase UID): catches all new-style docs where driverId == Firebase UID.
+     * Also a valid fallback when the snapshot listener in loadAssignments fails/returns empty.
+     */
+    private fun listenToAssignmentsViaFirebaseUid(sessionDriverId: String, intentDocId: String?) {
+        assignmentsListener?.remove()
         assignmentsListener = db.collection("sap_assignments")
             .whereEqualTo("driverId", sessionDriverId)
             .addSnapshotListener { snaps, err ->
-                if (err != null || snaps == null) {
-                    Log.e(TAG, "loadAssignments fallback error: ${err?.message}")
+                if (err != null) {
+                    Log.e(TAG, "loadAssignmentsFallback: Approach B error: ${err.message}")
+                    // Both approaches failed — show empty state using cached list
                     return@addSnapshotListener
                 }
                 if (isFinishing) return@addSnapshotListener
-                val list = snaps.documents.mapNotNull { snap ->
+                val list = snaps?.documents?.mapNotNull { snap ->
                     @Suppress("UNCHECKED_CAST")
                     val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
                     buildAssignmentFromMap(data + ("docId" to snap.id))
-                }
+                } ?: emptyList()
                 fetchDriverData(sessionDriverId, list) { enriched ->
                     enrichWithQueueData(enriched) { final ->
+                        consumeIntentDocId()
                         handleAssignmentList(final, intentDocId)
                     }
                 }
             }
+    }
 
+    /**
+     * Shared snapshot handler used by Approach A of loadAssignmentsFallback.
+     * On success: enriches + dispatches to handleAssignmentList.
+     * Clears intentDocId after first consume so subsequent updates show full list.
+     */
+    private fun syncAndHandle(
+        snaps: com.google.firebase.firestore.QuerySnapshot,
+        sessionDriverId: String,
+        intentDocId: String?
+    ) {
+        Log.d(TAG, "syncAndHandle (Approach A): ${snaps.size()} sap_assignments found")
+        val list = snaps.documents.mapNotNull { snap ->
+            @Suppress("UNCHECKED_CAST")
+            val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
+            buildAssignmentFromMap(data + ("docId" to snap.id))
+        }
+        fetchDriverData(sessionDriverId, list) { enriched ->
+            enrichWithQueueData(enriched) { final ->
+                consumeIntentDocId()
+                handleAssignmentList(final, intentDocId)
+            }
+        }
     }
 
     /**
@@ -646,6 +894,7 @@ class MyTripActivity : AppCompatActivity() {
                     pending--
                     if (pending <= 0) onReady(mutableList.toList())
                 }
+            }
         }
     }
 
@@ -752,6 +1001,7 @@ class MyTripActivity : AppCompatActivity() {
             binding.aggregateBadgeContainer.visibility = View.GONE
         } else if (listEmpty) {
             // Assignments exist but none confirmed yet
+private fun updateEmptyState
             binding.rvShipments.visibility = View.GONE
             binding.emptyState.visibility = View.VISIBLE
         } else {
@@ -1102,7 +1352,7 @@ class MyTripActivity : AppCompatActivity() {
 
         binding.circleContainer.post {
             val containerW = binding.circleContainer.width
-            val containerH = binding.circleContainer.height
+            val containerH = binding.container.height
             if (containerW == 0 || containerH == 0) return@post
 
             val random = java.util.Random()
@@ -1113,8 +1363,8 @@ class MyTripActivity : AppCompatActivity() {
                 val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
                 val startX = random.nextInt(containerW).toFloat()
                 val startY = random.nextInt(containerH).toFloat()
-                val minSpeed = 0.12f + random.nextFloat() * 0.15f
-                val maxSpeed = minSpeed + 0.15f + random.nextFloat() * 0.2f
+                const val minSpeed = 0.12f
+                const val maxSpeed = 0.3f
                 val alpha = 0.25f + random.nextFloat() * 0.3f
 
                 val circle = View(this).apply {
@@ -1248,4 +1498,71 @@ class MyTripActivity : AppCompatActivity() {
     // but the new design doesn't need them in this screen
     private val isActivityFinished: Boolean
         get() = isFinishing || isDestroyed
+
+    /**
+     * Helper function to encode a POD image with timestamp watermark.
+     *
+     * @param photoFile The photo file to process
+     * @param boundOptions BitmapFactory.Options with inJustDecodeBounds set to true
+     * @param timestampMillis Timestamp to overlay on the image
+     * @param onSuccess Callback with the resulting data URI
+     * @param onFailure Callback with error message
+     */
+    private fun encodePodImageWithTimestamp(
+        photoFile: File,
+        boundOptions: BitmapFactory.Options,
+        timestampMillis: Long,
+        onSuccess: (dataUri: String) -> Unit,
+        onFailure: (errorMsg: String) -> Unit
+    ) {
+        // Calculate sample size for 1280px max dimension (same as used in uploadPodImage for File)
+        val MAX_DIMENSION_PRIMARY = 1280
+        val sampleSize = calculateInSampleSizeForFile(boundOptions, MAX_DIMENSION_PRIMARY, MAX_DIMENSION_PRIMARY)
+        val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath, decodeOptions)
+
+        if (bitmap == null) {
+            onFailure("Photo too large to load. Please try a smaller photo.")
+            return
+        }
+
+        // Use the new timestamped overload — draws watermark before encoding
+        ImageStorageHelper.uploadPodImage(
+            bitmap = bitmap,
+            timestampMillis = timestampMillis,
+            context = this,
+            onSuccess = { dataUri ->
+                bitmap.recycle()
+                onSuccess(dataUri)
+            },
+            onFailure = { errorMsg ->
+                bitmap.recycle()
+                onFailure(errorMsg)
+            }
+        )
+    }
+
+    /**
+
+    /**
+     * Copy of BitmapFactory's calculateInSampleSize for use with File decode path.
+     * Mirrors the logic already in ImageStorageHelper.decodeAndResize() — kept here
+     * so encodePodImageWithTimestamp is fully self-contained.
+     */
+    private fun calculateInSampleSizeForFile(
+        options: BitmapFactory.Options,
+        reqWidth: Int,
+        reqHeight: Int
+    ): Int {
+        val (height, width) = options.outHeight to options.outWidth
+        var inSampleSize = 1
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
 }
