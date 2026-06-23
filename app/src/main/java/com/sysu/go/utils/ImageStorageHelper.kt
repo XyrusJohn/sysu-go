@@ -301,10 +301,10 @@ object ImageStorageHelper {
      * The original bitmap is NOT modified.
      *
      * Watermark style:
-     *   - Background strip: #CC000000, 4dp corner radius, 12dp horizontal / 8dp vertical padding
+     *   - Background strip: #CC000000, 8dp corner radius, 12dp horizontal / 8dp vertical padding
      *   - Text: 13sp, white (#FFFFFF), system sans-serif
      *   - Format: "Jun 23, 2026 • 2:30:45 PM"
-     *   - Position: 16px margin from bottom and left edges
+     *   - Position: 16px margin from bottom edge, left-aligned
      */
     private fun drawTimestampOverlay(bitmap: Bitmap, timestampMillis: Long): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
@@ -332,9 +332,7 @@ object ImageStorageHelper {
         val stripTop = textBottomY - textHeight - 16f  // 8dp vertical padding
         val stripBottom = textBottomY + 8f
 
-        val stripRect = RectF(
-            stripLeft, stripTop, stripRight, stripBottom
-        )
+        val stripRect = RectF(stripLeft, stripTop, stripRight, stripBottom)
 
         // Draw background strip
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
