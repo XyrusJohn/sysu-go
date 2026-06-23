@@ -300,11 +300,11 @@ object ImageStorageHelper {
      * Returns a NEW bitmap (caller must recycle it) with the watermark drawn on top.
      * The original bitmap is NOT modified.
      *
-     * Watermark style (Shopee-style — large and visible):
-     *   - Background strip: #CC000000, 8dp corner radius, 18dp horizontal / 12dp vertical padding
-     *   - Text: 22sp, bold white (#FFFFFF), system sans-serif
+     * Watermark style (Shopee/Lalamove-standard — large and instantly readable):
+     *   - Background strip: #E6000000 (90% black), full-width, tall padding
+     *   - Text: 32sp bold, white (#FFFFFF), system sans-serif
      *   - Format: "Jun 23, 2026 • 2:30:45 PM"
-     *   - Position: 24px margin from bottom edge, left-aligned
+     *   - Position: 24px margin from bottom edge, left-aligned, 24px left padding
      */
     private fun drawTimestampOverlay(bitmap: Bitmap, timestampMillis: Long): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
@@ -314,10 +314,10 @@ object ImageStorageHelper {
         val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm:ss a", java.util.Locale.US)
         val dateStr = dateFormat.format(java.util.Date(timestampMillis))
 
-        // Text paint — 22sp bold
+        // Text paint — 32sp BOLD, always same physical size regardless of screen density
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
-            textSize = 22f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            textSize = 32f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
 
@@ -326,23 +326,23 @@ object ImageStorageHelper {
         val textHeight = textPaint.descent() - textPaint.ascent()
         val textBottomY = result.height - 24f
 
-        // Background strip rect: left = 0, right = text + horizontal padding
+        // Background strip rect: full-width strip to accommodate large text
         val stripLeft = 0f
-        val stripRight = textWidth + 36f  // 18dp horizontal padding each side
-        val stripTop = textBottomY - textHeight - 24f  // 12dp vertical padding
+        val stripRight = textWidth + 48f  // 24dp horizontal padding each side
+        val stripTop = textBottomY - textHeight - 24f  // 12dp vertical padding above text
         val stripBottom = textBottomY + 16f
 
         val stripRect = RectF(stripLeft, stripTop, stripRight, stripBottom)
 
-        // Draw background strip
+        // Draw background strip — 90% black, a bit taller for 32sp text
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xCC000000.toInt()  // #CC000000 — 80% black
+            color = 0xE6000000.toInt()  // #E6000000 — 90% black, more opaque than before
         }
         canvas.drawRoundRect(stripRect, 8f, 8f, bgPaint)
 
         // Draw text on top of background
-        val textX = stripLeft + 18f  // 18dp left padding inside strip
-        val textY = stripBottom - 8f - textPaint.descent()  // align baseline
+        val textX = stripLeft + 24f  // 24dp left padding inside strip
+        val textY = stripBottom - 16f - textPaint.descent()  // align baseline
         canvas.drawText(dateStr, textX, textY, textPaint)
 
         return result
