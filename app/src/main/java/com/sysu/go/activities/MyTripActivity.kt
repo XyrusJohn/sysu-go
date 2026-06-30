@@ -293,8 +293,16 @@ class MyTripActivity : AppCompatActivity() {
                     Log.d(TAG, "One-shot GPS resolve: ${loc.latitude}, ${loc.longitude}")
                     proceedToCamera(loc.latitude, loc.longitude, capturedAtMillis, item, shipmentDocId)
                 } else {
-                    val cached = getLocationPair()
-                    proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+                    // loc null from onLocationResult — try system cache as last resort
+                    @SuppressLint("MissingPermission")
+                    fusedLocationClient.lastLocation.addOnSuccessListener { cachedLoc ->
+                        val lat = cachedLoc?.latitude
+                        val lng = cachedLoc?.longitude
+                        Log.d(TAG, "onLocationResult loc=null — system cache fallback: lat=$lat, lng=$lng")
+                        proceedToCamera(lat, lng, capturedAtMillis, item, shipmentDocId)
+                    }.addOnFailureListener {
+                        proceedToCamera(null, null, capturedAtMillis, item, shipmentDocId)
+                    }
                 }
                 fusedLocationClient.removeLocationUpdates(this)
             }
@@ -306,17 +314,35 @@ class MyTripActivity : AppCompatActivity() {
             mainLooper
         ).addOnFailureListener {
             Log.e(TAG, "One-shot location request failed: ${it.message}")
-            val cached = getLocationPair()
-            proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+            // Fall back to system cache as a last resort
+            @SuppressLint("MissingPermission")
+            fusedLocationClient.lastLocation.addOnSuccessListener { cachedLoc ->
+                val lat = cachedLoc?.latitude
+                val lng = cachedLoc?.longitude
+                Log.d(TAG, "One-shot addOnFailureListener — system cache fallback: lat=$lat, lng=$lng")
+                proceedToCamera(lat, lng, capturedAtMillis, item, shipmentDocId)
+            }.addOnFailureListener {
+                proceedToCamera(null, null, capturedAtMillis, item, shipmentDocId)
+            }
         }
 
-        // Timeout fallback: if no GPS fix within 10s, use cache and proceed
+        // Timeout fallback: if no GPS fix within 10s, try system cache then proceed
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             try {
                 fusedLocationClient.removeLocationUpdates(oneShotCallback)
             } catch (_: Exception) { }
-            val cached = getLocationPair()
-            proceedToCamera(cached?.first, cached?.second, capturedAtMillis, item, shipmentDocId)
+            // Last-resort: ask the system cache even if LocationServices never ran
+            @SuppressLint("MissingPermission")
+            fusedLocationClient.lastLocation.addOnSuccessListener { cachedLoc ->
+                val lat = cachedLoc?.latitude
+                val lng = cachedLoc?.longitude
+                Log.d(TAG, "One-shot timeout — system cache fallback: lat=$lat, lng=$lng")
+                proceedToCamera(lat, lng, capturedAtMillis, item, shipmentDocId)
+            }.addOnFailureListener {
+                // Truly nothing — GPS unavailable on this device
+                Log.w(TAG, "One-shot timeout AND system cache failed — proceeding without location stamp")
+                proceedToCamera(null, null, capturedAtMillis, item, shipmentDocId)
+            }
         }, 10_000L)
     }
 
@@ -540,6 +566,8 @@ class MyTripActivity : AppCompatActivity() {
         encodePodImageWithTimestamp(
             photoFile = photoFile,
             timestampMillis = podData.capturedAtMillis,
+            latitude = podData.latitude,
+            longitude = podData.longitude,
             onSuccess = { base64DataUri ->
                 Log.d(TAG, "POD image base64 encoded: ${base64DataUri.length} chars")
 
@@ -922,18 +950,29 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
-        // If launched with a specific shipment_doc_id — delegate to that shipment
+        // If launched with a specific shipment_doc_id — delegate to that shipment.
+        // This handles the BACK TO MY TRIP flow: TransitActivity passes the shipment
+        // docId so MyTripActivity knows what to display on return. Once loaded, we
+        // clear the intent extras so subsequent onResume calls don't re-trigger
+        // auto-navigation and recreate TransitActivity in a loop.
         if (!intentDocId.isNullOrBlank()) {
             val target = list.find { it.docId == intentDocId }
             if (target != null) {
                 loadSpecificShipment(target)
+                // Clear the intent so future onResume/reinflate doesn't re-navigate.
+                // The session state already knows this shipment is in_transit.
+                intent.removeExtra("shipment_doc_id")
                 return
             }
+            // Target not found in list yet — fall through to show whatever we have.
+            // Do NOT auto-navigate when we have a pending intentDocId (BACK TO MY TRIP
+            // was pressed, we just need the cards visible while data loads).
         }
 
-        // Auto-navigate if any shipment is already in_transit
+        // Auto-navigate if any shipment is already in_transit — only on fresh start
+        // (no intentDocId means normal app launch, not a return from TransitActivity)
         val inTransit = list.find { it.tripStatus == "in_transit" }
-        if (inTransit != null) {
+        if (inTransit != null && intentDocId.isNullOrBlank()) {
             launchDeliveryActivity(inTransit.docId)
             return
         }
@@ -1069,12 +1108,14 @@ class MyTripActivity : AppCompatActivity() {
                 Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
 
                 // Navigate to TransitActivity (live map / delivery tracking screen) — NOT MyTripActivity
+                // Do NOT call finish() here — keep MyTripActivity in the back stack so that
+                // TransitActivity's "BACK TO MY TRIP" can use CLEAR_TOP|SINGLE_TOP to
+                // resume the existing MyTripActivity instead of creating a duplicate.
                 val intent = Intent(this@MyTripActivity, TransitActivity::class.java).apply {
                     putExtra("shipment_doc_id", assignment.docId)
                     flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }
                 startActivity(intent)
-                finish()
             } catch (e: Exception) {
                 Log.e(TAG, "confirmAndStartTrip error: ${e.message}")
                 sessionManager.saveActiveSapDocId(null)
@@ -1088,12 +1129,12 @@ class MyTripActivity : AppCompatActivity() {
     private fun launchDeliveryActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
         // Launch the live map / tracking screen — NOT MyTripActivity (prevents loop)
+        // Do NOT call finish() here — keep MyTripActivity in the back stack.
         val intent = Intent(this, TransitActivity::class.java).apply {
             putExtra("shipment_doc_id", sapDocId)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
-        finish()
     }
 
     /**
@@ -1489,6 +1530,8 @@ class MyTripActivity : AppCompatActivity() {
     private fun encodePodImageWithTimestamp(
         photoFile: File,
         timestampMillis: Long,
+        latitude: Double?,
+        longitude: Double?,
         onSuccess: (String) -> Unit,
         onFailure: (String) -> Unit
     ) {
@@ -1513,13 +1556,10 @@ class MyTripActivity : AppCompatActivity() {
             return
         }
 
-        // Fetch lat/lng from pendingPodData before entering a lambda chain (smart-cast
-        // is not available inside a let lambda as pendingPodData is captured).
-        val podLat: Double? = pendingPodData?.latitude
-        val podLng: Double? = pendingPodData?.longitude
-        Log.d(TAG, "encodePodImageWithTimestamp: podLat=$podLat, podLng=$podLng, timestampMillis=$timestampMillis")
-        val locationLabel: String? = podLat?.let { lat ->
-            podLng?.let { lng ->
+        Log.d(TAG, "encodePodImageWithTimestamp: latitude=$latitude, longitude=$longitude, timestampMillis=$timestampMillis")
+        // Build locationLabel from provided coordinates (or null if unavailable)
+        val locationLabel: String? = latitude?.let { lat ->
+            longitude?.let { lng ->
                 ImageStorageHelper.formatLocationLabel(lat, lng, this@MyTripActivity)
             }
         }
@@ -1537,7 +1577,9 @@ class MyTripActivity : AppCompatActivity() {
                 bitmap.recycle()
                 onFailure(errorMsg)
             },
-            locationLabel = locationLabel
+            locationLabel = locationLabel,
+            latitude = latitude,
+            longitude = longitude
         )
     }
 
