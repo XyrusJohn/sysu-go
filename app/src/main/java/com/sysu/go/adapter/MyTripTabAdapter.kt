@@ -138,7 +138,7 @@ class MyTripTabAdapter(
 
             when (assignment.tripStatus) {
                 "in_transit" -> {
-                    binding.tvTripStatusBadge.text = "IN TRANSIT"
+                    binding.tvTripStatusBadge.text = "ON TRANSIT"
                     binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_red)
                     binding.tvTripStatusBadge.setTextColor(
                         ContextCompat.getColor(ctx, R.color.white)
@@ -211,24 +211,21 @@ class MyTripTabAdapter(
                 onTripActionClicked(assignment)
             }
 
-            // OBD row: lock if trip is in_transit but POD incomplete
-            val isObdLocked = assignment.tripStatus == "in_transit" && !assignment.isPodComplete
+            // OBD row: unlocked only when trip is ON TRANSIT (driver can capture POD during delivery)
+            val isObdLocked = assignment.tripStatus != "in_transit"
             if (isObdLocked) {
                 binding.ivObdChevron.setImageResource(R.drawable.ic_lock)
                 binding.rowObd.alpha = 0.5f
-                binding.rowObd.isClickable = true // still clickable for toast feedback
             } else {
                 binding.ivObdChevron.setImageResource(R.drawable.ic_ticket)
                 binding.rowObd.alpha = 1.0f
-                binding.rowObd.isClickable = true
             }
 
             binding.rowObd.setOnClickListener {
                 if (isObdLocked) {
-                    val incomplete = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
                     android.widget.Toast.makeText(
                         ctx,
-                        "Kompletuhin muna ang POD ($incomplete item${if (incomplete > 1) "s" else ""} ang natitira)",
+                        "Simulan mo muna ang trip para makapag-POD",
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                     return@setOnClickListener
