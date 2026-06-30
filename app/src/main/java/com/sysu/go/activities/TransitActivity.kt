@@ -111,7 +111,7 @@ class TransitActivity : AppCompatActivity() {
             isTripStarted = true
             isSessionRestored = true
             binding.tvSubStatus.text = "Trip in progress"
-            binding.btnStartTrip.text = "END TRIP"
+            binding.btnStartTrip.text = "BACK TO MY TRIP"
             binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
             binding.btnStartTrip.isEnabled = true
 
@@ -241,7 +241,11 @@ class TransitActivity : AppCompatActivity() {
 
         binding.btnStartTrip.setOnClickListener {
             when {
-                isTripStarted -> endTrip()       // in transit → end trip
+                // In transit: go back to My Trip tab — trip completion is handled there (gated on all PODs done)
+                isTripStarted -> {
+                    Toast.makeText(this, "Bumalik sa My Trip tab", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
                 else -> startTrip()              // not started → start trip
             }
         }
@@ -321,7 +325,7 @@ class TransitActivity : AppCompatActivity() {
                     showLocationPermissionDialog()
                 }
                 if (isFinishing) return@addOnSuccessListener
-                binding.btnStartTrip.text = "END TRIP"
+                binding.btnStartTrip.text = "BACK TO MY TRIP"
                 binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
                 updateProgressStepper()
             }
@@ -401,7 +405,7 @@ class TransitActivity : AppCompatActivity() {
             .addOnFailureListener { e ->
                 if (isFinishing) return@addOnFailureListener
                 Log.e(TAG, "Failed to end trip: ${e.message}")
-                binding.btnStartTrip.text = "END TRIP"
+                binding.btnStartTrip.text = "BACK TO MY TRIP"
                 binding.btnStartTrip.isEnabled = true
                 Toast.makeText(this, "Failed to end trip. Try again.", Toast.LENGTH_SHORT).show()
             }
@@ -868,7 +872,7 @@ class TransitActivity : AppCompatActivity() {
             setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.ACTIVE)
             setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.PENDING)
             binding.tvSubStatus.text = "Trip in progress"
-            binding.btnStartTrip.text = "END TRIP"
+            binding.btnStartTrip.text = "BACK TO MY TRIP"
             binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
             binding.btnStartTrip.isEnabled = true
             return
