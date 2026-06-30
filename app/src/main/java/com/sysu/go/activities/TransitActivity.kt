@@ -243,11 +243,24 @@ class TransitActivity : AppCompatActivity() {
             when {
                 // In transit: navigate back to My Trip tab — trip completion is handled there (gated on all PODs done)
                 isTripStarted -> {
-                    // Resume MyTripActivity instead of just finish() — when MyTripActivity launched
-                    // TransitActivity it called finish() on itself, so there's nothing on the stack
-                    // to return to. Explicitly relaunch MyTripActivity with CLEAR_TOP.
+                    // Use finish() FIRST, then start MyTripActivity.
+                    // Because confirmAndStartTrip and launchDeliveryActivity no longer call
+                    // finish() on MyTripActivity, MyTripActivity is alive in the back stack.
+                    // TransitActivity sits on top. finish() removes TransitActivity from the
+                    // stack — the natural back press then returns to MyTripActivity.
+                    //
+                    // Do NOT call finish() AFTER startActivity() — that creates a Race
+                    // Condition where finish() can execute before the new Intent is
+                    // dispatched, destroying the task and returning to home on back press.
+                    //
+                    // Using NEW_TASK | CLEAR_TOP ensures MyTripActivity is either brought
+                    // forward (existing instance) or created as the only activity in the
+                    // task, without being placed ON TOP of TransitActivity (which would
+                    // require a double-back-press to return to ASSIGN).
                     val intent = Intent(this, MyTripActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP
                     }
                     startActivity(intent)
                     finish()

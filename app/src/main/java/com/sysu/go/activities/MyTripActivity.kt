@@ -752,9 +752,10 @@ class MyTripActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // When BACK TO MY TRIP in TransitActivity calls startActivity with
-        // CLEAR_TOP|SINGLE_TOP, Android delivers the new intent here on the
-        // existing MyTripActivity. Store the extra so handleAssignmentList
-        // knows NOT to auto-navigate back to TransitActivity on this cycle.
+        // NEW_TASK|CLEAR_TOP|SINGLE_TOP, Android delivers the new intent here on the
+        // existing MyTripActivity. Store the extra — handleAssignmentList uses it
+        // (via returnedFromTransitDocId) to block auto-navigation for the entire
+        // visible lifetime of this instance.
         this.intent = intent  // update the Activity's intent reference
         returnedFromTransitDocId = intent.getStringExtra("shipment_doc_id")
         Log.d(TAG, "onNewIntent: returnedFromTransitDocId=$returnedFromTransitDocId")
@@ -964,11 +965,10 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
-        // When TransitActivity's "BACK TO MY TRIP" brings us forward via
-        // CLEAR_TOP|SINGLE_TOP, onNewIntent() sets returnedFromTransitDocId.
-        // Use this to skip auto-navigation — we just want to show the card (which
-        // loadSpecificShipment already did in this cycle), not re-launch TransitActivity.
-        val returningDocId = returnedFromTransitDocId
+        // Block auto-navigation if we are in the "returned from TransitActivity" state.
+        // returnedFromTransitDocId stays set for the entire visible lifetime of MyTripActivity
+        // after BACK TO MY TRIP — it is cleared only when the session ends (trip completes/cancels).
+        val isReturningFromTransit = returnedFromTransitDocId != null
 
         // If launched with a specific shipment_doc_id — load that shipment card
         // without auto-navigating. This handles both fresh Intent launches
@@ -978,24 +978,26 @@ class MyTripActivity : AppCompatActivity() {
             if (target != null) {
                 loadSpecificShipment(target)
                 // Consume the extra so future onResume cycles don't re-trigger.
-                // Also clear the returned-from-transit flag since we've handled it.
+                // returnedFromTransitDocId stays set if we are in the return path
+                // (it is the authoritative "don't auto-nav" signal).
                 intent.removeExtra("shipment_doc_id")
-                returnedFromTransitDocId = null
                 Log.d(TAG, "handleAssignmentList: loaded specific shipment intentDocId=$intentDocId, cleared intent extra")
                 return
             }
         }
 
         // If BACK TO MY TRIP brought us here, load that specific shipment and stop.
-        // Don't auto-navigate — we are already on the My Trip tab.
-        if (!returningDocId.isNullOrBlank()) {
-            val target = list.find { it.docId == returningDocId }
+        // Don't auto-navigate — we are already on the My Trip tab. The
+        // returnedFromTransitDocId flag stays set so subsequent Firestore updates
+        // (socket sap_updated) won't fire auto-navigation while the user is here.
+        if (isReturningFromTransit) {
+            val target = list.find { it.docId == returnedFromTransitDocId }
             if (target != null) {
                 loadSpecificShipment(target)
-                Log.d(TAG, "handleAssignmentList: loaded from transit return returningDocId=$returningDocId")
+                Log.d(TAG, "handleAssignmentList: loaded from transit return returnedFromTransitDocId=$returnedFromTransitDocId")
             }
-            // Clear the flag so next onResume (no intent) starts normal auto-navigation.
-            returnedFromTransitDocId = null
+            // NOTE: do NOT clear returnedFromTransitDocId here. It is the authoritative
+            // "don't auto-nav" signal until the session is cleared (trip completion/cancellation).
             return
         }
 
