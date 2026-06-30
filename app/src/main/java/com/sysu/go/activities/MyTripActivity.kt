@@ -746,6 +746,20 @@ class MyTripActivity : AppCompatActivity() {
         startPulseRings()
     }
 
+    /** Prevents auto-navigation when TransitActivity has called BACK TO MY TRIP. */
+    private var returnedFromTransitDocId: String? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // When BACK TO MY TRIP in TransitActivity calls startActivity with
+        // CLEAR_TOP|SINGLE_TOP, Android delivers the new intent here on the
+        // existing MyTripActivity. Store the extra so handleAssignmentList
+        // knows NOT to auto-navigate back to TransitActivity on this cycle.
+        this.intent = intent  // update the Activity's intent reference
+        returnedFromTransitDocId = intent.getStringExtra("shipment_doc_id")
+        Log.d(TAG, "onNewIntent: returnedFromTransitDocId=$returnedFromTransitDocId")
+    }
+
     override fun onResume() {
         super.onResume()
         // ── Register Socket.IO listeners ──────────────────────────────────────
@@ -950,29 +964,44 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
-        // If launched with a specific shipment_doc_id — delegate to that shipment.
-        // This handles the BACK TO MY TRIP flow: TransitActivity passes the shipment
-        // docId so MyTripActivity knows what to display on return. Once loaded, we
-        // clear the intent extras so subsequent onResume calls don't re-trigger
-        // auto-navigation and recreate TransitActivity in a loop.
+        // When TransitActivity's "BACK TO MY TRIP" brings us forward via
+        // CLEAR_TOP|SINGLE_TOP, onNewIntent() sets returnedFromTransitDocId.
+        // Use this to skip auto-navigation — we just want to show the card (which
+        // loadSpecificShipment already did in this cycle), not re-launch TransitActivity.
+        val returningDocId = returnedFromTransitDocId
+
+        // If launched with a specific shipment_doc_id — load that shipment card
+        // without auto-navigating. This handles both fresh Intent launches
+        // (from dashboard) and onNewIntent calls (from BACK TO MY TRIP).
         if (!intentDocId.isNullOrBlank()) {
             val target = list.find { it.docId == intentDocId }
             if (target != null) {
                 loadSpecificShipment(target)
-                // Clear the intent so future onResume/reinflate doesn't re-navigate.
-                // The session state already knows this shipment is in_transit.
+                // Consume the extra so future onResume cycles don't re-trigger.
+                // Also clear the returned-from-transit flag since we've handled it.
                 intent.removeExtra("shipment_doc_id")
+                returnedFromTransitDocId = null
+                Log.d(TAG, "handleAssignmentList: loaded specific shipment intentDocId=$intentDocId, cleared intent extra")
                 return
             }
-            // Target not found in list yet — fall through to show whatever we have.
-            // Do NOT auto-navigate when we have a pending intentDocId (BACK TO MY TRIP
-            // was pressed, we just need the cards visible while data loads).
         }
 
-        // Auto-navigate if any shipment is already in_transit — only on fresh start
-        // (no intentDocId means normal app launch, not a return from TransitActivity)
+        // If BACK TO MY TRIP brought us here, load that specific shipment and stop.
+        // Don't auto-navigate — we are already on the My Trip tab.
+        if (!returningDocId.isNullOrBlank()) {
+            val target = list.find { it.docId == returningDocId }
+            if (target != null) {
+                loadSpecificShipment(target)
+                Log.d(TAG, "handleAssignmentList: loaded from transit return returningDocId=$returningDocId")
+            }
+            // Clear the flag so next onResume (no intent) starts normal auto-navigation.
+            returnedFromTransitDocId = null
+            return
+        }
+
+        // Normal start (app launch, no in-flight return) — auto-navigate if in_transit
         val inTransit = list.find { it.tripStatus == "in_transit" }
-        if (inTransit != null && intentDocId.isNullOrBlank()) {
+        if (inTransit != null) {
             launchDeliveryActivity(inTransit.docId)
             return
         }
