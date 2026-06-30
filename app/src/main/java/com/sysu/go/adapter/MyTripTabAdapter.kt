@@ -144,11 +144,12 @@ class MyTripTabAdapter(
                         ContextCompat.getColor(ctx, R.color.white)
                     )
 
-                    // END TRIP is gated on all PODs being captured
+                    // My Trip tab only navigates to TransitActivity — END TRIP lives in TransitActivity
+                    // Lock icon on button if POD is incomplete as visual guidance only
                     val canEndTrip = assignment.isPodComplete
-                    binding.btnTripAction.text = if (canEndTrip) "END TRIP" else "END TRIP 🔒"
-                    binding.btnTripAction.isEnabled = canEndTrip
-                    binding.btnTripAction.alpha = if (canEndTrip) 1.0f else 0.4f
+                    binding.btnTripAction.text = if (canEndTrip) "OPEN ACTIVE TRIP" else "OPEN ACTIVE TRIP 🔒"
+                    binding.btnTripAction.isEnabled = true  // Always clickable — navigates to TransitActivity
+                    binding.btnTripAction.alpha = 1.0f
                     binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
 
                     binding.btnShowVerification.visibility = View.GONE
