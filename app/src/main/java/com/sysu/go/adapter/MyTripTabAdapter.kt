@@ -207,13 +207,24 @@ class MyTripTabAdapter(
                 }
             }
 
-            // OBD row click → open the OBD items bottom sheet (all shipment states)
-            binding.rowObd.setOnClickListener {
-                onObdTap(assignment.lineItems, assignment.docId)
+            binding.btnTripAction.setOnClickListener {
+                onTripActionClicked(assignment)
             }
 
-            binding.btnTripAction.setOnClickListener {
-                if (!assignment.isPodComplete) {
+            // OBD row: lock if trip is in_transit but POD incomplete
+            val isObdLocked = assignment.tripStatus == "in_transit" && !assignment.isPodComplete
+            if (isObdLocked) {
+                binding.ivObdChevron.setImageResource(R.drawable.ic_lock)
+                binding.rowObd.alpha = 0.5f
+                binding.rowObd.isClickable = true // still clickable for toast feedback
+            } else {
+                binding.ivObdChevron.setImageResource(R.drawable.ic_ticket)
+                binding.rowObd.alpha = 1.0f
+                binding.rowObd.isClickable = true
+            }
+
+            binding.rowObd.setOnClickListener {
+                if (isObdLocked) {
                     val incomplete = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
                     android.widget.Toast.makeText(
                         ctx,
@@ -222,14 +233,15 @@ class MyTripTabAdapter(
                     ).show()
                     return@setOnClickListener
                 }
-                onTripActionClicked(assignment)
+                onObdTap(assignment.lineItems, assignment.docId)
             }
 
             binding.root.setOnClickListener {
-                // Card tap: if in_transit, trigger OBD view; otherwise nop
-                // isPressed() = true means the click came from a child button
-                // that already handled it — don't double-fire in that case.
-                if (assignment.tripStatus == "in_transit" && !binding.btnTripAction.isPressed) {
+                // Card tap: if in_transit (and no child button was tapped), trigger OBD view.
+                // Guard with isPressed() to avoid double-firing when a child button was clicked
+                // (Android fires child-button click THEN card-root click even when button is disabled).
+                if (assignment.tripStatus == "in_transit" &&
+                    !binding.btnTripAction.isPressed) {
                     onTripActionClicked(assignment)
                 }
             }
