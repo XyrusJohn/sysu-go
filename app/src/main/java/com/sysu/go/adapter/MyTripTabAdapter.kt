@@ -213,22 +213,23 @@ class MyTripTabAdapter(
             }
 
             binding.btnTripAction.setOnClickListener {
+                if (!assignment.isPodComplete) {
+                    val incomplete = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
+                    android.widget.Toast.makeText(
+                        ctx,
+                        "Kompletuhin muna ang POD ($incomplete item${if (incomplete > 1) "s" else ""} ang natitira)",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    return@setOnClickListener
+                }
                 onTripActionClicked(assignment)
             }
 
             binding.root.setOnClickListener {
                 // Card tap: if in_transit, trigger OBD view; otherwise nop
-                if (assignment.tripStatus == "in_transit") {
-                    // If POD is locked, show a toast with the incomplete count instead of launching
-                    if (!assignment.isPodComplete) {
-                        val incomplete = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
-                        android.widget.Toast.makeText(
-                            ctx,
-                            "Kompletuhin muna ang POD ($incomplete item${if (incomplete > 1) "s" else ""} ang natitira)",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
-                        return@setOnClickListener
-                    }
+                // isPressed() = true means the click came from a child button
+                // that already handled it — don't double-fire in that case.
+                if (assignment.tripStatus == "in_transit" && !binding.btnTripAction.isPressed) {
                     onTripActionClicked(assignment)
                 }
             }
