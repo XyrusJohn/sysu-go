@@ -211,8 +211,9 @@ class MyTripTabAdapter(
                 onTripActionClicked(assignment)
             }
 
-            // OBD row: unlocked only when trip is ON TRANSIT (driver can capture POD during delivery)
-            val isObdLocked = assignment.tripStatus != "in_transit"
+            // OBD row: unlocked only when trip is ON TRANSIT or COMPLETED.
+            // CONFIRMED (pre-trip): OBD is locked — driver can't POD before trip starts.
+            val isObdLocked = assignment.tripStatus != "in_transit" && assignment.tripStatus != "completed"
             if (isObdLocked) {
                 binding.ivObdChevron.setImageResource(R.drawable.ic_lock)
                 binding.rowObd.alpha = 0.5f
