@@ -241,9 +241,15 @@ class TransitActivity : AppCompatActivity() {
 
         binding.btnStartTrip.setOnClickListener {
             when {
-                // In transit: go back to My Trip tab — trip completion is handled there (gated on all PODs done)
+                // In transit: navigate back to My Trip tab — trip completion is handled there (gated on all PODs done)
                 isTripStarted -> {
-                    Toast.makeText(this, "Bumalik sa My Trip tab", Toast.LENGTH_SHORT).show()
+                    // Resume MyTripActivity instead of just finish() — when MyTripActivity launched
+                    // TransitActivity it called finish() on itself, so there's nothing on the stack
+                    // to return to. Explicitly relaunch MyTripActivity with CLEAR_TOP.
+                    val intent = Intent(this, MyTripActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(intent)
                     finish()
                 }
                 else -> startTrip()              // not started → start trip
