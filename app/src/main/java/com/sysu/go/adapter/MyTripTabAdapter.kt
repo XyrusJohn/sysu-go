@@ -144,9 +144,11 @@ class MyTripTabAdapter(
                         ContextCompat.getColor(ctx, R.color.white)
                     )
 
-                    binding.btnTripAction.text = "VIEW OBD ITEMS"
-                    binding.btnTripAction.isEnabled = true
-                    binding.btnTripAction.alpha = 1.0f
+                    // END TRIP is gated on all PODs being captured
+                    val canEndTrip = assignment.isPodComplete
+                    binding.btnTripAction.text = if (canEndTrip) "END TRIP" else "END TRIP 🔒"
+                    binding.btnTripAction.isEnabled = canEndTrip
+                    binding.btnTripAction.alpha = if (canEndTrip) 1.0f else 0.4f
                     binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
 
                     binding.btnShowVerification.visibility = View.GONE
@@ -217,6 +219,16 @@ class MyTripTabAdapter(
             binding.root.setOnClickListener {
                 // Card tap: if in_transit, trigger OBD view; otherwise nop
                 if (assignment.tripStatus == "in_transit") {
+                    // If POD is locked, show a toast with the incomplete count instead of launching
+                    if (!assignment.isPodComplete) {
+                        val incomplete = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
+                        android.widget.Toast.makeText(
+                            ctx,
+                            "Kompletuhin muna ang POD ($incomplete item${if (incomplete > 1) "s" else ""} ang natitira)",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        return@setOnClickListener
+                    }
                     onTripActionClicked(assignment)
                 }
             }

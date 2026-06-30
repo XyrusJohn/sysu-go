@@ -78,4 +78,12 @@ data class Assignment(
 
     /** True if trip is completed */
     val isCompleted: Boolean get() = tripStatus == "completed"
+
+    /**
+     * Returns true only when ALL line items have isPodCompleted == true.
+     * Used to gate the END TRIP button — driver cannot end a trip until
+     * every POD has been captured (delivered, rejected, or delivered+rejected).
+     */
+    val isPodComplete: Boolean get() =
+        lineItems.isNotEmpty() && lineItems.all { (it["isPodCompleted"] as? Boolean) == true }
 }
