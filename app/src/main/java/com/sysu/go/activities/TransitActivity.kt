@@ -68,8 +68,8 @@ class TransitActivity : AppCompatActivity() {
     private var currentTruckType: String? = null
     private var isTripEnded: Boolean = false   // true when tripStatus=completed
     private var isReturningToBase: Boolean = false
-    private var isTripStarted = false
     private var isPodCompleteForAll: Boolean = false
+    private var isTripStarted = false
     private var isSessionRestored = false      // true when opened via session restore (cold-start mid-trip)
     private var socketConnectListener: (() -> Unit)? = null
     private var isOfflineDialogShowing = false
@@ -252,27 +252,21 @@ class TransitActivity : AppCompatActivity() {
                         .setNegativeButton("Cancel", null)
                         .show()
                 }
-                // in_transit + all PODs complete → transition to returning_to_base
-                isTripStarted && isPodCompleteForAll -> {
-                    AlertDialog.Builder(this)
-                        .setTitle("Return to Base?")
-                        .setMessage("All OBD items are complete. Begin returning to the warehouse?")
-                        .setPositiveButton("Confirm") { _, _ ->
-                            transitionToReturningToBase()
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                }
-                // In transit: navigate back to the main dashboard (Assignment tab)
                 isTripStarted -> {
-                    // Navigate directly to MainActivity — the driver's home/dashboard screen
-                    val intent = Intent(this, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    if (isPodCompleteForAll) {
+                        AlertDialog.Builder(this)
+                            .setTitle("Return to Base?")
+                            .setMessage("All OBD items are complete. Begin returning to the warehouse?")
+                            .setPositiveButton("Confirm") { _, _ -> transitionToReturningToBase() }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    } else {
+                        val intent = Intent(this, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        }
+                        startActivity(intent)
+                        finish()
                     }
-                    startActivity(intent)
-                    finish()
                 }
                 else -> startTrip()              // not started → start trip
             }
@@ -505,6 +499,7 @@ class TransitActivity : AppCompatActivity() {
                         .addOnSuccessListener { doc ->
                             if (doc.exists()) {
                                 Log.d(TAG, "[LOAD] Direct fetch found doc id=${doc.id} tripStatus=${doc.getString("tripStatus")}")
+                                currentSapDocId = doc.id
                                 // Compute isPodCompleteForAll
                                 val lineItemsAll = doc.get("lineItems") as? List<Map<String, Any?>>
                                 isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
