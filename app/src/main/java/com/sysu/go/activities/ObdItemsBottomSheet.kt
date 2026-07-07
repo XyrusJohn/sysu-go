@@ -7,11 +7,13 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.card.MaterialCardView
+import android.content.res.ColorStateList
 import android.app.AlertDialog
 import android.util.Log
 import com.sysu.go.R
@@ -59,7 +61,13 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
     var onItemClick: ((item: Map<String, Any?>) -> Unit)? = null
     var onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+    /** Called when driver taps DONE UNLOADING — triggers POD capture */
+    var onUnloadingDone: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
     var onRefreshRequest: (() -> Unit)? = null
+    /** Called when driver confirms START UNLOADING. Caller writes unloadStatus=UNLOADING to Firestore. */
+    var onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+    /** Called when RETAKE is tapped on a COMPLETE OBD row — triggers retake flow in MyTripActivity. */
+    var onRetakeTap: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
 
     /**
      * Shows loading feedback while data is being refreshed.
@@ -89,6 +97,17 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         if (_binding == null) return
         binding.pbObdRefresh.visibility = View.GONE
         loadingForObdNumbers.clear()
+    }
+
+    /**
+     * Update lineItems after a Firestore refresh.
+     * Also clears any UNLOADING states so items show their current isPodCompleted status.
+     */
+    fun setLineItems(items: List<Map<String, Any?>>) {
+        lineItems = items
+        if (_binding != null) {
+            populateData()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,7 +207,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
         // Dim the indicator when this row is loading else configure normally
         if (!isLoading) {
-            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, podImageUrl)
+            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, obd, item, podImageUrl)
         } else {
             // Loading: keep status pill but dim the indicator
             tvDeliveryStatus.alpha = 1f
@@ -203,8 +222,21 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 rowView.setOnClickListener { onItemClick?.invoke(item) }
             } else {
                 if (podCaptureEnabled) {
-                    ivPodIndicator.setOnClickListener { onObdCameraTap?.invoke(item, shipmentDocId) }
-                    rowView.setOnClickListener { onObdCameraTap?.invoke(item, shipmentDocId) }
+                    // Camera icon tap: ALWAYS fires direct POD capture — original behavior
+                    ivPodIndicator.setOnClickListener {
+                        onObdCameraTap?.invoke(item, shipmentDocId)
+                    }
+                    // Row/card tap: UNLOADING → DONE UNLOADING, else → direct POD capture
+                    val unloadStatus = item["unloadStatus"] as? String ?: ""
+                    rowView.setOnClickListener {
+                        if (unloadStatus == "UPLOADING") {
+                            // no-op while uploading
+                        } else if (unloadStatus == "UNLOADING") {
+                            onUnloadingDone?.invoke(item, shipmentDocId)
+                        } else {
+                            onObdCameraTap?.invoke(item, shipmentDocId)
+                        }
+                    }
                 }
             }
         } else {
@@ -255,7 +287,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         // Dim the indicator during loading
         if (!isLoading) {
             bindStatusBar(viewStatusBar, isPodCompleted, deliveryStatus)
-            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, podImageUrl)
+            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, obd, item, podImageUrl)
         } else {
             viewStatusBar.alpha = 0.4f
             tvDeliveryStatus.alpha = 1f
@@ -335,6 +367,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         ivPodIndicator: ImageView,
         isPodCompleted: Boolean,
         deliveryStatus: String,
+        obdNumber: String = "",
+        item: Map<String, Any?> = emptyMap(),
         @Suppress("UNUSED_PARAMETER") podImageUrl: String = ""
     ) {
         val ctx = requireContext()
@@ -346,61 +380,105 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
             tvDeliveryStatus.alpha = 1f
 
-            if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
-                // POD layout: show UNLOAD button instead of camera icon for pending POD rows
-                ivPodIndicator.visibility = View.GONE
+            // Always show camera icon for pending — same as old design
+            ivPodIndicator.visibility = View.VISIBLE
+            ivPodIndicator.alpha = 1f
+            ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
+            ivPodIndicator.imageTintList = ContextCompat.getColorStateList(ctx, R.color.text_amber)
+            ivPodIndicator.isClickable = true
 
-                // Find the UNLOAD button in the row view
-                tvDeliveryStatus.parent?.parent?.let { rowView ->
+            if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
+                // Show UNLOAD button for pending POD rows
+                val unloadStatus = item["unloadStatus"] as? String ?: ""
+                val isUnloading = unloadStatus == "UNLOADING"
+
+                if (isUnloading) {
+                    tvDeliveryStatus.text = "UNLOADING..."
+                }
+
+                tvDeliveryStatus.parent?.parent?.let { parentView ->
+                    val rowView = parentView as? android.view.View ?: return@let
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
+
                     tvUnloadAction?.visibility = View.VISIBLE
+                    tvUnloadAction?.text = if (isUnloading) "DONE" else "UNLOAD"
+                    tvUnloadAction?.setBackgroundResource(
+                        when {
+                            isUnloading -> R.drawable.bg_status_pill_green
+                            else -> R.drawable.bg_pod_pending_pill
+                        }
+                    )
+                    tvUnloadAction?.setTextColor(
+                        ContextCompat.getColor(ctx,
+                            when {
+                                isUnloading -> R.color.white
+                                else -> R.color.transit_amber_dark
+                            }
+                        )
+                    )
                     tvUnloadAction?.setOnClickListener {
                         val context = rowView.context
-                        val item = tvDeliveryStatus.tag as? Map<String, Any?> ?: return@setOnClickListener
-                        val obd = item["obdNumber"] as? String ?: ""
-                        val customerName = item["customerName"] as? String ?: "this location"
-                        AlertDialog.Builder(context)
-                            .setTitle("Start Unloading?")
-                            .setMessage("Begin unloading for $obd at $customerName?")
-                            .setPositiveButton("Confirm") { _, _ ->
-                                // Call the existing onObdCameraTap callback
-                                onObdCameraTap?.invoke(item, shipmentDocId)
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
+                        val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                        if (clickedItem == null) return@setOnClickListener
+
+                        if (isUnloading) {
+                            // UNLOADING → DONE
+                            onUnloadingDone?.invoke(clickedItem, shipmentDocId)
+                        } else {
+                            // PENDING → confirm start unloading
+                            AlertDialog.Builder(context)
+                                .setTitle("Start Unloading?")
+                                .setMessage("Begin unloading for $obdNumber at ${clickedItem["customerName"] as? String ?: "this location"}?")
+                                .setPositiveButton("Confirm") { _, _ ->
+                                    // Tell MyTripActivity to persist unloadStatus=UNLOADING in Firestore
+                                    onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
                     }
                 }
             } else {
-                // DETAIL layout: no pod indicator for pending rows
-                ivPodIndicator.visibility = View.GONE
-                ivPodIndicator.isClickable = false
+                // DETAIL layout: no UNLOAD button
             }
         } else {
-            // ── COMPLETED states: circular badge only, no thumbnail in row ──
-            val statusUpper = deliveryStatus.uppercase().trim()
-            val appearance: StatusAppearance = when {
-                statusUpper == getString(R.string.pod_status_delivered).uppercase() ->
-                    StatusAppearance(R.drawable.bg_badge_green, R.drawable.bg_status_pill_green, R.color.white, "DELIVERED")
-                statusUpper == getString(R.string.pod_status_rejected).uppercase() ->
-                    StatusAppearance(R.drawable.bg_badge_red, R.drawable.bg_status_pill_red, R.color.white, "REJECTED")
-                statusUpper == getString(R.string.pod_status_delivered_rejection).uppercase() ->
-                    StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, "DEL. W/ REJ")
-                else ->
-                    StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, "PENDING")
+            // ── COMPLETED states: delivery status pill + RETAKE button ──
+            val statusUpper = (item["deliveryStatus"] as? String)?.uppercase()?.trim() ?: ""
+            val isPodCompletedItem = item["isPodCompleted"] as? Boolean ?: false
+
+            if (isPodCompletedItem && statusUpper.isNotBlank()) {
+                // Show delivery status pill (DELIVERED/REJECTED/DEL. W/ REJ)
+                val appearance: StatusAppearance = when (statusUpper) {
+                    "DELIVERED" -> StatusAppearance(R.drawable.bg_badge_green, R.drawable.bg_status_pill_green, R.color.white, "DELIVERED")
+                    "REJECTED"  -> StatusAppearance(R.drawable.bg_badge_red, R.drawable.bg_status_pill_red, R.color.white, "REJECTED")
+                    "DELIVERED W/ REJECTION" -> StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, "DEL. W/ REJ")
+                    else -> StatusAppearance(R.drawable.bg_badge_amber, R.drawable.bg_status_pill_amber, R.color.text_amber, statusUpper)
+                }
+                tvDeliveryStatus.text = appearance.label
+                tvDeliveryStatus.setBackgroundResource(appearance.pillBg)
+                tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, appearance.pillTextColor))
+                tvDeliveryStatus.alpha = 1f
+
+                // Show RETAKE in the tvUnloadAction slot (same position as UNLOAD/CAPTURE)
+                val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
+                val tvRetake = rowCardView?.findViewById<TextView>(R.id.tvUnloadAction)
+                tvRetake?.visibility = View.VISIBLE
+                tvRetake?.text = "RETAKE"
+                tvRetake?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
+                tvRetake?.setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
+                tvRetake?.setOnClickListener {
+                    val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                    if (clickedItem != null) {
+                        onRetakeTap?.invoke(clickedItem, shipmentDocId)
+                    }
+                }
+            } else {
+                // isPodCompleted but no deliveryStatus yet — treat as PENDING
+                tvDeliveryStatus.text = "PENDING"
+                tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
+                tvDeliveryStatus.alpha = 1f
             }
-
-            tvDeliveryStatus.text = appearance.label
-            tvDeliveryStatus.setBackgroundResource(appearance.pillBg)
-            tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, appearance.pillTextColor))
-            tvDeliveryStatus.alpha = 1f
-
-            // Never show thumbnail in row — always the circular badge
-            ivPodIndicator.visibility = View.VISIBLE
-            ivPodIndicator.alpha = 1f
-            ivPodIndicator.setBackgroundResource(appearance.badgeBg)
-            ivPodIndicator.setImageResource(R.drawable.ic_checkmark_white)
-            ivPodIndicator.imageTintList = null
-            ivPodIndicator.isClickable = true
         }
     }
 
@@ -457,7 +535,10 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             rowLayoutType: RowLayoutType = RowLayoutType.POD,
             podCaptureEnabled: Boolean = true,
             onItemClick: ((item: Map<String, Any?>) -> Unit)? = null,
-            onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+            onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
+            onUnloadingDone: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
+            onRetakeTap: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
+            onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
         ): ObdItemsBottomSheet {
             return ObdItemsBottomSheet().apply {
                 this.lineItems = lineItems
@@ -466,7 +547,19 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 this.podCaptureEnabled = podCaptureEnabled
                 this.onItemClick = onItemClick
                 this.onObdCameraTap = onObdCameraTap
+                this.onUnloadingDone = onUnloadingDone
+                this.onRetakeTap = onRetakeTap
+                this.onUnloadConfirm = onUnloadConfirm
             }
         }
+    }
+
+    /**
+     * Call this after POD capture completes for an OBD item.
+     * Clears the UNLOADING state so the row shows DELIVERED.
+     */
+    @Deprecated("No longer needed — state driven by Firestore")
+    fun notifyPodCompleted(obdNumber: String) {
+        // No-op: unloadStatus is cleared by updateObdLineItemInFirestore on complete
     }
 }
