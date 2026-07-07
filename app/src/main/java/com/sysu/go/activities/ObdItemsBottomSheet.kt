@@ -554,12 +554,4 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         }
     }
 
-    /**
-     * Call this after POD capture completes for an OBD item.
-     * Clears the UNLOADING state so the row shows DELIVERED.
-     */
-    @Deprecated("No longer needed — state driven by Firestore")
-    fun notifyPodCompleted(obdNumber: String) {
-        // No-op: unloadStatus is cleared by updateObdLineItemInFirestore on complete
     }
-}
