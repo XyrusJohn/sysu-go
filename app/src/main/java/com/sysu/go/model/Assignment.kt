@@ -78,6 +78,8 @@ data class Assignment(
 
     /** True if trip is completed */
     val isCompleted: Boolean get() = tripStatus == "completed"
+    /** True if trip is returning to base (all PODs done, heading to warehouse) */
+    val isReturningToBase: Boolean get() = tripStatus == "returning_to_base"
 
     /**
      * Returns true only when ALL line items have isPodCompleted == true.
