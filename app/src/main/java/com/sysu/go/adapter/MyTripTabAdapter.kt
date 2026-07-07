@@ -168,6 +168,20 @@ class MyTripTabAdapter(
 
                     binding.btnShowVerification.visibility = View.GONE
                 }
+                "returning_to_base" -> {
+                    binding.tvTripStatusBadge.text = "RETURNING TO BASE"
+                    binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_blue)
+                    binding.tvTripStatusBadge.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
+
+                    binding.btnTripAction.text = "ARRIVED AT WAREHOUSE"
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1.0f
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
+
+                    binding.btnShowVerification.visibility = View.GONE
+                }
                 else -> {
                     // pending / confirmed
                     if (assignment.guardVerified && assignment.driverConfirmed) {
