@@ -144,6 +144,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     }
 
     private fun populateData() {
+        Log.d(TAG, "populateData: START — lineItems.size=${lineItems.size}")
         binding.tvObdSheetCount.text = lineItems.size.toString()
         binding.pbObdRefresh.visibility = View.GONE
 
@@ -180,6 +181,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     // ─── POD row — item_my_trip_obd.xml ─────────────────────────────────────────
 
     private fun inflatePodRow(inflater: LayoutInflater, container: ViewGroup, item: Map<String, Any?>): View {
+        Log.d(TAG, "inflatePodRow: obd=${item["obdNumber"]}, unloadStatus=[${item["unloadStatus"] as? String ?: ""}], isPodCompleted=${item["isPodCompleted"]}")
         val rowView = inflater.inflate(R.layout.item_my_trip_obd, container, false) as MaterialCardView
 
         val tvObdNumber    = rowView.findViewById<TextView>(R.id.tvObdNumber)
@@ -393,6 +395,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
                     if (isUnloading) {
                         // ── UNLOADING: CAPTURE button (ORANGE pill) ──
+                        Log.d(TAG, "configureStatusPill: UNLOADING branch for obd=${item["obdNumber"]} — setting CAPTURE button")
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "CAPTURE"
                         tvUnloadAction?.alpha = 1f
@@ -403,13 +406,18 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                         tvUnloadAction?.translationZ = 8f  // raise above everything
                         tvUnloadAction?.elevation = 8f
                         tvUnloadAction?.setOnClickListener {
+                            Log.d(TAG, "CAPTURE clicked! obd=${item["obdNumber"]}")
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
                             if (clickedItem != null) {
+                                Log.d(TAG, "CAPTURE: calling onUnloadingDone for $shipmentDocId")
                                 onUnloadingDone?.invoke(clickedItem, shipmentDocId)
+                            } else {
+                                Log.w(TAG, "CAPTURE: clickedItem was NULL — tvDeliveryStatus.tag is null")
                             }
                         }
                     } else {
                         // ── PENDING: show UNLOAD button only (amber pill) ──
+                        Log.d(TAG, "configureStatusPill: PENDING branch for obd=${item["obdNumber"]}")
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "UNLOAD"
                         tvUnloadAction?.alpha = 1f
@@ -496,6 +504,11 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         newLineItems: List<Map<String, Any?>>,
         obdNumberToClear: String? = null
     ) {
+        Log.d(TAG, "refreshWith: called with ${newLineItems.size} items, obdNumberToClear=$obdNumberToClear")
+        // Show the item being updated
+        newLineItems.forEach { item ->
+            Log.d(TAG, "  item: obd=${item["obdNumber"]}, unloadStatus=[${item["unloadStatus"] as? String ?: ""}], isPodCompleted=${item["isPodCompleted"]}")
+        }
         _lineItems = newLineItems
 
         // Clear loading state for targeted OBD, or all if null

@@ -685,6 +685,7 @@ class MyTripActivity : AppCompatActivity() {
      * Used to persist the driver's unloading journey state across app restarts.
      */
     private fun writeUnloadStatus(shipmentDocId: String, obdNumber: String, status: String?) {
+        Log.d(TAG, "writeUnloadStatus: BEGIN docId=$shipmentDocId, obd=$obdNumber, status=$status")
         lifecycleScope.launch {
             try {
                 val docRef = db.collection("sap_assignments").document(shipmentDocId)
@@ -704,9 +705,11 @@ class MyTripActivity : AppCompatActivity() {
                     }
                     lineItems[idx] = updated
                     transaction.update(docRef, "lineItems", lineItems)
+                    Log.d(TAG, "writeUnloadStatus: Firestore transaction updated unloadStatus=$status for obd=$obdNumber")
                 }.await()
+                Log.d(TAG, "writeUnloadStatus: COMPLETE for obd=$obdNumber")
             } catch (e: Exception) {
-                Log.e(TAG, "writeUnloadStatus failed for obd=$obdNumber: ${e.message}")
+                Log.e(TAG, "writeUnloadStatus FAILED for obd=$obdNumber: ${e.message}")
             }
         }
     }
@@ -1309,8 +1312,9 @@ class MyTripActivity : AppCompatActivity() {
                 showObdStatusSheet(item, docId)
             },
             onUnloadConfirm = { item, docId ->
-                // Persist UNLOADING state — survives app restart
                 val obd = item["obdNumber"] as? String ?: return@newInstance
+                Log.d(TAG, "onUnloadConfirm: OBD=$obd, docId=$docId")
+                Log.d(TAG, "onUnloadConfirm: calling writeUnloadStatus($docId, $obd, UNLOADING)")
                 writeUnloadStatus(docId, obd, "UNLOADING")
                 // Refresh bottom sheet to show UNLOADING state immediately
                 val sheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
@@ -1319,11 +1323,13 @@ class MyTripActivity : AppCompatActivity() {
                     @Suppress("UNCHECKED_CAST")
                     val current = s.lineItems.toMutableList()
                     val idx = current.indexOfFirst { (it["obdNumber"] as? String) == obd }
+                    Log.d(TAG, "onUnloadConfirm: found OBD at index=$idx in ${current.size} items")
                     if (idx != -1) {
                         current[idx] = current[idx].toMutableMap().apply { this["unloadStatus"] = "UNLOADING" }
+                        Log.d(TAG, "onUnloadConfirm: calling refreshWith with UNLOADING state for obd=$obd")
                         s.refreshWith(current)
                     }
-                }
+                } ?: Log.w(TAG, "onUnloadConfirm: bottom sheet was null!")
             },
             onRetakeTap = { item, docId ->
                 retakeObdPod(item, docId)
