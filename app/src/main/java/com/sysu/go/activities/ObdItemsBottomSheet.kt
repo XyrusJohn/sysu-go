@@ -369,6 +369,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         if (!isPodCompleted || deliveryStatus.isBlank()) {
             // ── PENDING or UNLOADING ──
             val unloadStatus = item["unloadStatus"] as? String ?: ""
+            Log.d(TAG, "configureStatusPill: obd=${item["obdNumber"]}, isPodCompleted=$isPodCompleted, unloadStatus=[$unloadStatus]")
             val isUnloading = unloadStatus == "UNLOADING"
 
             if (isUnloading) {
@@ -382,9 +383,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             }
             tvDeliveryStatus.alpha = 1f
 
-            // No camera icon in PENDING or UNLOADING — fool-proof: must UNLOAD first
-            // Use INVISIBLE (not GONE) so it stays in layout z-order and doesn't block CAPTURE button
-            ivPodIndicator.visibility = View.INVISIBLE
+            // No camera icon in PENDING or UNLOADING — gone from layout entirely so it doesn't block CAPTURE button
+            ivPodIndicator.visibility = View.GONE
 
             if (rowLayoutType == RowLayoutType.POD) {
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
@@ -443,6 +443,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
             if (isPodCompletedItem && statusUpper.isNotBlank()) {
                 // Show delivery status pill (DELIVERED/REJECTED/DEL. W/ REJ)
+                ivPodIndicator.visibility = View.VISIBLE  // restore camera/checkmark for COMPLETED rows
                 val appearance: StatusAppearance = when (statusUpper) {
                     "DELIVERED" -> StatusAppearance(R.drawable.bg_badge_green, R.drawable.bg_status_pill_green, R.color.white, "DELIVERED")
                     "REJECTED"  -> StatusAppearance(R.drawable.bg_badge_red, R.drawable.bg_status_pill_red, R.color.white, "REJECTED")
