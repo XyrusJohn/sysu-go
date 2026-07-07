@@ -69,6 +69,7 @@ class TransitActivity : AppCompatActivity() {
     private var isTripEnded: Boolean = false   // true when tripStatus=completed
     private var isReturningToBase: Boolean = false
     private var isTripStarted = false
+    private var isPodCompleteForAll: Boolean = false
     private var isSessionRestored = false      // true when opened via session restore (cold-start mid-trip)
     private var socketConnectListener: (() -> Unit)? = null
     private var isOfflineDialogShowing = false
@@ -251,6 +252,17 @@ class TransitActivity : AppCompatActivity() {
                         .setNegativeButton("Cancel", null)
                         .show()
                 }
+                // in_transit + all PODs complete → transition to returning_to_base
+                isTripStarted && isPodCompleteForAll -> {
+                    AlertDialog.Builder(this)
+                        .setTitle("Return to Base?")
+                        .setMessage("All OBD items are complete. Begin returning to the warehouse?")
+                        .setPositiveButton("Confirm") { _, _ ->
+                            transitionToReturningToBase()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
                 // In transit: navigate back to the main dashboard (Assignment tab)
                 isTripStarted -> {
                     // Navigate directly to MainActivity — the driver's home/dashboard screen
@@ -427,6 +439,37 @@ class TransitActivity : AppCompatActivity() {
             }
     }
 
+    private fun transitionToReturningToBase() {
+        if (currentSapDocId.isBlank()) {
+            Toast.makeText(this, "No active trip.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        binding.btnStartTrip.isEnabled = false
+        binding.btnStartTrip.text = "UPDATING..."
+
+        val updates = mapOf(
+            "tripStatus" to "returning_to_base",
+            "returnedToBaseAt" to Timestamp.now()
+        )
+        db.collection("sap_assignments").document(currentSapDocId)
+            .update(updates)
+            .addOnSuccessListener {
+                if (isFinishing) return@addOnSuccessListener
+                isReturningToBase = true
+                isTripStarted = false
+                isPodCompleteForAll = false  // reset for cleanliness
+                updateProgressStepper()
+                Toast.makeText(this, "Heading back to base!", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener { e ->
+                if (isFinishing) return@addOnFailureListener
+                Log.e(TAG, "Failed to transition to returning_to_base: ${e.message}")
+                binding.btnStartTrip.isEnabled = true
+                binding.btnStartTrip.text = "START RETURNING TO BASE"
+                Toast.makeText(this, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+            }
+    }
+
     private fun loadTripData() {
         val driverId = sessionManager.getDriverId() ?: run {
             Log.e(TAG, "driverId is null from sessionManager")
@@ -462,6 +505,9 @@ class TransitActivity : AppCompatActivity() {
                         .addOnSuccessListener { doc ->
                             if (doc.exists()) {
                                 Log.d(TAG, "[LOAD] Direct fetch found doc id=${doc.id} tripStatus=${doc.getString("tripStatus")}")
+                                // Compute isPodCompleteForAll
+                                val lineItemsAll = doc.get("lineItems") as? List<Map<String, Any?>>
+                                isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                                 populateShipmentUI(doc, currentHelper, currentTruckType)
                             } else {
                                 Log.w(TAG, "[LOAD] Direct fetch doc $restoredDocId not found — falling back to queue join")
