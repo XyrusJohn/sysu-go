@@ -938,10 +938,10 @@ class TransitActivity : AppCompatActivity() {
         if (isReturningToBase) {
             setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
             setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.DONE)
-            setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.ACTIVE)
+            setStepState(R.id.dotTransit, null, R.id.checkTransit, R.id.labelTransit, StepState.DONE)
             binding.tvSubStatus.text = "ARRIVED AT WAREHOUSE"
-            binding.btnStartTrip.text = "END TRIP"
-            binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
+            binding.btnStartTrip.text = "ARRIVED AT WAREHOUSE"
+            binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.sysu_blue))
             binding.btnStartTrip.isEnabled = true
             return
         }
