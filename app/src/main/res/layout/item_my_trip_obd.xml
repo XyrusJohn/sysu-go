@@ -103,7 +103,7 @@
             android:scaleType="centerCrop"
             android:src="@drawable/ic_camera_pod"
             android:contentDescription="POD photo captured"
-            android:visibility="gone"
+            android:visibility="visible"
             tools:visibility="visible"
             app:tint="@color/transit_green" />
 
@@ -115,12 +115,14 @@
             android:layout_marginStart="8dp"
             android:paddingHorizontal="10dp"
             android:paddingVertical="4dp"
-            android:background="@drawable/bg_status_pill_amber"
-            android:textColor="@color/text_amber"
+            android:background="@drawable/bg_pod_pending_pill"
+            android:textColor="@color/transit_amber_dark"
             android:textSize="@dimen/text_size_caption"
             android:textStyle="bold"
             android:text="UNLOAD"
-            android:visibility="gone" />
+            android:visibility="gone"
+            android:clickable="true"
+            android:focusable="true" />
 
         <!-- Per-row loading indicator — visible while status is being reloaded -->
         <ProgressBar

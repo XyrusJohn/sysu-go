@@ -225,21 +225,19 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
                 rowView.setOnClickListener { onItemClick?.invoke(item) }
             } else {
-                if (podCaptureEnabled) {
-                    // Camera icon tap: ALWAYS fires direct POD capture — original behavior
-                    ivPodIndicator.setOnClickListener {
-                        onObdCameraTap?.invoke(item, shipmentDocId)
-                    }
-                    // Row/card tap: UNLOADING → DONE UNLOADING, else → direct POD capture
-                    val unloadStatus = item["unloadStatus"] as? String ?: ""
-                    rowView.setOnClickListener {
-                        if (unloadStatus == "UPLOADING") {
-                            // no-op while uploading
-                        } else if (unloadStatus == "UNLOADING") {
-                            onUnloadingDone?.invoke(item, shipmentDocId)
-                        } else {
-                            onObdCameraTap?.invoke(item, shipmentDocId)
-                        }
+                // No ivPodIndicator click handler for PENDING/UNLOADING — camera is HIDDEN (fool-proof)
+                // Driver must use the CAPTURE button after UNLOAD
+                ivPodIndicator.setOnClickListener(null)
+                ivPodIndicator.isClickable = false
+
+                val unloadStatus = item["unloadStatus"] as? String ?: ""
+                rowView.setOnClickListener {
+                    if (unloadStatus == "UPLOADING") {
+                        // no-op while uploading
+                    } else if (unloadStatus == "UNLOADING") {
+                        onUnloadingDone?.invoke(item, shipmentDocId)
+                    } else {
+                        // PENDING: row tap = nothing (fool-proof — must tap UNLOAD button)
                     }
                 }
             }
