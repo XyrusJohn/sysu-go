@@ -1304,13 +1304,13 @@ class MyTripActivity : AppCompatActivity() {
             },
             onObdCameraTap = { item, docId ->
                 // Persist UPLOADING state BEFORE camera fires — survives app kill during upload
-                val obd = item["obdNumber"] as? String ?: return@onObdCameraTap
+                val obd = item["obdNumber"] as? String ?: return@newInstance
                 writeUnloadStatus(docId, obd, "UPLOADING")
                 showObdStatusSheet(item, docId)
             },
             onUnloadConfirm = { item, docId ->
                 // Persist UNLOADING state — survives app restart
-                val obd = item["obdNumber"] as? String ?: return@onUnloadConfirm
+                val obd = item["obdNumber"] as? String ?: return@newInstance
                 writeUnloadStatus(docId, obd, "UNLOADING")
                 // Refresh bottom sheet to show UNLOADING state immediately
                 val sheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)

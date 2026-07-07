@@ -49,7 +49,9 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     private var _binding: DialogObdItemsBinding? = null
     private val binding get() = _binding!!
 
-    private var lineItems: List<Map<String, Any?>> = emptyList()
+    /** Exposed for read-only access from callers (e.g. MyTripActivity onUnloadConfirm). */
+    val lineItems: List<Map<String, Any?>> get() = _lineItems
+    private var _lineItems: List<Map<String, Any?>> = emptyList()
     private var shipmentDocId: String = ""
     private var rowLayoutType: RowLayoutType = RowLayoutType.POD
 
@@ -104,7 +106,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
      * Also clears any UNLOADING states so items show their current isPodCompleted status.
      */
     fun setLineItems(items: List<Map<String, Any?>>) {
-        lineItems = items
+        _lineItems = items
         if (_binding != null) {
             populateData()
         }
@@ -500,7 +502,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         newLineItems: List<Map<String, Any?>>,
         obdNumberToClear: String? = null
     ) {
-        lineItems = newLineItems
+        _lineItems = newLineItems
 
         // Clear loading state for targeted OBD, or all if null
         if (obdNumberToClear != null) {
@@ -541,7 +543,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
         ): ObdItemsBottomSheet {
             return ObdItemsBottomSheet().apply {
-                this.lineItems = lineItems
+                this._lineItems = lineItems
                 this.shipmentDocId = shipmentDocId
                 this.rowLayoutType = rowLayoutType
                 this.podCaptureEnabled = podCaptureEnabled
