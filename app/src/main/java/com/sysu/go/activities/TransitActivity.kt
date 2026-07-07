@@ -593,6 +593,9 @@ class TransitActivity : AppCompatActivity() {
                                     // Use the first doc that has some data
                                     val sapDoc = fallbackSnap.documents.first()
                                     currentSapDocId = sapDoc.id
+                                    // Compute isPodCompleteForAll
+                                    val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
+                                    isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                                     val fbTripStatus = sapDoc.getString("tripStatus")
                                     if (fbTripStatus == "completed") {
                                         isTripStarted = false
@@ -603,7 +606,11 @@ class TransitActivity : AppCompatActivity() {
                                 }
                             return@addOnSuccessListener
                         }
-                        val sapDoc = sapSnap.documents.first()
+                        val sapDoc = snap.documents.first()
+                        currentSapDocId = sapDoc.id
+                        // Compute isPodCompleteForAll
+                        val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
+                        isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                         Log.d(TAG, "Found sap doc id=${sapDoc.id} tripStatus=${sapDoc.getString("tripStatus")}")
                         populateShipmentUI(sapDoc, currentHelper, currentTruckType)
                     }
@@ -946,6 +953,17 @@ class TransitActivity : AppCompatActivity() {
 
         // In transit — Verified done, Transit active(in progress), Done pending
         if (isTripStarted) {
+            if (isPodCompleteForAll) {
+                setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
+                setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.DONE)
+                setStepState(R.id.dotTransit, null, R.id.checkTransit, R.id.labelTransit, StepState.DONE)
+                binding.tvSubStatus.text = "Ready to return"
+                binding.btnStartTrip.text = "START RETURNING TO BASE"
+                binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this, R.color.sysu_blue))
+                binding.btnStartTrip.isEnabled = true
+                return
+            }
+
             setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
             setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.ACTIVE)
             setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.PENDING)
