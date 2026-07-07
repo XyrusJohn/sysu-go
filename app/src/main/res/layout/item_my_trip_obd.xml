@@ -107,6 +107,21 @@
             tools:visibility="visible"
             app:tint="@color/transit_green" />
 
+        <!-- UNLOAD action button for pending POD rows -->
+        <TextView
+            android:id="@+id/tvUnloadAction"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:background="@drawable/bg_status_pill_amber"
+            android:textColor="@color/text_amber"
+            android:textSize="@dimen/text_size_caption"
+            android:textStyle="bold"
+            android:text="UNLOAD"
+            android:visibility="gone" />
+
         <!-- Per-row loading indicator — visible while status is being reloaded -->
         <ProgressBar
             android:id="@+id/pbItemLoading"

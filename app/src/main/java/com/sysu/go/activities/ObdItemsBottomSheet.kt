@@ -12,6 +12,7 @@ import androidx.core.view.isVisible
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.card.MaterialCardView
+import android.app.AlertDialog
 import android.util.Log
 import com.sysu.go.R
 import com.sysu.go.databinding.DialogObdItemsBinding
@@ -162,6 +163,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val tvCustomerName = rowView.findViewById<TextView>(R.id.tvCustomerName)
         val tvQuantity     = rowView.findViewById<TextView>(R.id.tvQuantity)
         val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
+        // Tag the item for later use in configureStatusPill
+        tvDeliveryStatus.tag = item
         val ivPodIndicator = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
         val pbItemLoading  = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
 
@@ -223,6 +226,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val tvDetailQuantity = rowView.findViewById<TextView>(R.id.tvDetailQuantity)
         val viewStatusBar    = rowView.findViewById<View>(R.id.viewStatusBar)
         val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
+        // Tag the item for later use in configureStatusPill
+        tvDeliveryStatus.tag = item
         val ivPodIndicator   = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
         val pbItemLoading    = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
 
@@ -342,13 +347,29 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             tvDeliveryStatus.alpha = 1f
 
             if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
-                // POD layout: show amber camera icon
-                ivPodIndicator.visibility = View.VISIBLE
-                ivPodIndicator.alpha = 1f
-                ivPodIndicator.setBackgroundResource(R.drawable.bg_badge_amber)
-                ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
-                ivPodIndicator.imageTintList = null
-                ivPodIndicator.isClickable = true
+                // POD layout: show UNLOAD button instead of camera icon for pending POD rows
+                ivPodIndicator.visibility = View.GONE
+
+                // Find the UNLOAD button in the row view
+                tvDeliveryStatus.parent?.parent?.let { rowView ->
+                    val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
+                    tvUnloadAction?.visibility = View.VISIBLE
+                    tvUnloadAction?.setOnClickListener {
+                        val context = rowView.context
+                        val item = tvDeliveryStatus.tag as? Map<String, Any?> ?: return@setOnClickListener
+                        val obd = item["obdNumber"] as? String ?: ""
+                        val customerName = item["customerName"] as? String ?: "this location"
+                        AlertDialog.Builder(context)
+                            .setTitle("Start Unloading?")
+                            .setMessage("Begin unloading for $obd at $customerName?")
+                            .setPositiveButton("Confirm") { _, _ ->
+                                // Call the existing onObdCameraTap callback
+                                onObdCameraTap?.invoke(item, shipmentDocId)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
             } else {
                 // DETAIL layout: no pod indicator for pending rows
                 ivPodIndicator.visibility = View.GONE
