@@ -67,6 +67,7 @@ class TransitActivity : AppCompatActivity() {
     private var currentHelper: String? = null
     private var currentTruckType: String? = null
     private var isTripEnded: Boolean = false   // true when tripStatus=completed
+    private var isReturningToBase: Boolean = false
     private var isTripStarted = false
     private var isSessionRestored = false      // true when opened via session restore (cold-start mid-trip)
     private var socketConnectListener: (() -> Unit)? = null
@@ -111,7 +112,7 @@ class TransitActivity : AppCompatActivity() {
             isTripStarted = true
             isSessionRestored = true
             binding.tvSubStatus.text = "Trip in progress"
-            binding.btnStartTrip.text = "BACK TO MY TRIP"
+            binding.btnStartTrip.text = "BACK TO HOME"
             binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
             binding.btnStartTrip.isEnabled = true
 
@@ -241,23 +242,19 @@ class TransitActivity : AppCompatActivity() {
 
         binding.btnStartTrip.setOnClickListener {
             when {
-                // In transit: navigate back to My Trip tab — trip completion is handled there (gated on all PODs done)
+                isReturningToBase -> {
+                    // Confirm before ending the return trip
+                    AlertDialog.Builder(this)
+                        .setTitle("End Trip?")
+                        .setMessage("Are you sure you want to end this trip? This cannot be undone.")
+                        .setPositiveButton("End Trip") { _, _ -> performEndTrip() }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+                // In transit: navigate back to the main dashboard (Assignment tab)
                 isTripStarted -> {
-                    // Use finish() FIRST, then start MyTripActivity.
-                    // Because confirmAndStartTrip and launchDeliveryActivity no longer call
-                    // finish() on MyTripActivity, MyTripActivity is alive in the back stack.
-                    // TransitActivity sits on top. finish() removes TransitActivity from the
-                    // stack — the natural back press then returns to MyTripActivity.
-                    //
-                    // Do NOT call finish() AFTER startActivity() — that creates a Race
-                    // Condition where finish() can execute before the new Intent is
-                    // dispatched, destroying the task and returning to home on back press.
-                    //
-                    // Using NEW_TASK | CLEAR_TOP ensures MyTripActivity is either brought
-                    // forward (existing instance) or created as the only activity in the
-                    // task, without being placed ON TOP of TransitActivity (which would
-                    // require a double-back-press to return to ASSIGN).
-                    val intent = Intent(this, MyTripActivity::class.java).apply {
+                    // Navigate directly to MainActivity — the driver's home/dashboard screen
+                    val intent = Intent(this, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                                 Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -344,7 +341,7 @@ class TransitActivity : AppCompatActivity() {
                     showLocationPermissionDialog()
                 }
                 if (isFinishing) return@addOnSuccessListener
-                binding.btnStartTrip.text = "BACK TO MY TRIP"
+                binding.btnStartTrip.text = "BACK TO HOME"
                 binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
                 updateProgressStepper()
             }
@@ -424,7 +421,7 @@ class TransitActivity : AppCompatActivity() {
             .addOnFailureListener { e ->
                 if (isFinishing) return@addOnFailureListener
                 Log.e(TAG, "Failed to end trip: ${e.message}")
-                binding.btnStartTrip.text = "BACK TO MY TRIP"
+                binding.btnStartTrip.text = "BACK TO HOME"
                 binding.btnStartTrip.isEnabled = true
                 Toast.makeText(this, "Failed to end trip. Try again.", Toast.LENGTH_SHORT).show()
             }
@@ -621,6 +618,10 @@ class TransitActivity : AppCompatActivity() {
         if (tripStatus == "completed") {
             isTripStarted = false
             isTripEnded = true
+        } else if (tripStatus == "returning_to_base") {
+            isReturningToBase = true
+            isTripStarted = false
+            isTripEnded = false
         }
 
         Log.d(TAG, "Shipment UI populated: Shipment=$shipmentNumber Plate=$plateNumber Truck=$resolvedTruckType Helper=$resolvedHelper")
@@ -885,13 +886,25 @@ class TransitActivity : AppCompatActivity() {
             return
         }
 
+        // Returning to base — show Verified done, Transit done, Done active
+        if (isReturningToBase) {
+            setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
+            setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.DONE)
+            setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.ACTIVE)
+            binding.tvSubStatus.text = "ARRIVED AT WAREHOUSE"
+            binding.btnStartTrip.text = "END TRIP"
+            binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
+            binding.btnStartTrip.isEnabled = true
+            return
+        }
+
         // In transit — Verified done, Transit active(in progress), Done pending
         if (isTripStarted) {
             setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
             setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.ACTIVE)
             setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.PENDING)
             binding.tvSubStatus.text = "Trip in progress"
-            binding.btnStartTrip.text = "BACK TO MY TRIP"
+            binding.btnStartTrip.text = "BACK TO HOME"
             binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.transit_green))
             binding.btnStartTrip.isEnabled = true
             return
