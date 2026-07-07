@@ -101,18 +101,23 @@
             tools:textColor="@color/text_amber"
             tools:background="@color/amber_pill_bg" />
 
-        <!-- POD indicator — camera icon; hidden/disabled for PENDING and UNLOADING rows in inflatePodRow -->
-        <ImageView
+        <!-- PREVIEW pill — replaces camera icon; visible only on COMPLETE rows after POD capture.
+             Default gone in XML; Kotlin sets text="PREVIEW" + visibility=VISIBLE in COMPLETE branch. -->
+        <TextView
             android:id="@+id/ivPodIndicator"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginStart="10dp"
-            android:scaleType="centerCrop"
-            android:src="@drawable/ic_camera_pod"
-            android:contentDescription="POD photo captured"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:background="@drawable/bg_pod_pending_pill"
+            android:textColor="@color/transit_amber_dark"
+            android:textSize="@dimen/text_size_caption"
+            android:textStyle="bold"
+            android:letterSpacing="0.05"
             android:visibility="gone"
-            tools:visibility="visible"
-            app:tint="@color/transit_green" />
+            android:text="PREVIEW"
+            tools:visibility="visible" />
 
         <!--
             UNLOAD/CAPTURE/RETAKE action button — the only tappable control in the row.

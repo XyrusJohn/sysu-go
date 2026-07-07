@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -190,7 +189,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
         // Tag the item for later use in configureStatusPill
         tvDeliveryStatus.tag = item
-        val ivPodIndicator = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
+        val ivPodIndicator = rowView.findViewById<TextView>(R.id.ivPodIndicator)
         val pbItemLoading  = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
 
         val obd = safeObdNumber(item["obdNumber"])
@@ -255,7 +254,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
         // Tag the item for later use in configureStatusPill
         tvDeliveryStatus.tag = item
-        val ivPodIndicator   = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
+        val ivPodIndicator   = rowView.findViewById<TextView>(R.id.ivPodIndicator)
         val pbItemLoading    = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
 
         val obd = safeObdNumber(item["obdNumber"])
@@ -359,7 +358,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
      */
     private fun configureStatusPill(
         tvDeliveryStatus: TextView,
-        ivPodIndicator: ImageView,
+        ivPodIndicator: TextView,
         isPodCompleted: Boolean,
         deliveryStatus: String,
         obdNumber: String = "",
