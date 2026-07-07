@@ -21,9 +21,7 @@
         android:orientation="horizontal"
         android:paddingVertical="12dp"
         android:paddingEnd="14dp"
-        android:background="?attr/selectableItemBackground"
-        android:clickable="true"
-        android:focusable="true">
+        android:background="?attr/selectableItemBackground">
 
         <!-- Red left accent bar — matches existing OBD row pattern -->
         <View

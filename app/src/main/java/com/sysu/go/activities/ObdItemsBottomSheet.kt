@@ -225,21 +225,12 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
                 rowView.setOnClickListener { onItemClick?.invoke(item) }
             } else {
-                // No ivPodIndicator click handler for PENDING/UNLOADING — camera is HIDDEN (fool-proof)
-                // Driver must use the CAPTURE button after UNLOAD
+                // No camera/row click for PENDING/UNLOADING — fool-proof, use buttons only
                 ivPodIndicator.setOnClickListener(null)
                 ivPodIndicator.isClickable = false
 
-                val unloadStatus = item["unloadStatus"] as? String ?: ""
-                rowView.setOnClickListener {
-                    if (unloadStatus == "UPLOADING") {
-                        // no-op while uploading
-                    } else if (unloadStatus == "UNLOADING") {
-                        onUnloadingDone?.invoke(item, shipmentDocId)
-                    } else {
-                        // PENDING: row tap = nothing (fool-proof — must tap UNLOAD button)
-                    }
-                }
+                // Row click: ONLY fires for COMPLETED rows (preview tap)
+                rowView.setOnClickListener(null)
             }
         } else {
             ivPodIndicator.isClickable = false
@@ -395,19 +386,22 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             // Use INVISIBLE (not GONE) so it stays in layout z-order and doesn't block CAPTURE button
             ivPodIndicator.visibility = View.INVISIBLE
 
-            if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
+            if (rowLayoutType == RowLayoutType.POD) {
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
                     val rowView = parentView as? android.view.View ?: return@let
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
 
                     if (isUnloading) {
-                        // ── UNLOADING: show CAPTURE button (orange) ──
+                        // ── UNLOADING: CAPTURE button (ORANGE pill) ──
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "CAPTURE"
                         tvUnloadAction?.alpha = 1f
+                        tvUnloadAction?.isClickable = true
+                        tvUnloadAction?.isFocusable = true
                         tvUnloadAction?.setBackgroundResource(R.drawable.bg_status_pill_orange)
                         tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.white))
-                        tvUnloadAction?.translationZ = 2f  // ensure it's above siblings
+                        tvUnloadAction?.translationZ = 8f  // raise above everything
+                        tvUnloadAction?.elevation = 8f
                         tvUnloadAction?.setOnClickListener {
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
                             if (clickedItem != null) {
@@ -419,6 +413,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "UNLOAD"
                         tvUnloadAction?.alpha = 1f
+                        tvUnloadAction?.isClickable = true
+                        tvUnloadAction?.isFocusable = true
                         tvUnloadAction?.setBackgroundResource(R.drawable.bg_pod_pending_pill)
                         tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.transit_amber_dark))
                         tvUnloadAction?.translationZ = 0f
