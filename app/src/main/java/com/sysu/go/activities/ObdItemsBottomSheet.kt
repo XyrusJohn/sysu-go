@@ -70,6 +70,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
     var onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
     /** Called when RETAKE is tapped on a COMPLETE OBD row — triggers retake flow in MyTripActivity. */
     var onRetakeTap: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+    /** Called when driver cancels an in-progress UNLOADING — clears unloadStatus in Firestore. */
+    var onUnloadCancel: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
 
     /**
      * Shows loading feedback while data is being refreshed.
@@ -376,72 +378,80 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val ctx = requireContext()
 
         if (!isPodCompleted || deliveryStatus.isBlank()) {
-            // ── PENDING ──
-            tvDeliveryStatus.text = "PENDING"
-            tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
-            tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
+            // ── PENDING or UNLOADING ──
+            val unloadStatus = item["unloadStatus"] as? String ?: ""
+            val isUnloading = unloadStatus == "UNLOADING"
+
+            if (isUnloading) {
+                tvDeliveryStatus.text = "UNLOADING..."
+                tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
+            } else {
+                tvDeliveryStatus.text = "PENDING"
+                tvDeliveryStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                tvDeliveryStatus.setTextColor(ContextCompat.getColor(ctx, R.color.text_amber))
+            }
             tvDeliveryStatus.alpha = 1f
 
-            // Always show camera icon for pending — same as old design
-            ivPodIndicator.visibility = View.VISIBLE
-            ivPodIndicator.alpha = 1f
-            ivPodIndicator.setImageResource(R.drawable.ic_camera_pod)
-            ivPodIndicator.imageTintList = ContextCompat.getColorStateList(ctx, R.color.text_amber)
-            ivPodIndicator.isClickable = true
+            // No camera icon in PENDING or UNLOADING — fool-proof: must UNLOAD first
+            ivPodIndicator.visibility = View.GONE
 
             if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
-                // Show UNLOAD button for pending POD rows
-                val unloadStatus = item["unloadStatus"] as? String ?: ""
-                val isUnloading = unloadStatus == "UNLOADING"
-
-                if (isUnloading) {
-                    tvDeliveryStatus.text = "UNLOADING..."
-                }
-
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
                     val rowView = parentView as? android.view.View ?: return@let
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
+                    val tvCancelAction = rowView.findViewById<TextView>(R.id.tvObdQuantity) // placeholder for cancel btn area
 
-                    tvUnloadAction?.visibility = View.VISIBLE
-                    tvUnloadAction?.text = if (isUnloading) "DONE" else "UNLOAD"
-                    tvUnloadAction?.setBackgroundResource(
-                        when {
-                            isUnloading -> R.drawable.bg_status_pill_green
-                            else -> R.drawable.bg_pod_pending_pill
-                        }
-                    )
-                    tvUnloadAction?.setTextColor(
-                        ContextCompat.getColor(ctx,
-                            when {
-                                isUnloading -> R.color.white
-                                else -> R.color.transit_amber_dark
+                    if (isUnloading) {
+                        // ── UNLOADING: show CAPTURE + CANCEL ──
+                        tvUnloadAction?.visibility = View.VISIBLE
+                        tvUnloadAction?.text = "CAPTURE"
+                        tvUnloadAction?.setBackgroundResource(R.drawable.bg_status_pill_orange)
+                        tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.white))
+                        tvUnloadAction?.setOnClickListener {
+                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                            if (clickedItem != null) {
+                                onUnloadingDone?.invoke(clickedItem, shipmentDocId)
                             }
-                        )
-                    )
-                    tvUnloadAction?.setOnClickListener {
-                        val context = rowView.context
-                        val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
-                        if (clickedItem == null) return@setOnClickListener
+                        }
 
-                        if (isUnloading) {
-                            // UNLOADING → DONE
-                            onUnloadingDone?.invoke(clickedItem, shipmentDocId)
-                        } else {
-                            // PENDING → confirm start unloading
+                        // CANCEL button — outlined grey, to the right of CAPTURE
+                        tvCancelAction?.visibility = View.VISIBLE
+                        tvCancelAction?.text = "CANCEL"
+                        tvCancelAction?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
+                        tvCancelAction?.setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
+                        tvCancelAction?.setOnClickListener {
+                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                            if (clickedItem != null) {
+                                onUnloadCancel?.invoke(clickedItem, shipmentDocId)
+                            }
+                        }
+                    } else {
+                        // ── PENDING: show UNLOAD button only ──
+                        tvUnloadAction?.visibility = View.VISIBLE
+                        tvUnloadAction?.text = "UNLOAD"
+                        tvUnloadAction?.setBackgroundResource(R.drawable.bg_pod_pending_pill)
+                        tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.transit_amber_dark))
+                        tvUnloadAction?.setOnClickListener {
+                            val context = rowView.context
+                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                            if (clickedItem == null) return@setOnClickListener
                             AlertDialog.Builder(context)
                                 .setTitle("Start Unloading?")
                                 .setMessage("Begin unloading for $obdNumber at ${clickedItem["customerName"] as? String ?: "this location"}?")
                                 .setPositiveButton("Confirm") { _, _ ->
-                                    // Tell MyTripActivity to persist unloadStatus=UNLOADING in Firestore
                                     onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
                                 }
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         }
+
+                        // Hide CANCEL button in PENDING state
+                        tvCancelAction?.visibility = View.GONE
                     }
                 }
             } else {
-                // DETAIL layout: no UNLOAD button
+                // DETAIL layout: no UNLOAD/CANCEL buttons
             }
         } else {
             // ── COMPLETED states: delivery status pill + RETAKE button ──
@@ -540,7 +550,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
             onUnloadingDone: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
             onRetakeTap: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
-            onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+            onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
+            onUnloadCancel: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
         ): ObdItemsBottomSheet {
             return ObdItemsBottomSheet().apply {
                 this._lineItems = lineItems
@@ -552,6 +563,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 this.onUnloadingDone = onUnloadingDone
                 this.onRetakeTap = onRetakeTap
                 this.onUnloadConfirm = onUnloadConfirm
+                this.onUnloadCancel = onUnloadCancel
             }
         }
     }

@@ -1327,6 +1327,11 @@ class MyTripActivity : AppCompatActivity() {
             },
             onRetakeTap = { item, docId ->
                 retakeObdPod(item, docId)
+            },
+            onUnloadCancel = { item, docId ->
+                // Clear unloadStatus in Firestore — returns to PENDING state
+                val obd = item["obdNumber"] as? String ?: return@newInstance
+                writeUnloadStatus(docId, obd, null)
             }
         ).also { sheet ->
             // SAFETY NET: if socket pod_updated never fires (race, server issue, app kill),
