@@ -238,7 +238,9 @@ class MyTripActivity : AppCompatActivity() {
         val capturedAtMillis = pendingCapturedAtMillis
         val item = pendingObdItem
         val shipmentDocId = pendingObdShipmentDocId
+        Log.d(TAG, "requestFreshLocationAndProceed: item=${item?.get("obdNumber")}, shipmentDocId=$shipmentDocId")
         if (item == null || shipmentDocId == null) {
+            Log.w(TAG, "requestFreshLocationAndProceed: item or docId is NULL — calling proceedToCamera with nulls")
             proceedToCamera(null, null)
             return
         }
@@ -400,29 +402,35 @@ class MyTripActivity : AppCompatActivity() {
         item: Map<String, Any?>,
         shipmentDocId: String
     ) {
-        val capturedAtMillis = System.currentTimeMillis()
+        try {
+            val capturedAtMillis = System.currentTimeMillis()
 
-        // Store args so the permission-callback lambda can access them
-        pendingObdItem = item
-        pendingObdShipmentDocId = shipmentDocId
-        pendingCapturedAtMillis = capturedAtMillis
-        Log.d(TAG, "showObdStatusSheet: stored item=${item["obdNumber"]}, docId=$shipmentDocId, capturedAt=$capturedAtMillis")
+            // Store args so the permission-callback lambda can access them
+            pendingObdItem = item
+            pendingObdShipmentDocId = shipmentDocId
+            pendingCapturedAtMillis = capturedAtMillis
+            Log.d(TAG, "showObdStatusSheet: stored item=${item["obdNumber"]}, docId=$shipmentDocId, capturedAt=$capturedAtMillis")
 
-        val hasLocationPermission = ContextCompat.checkSelfPermission(
-            this, ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
+            val hasLocationPermission = ContextCompat.checkSelfPermission(
+                this, ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
 
-        if (hasLocationPermission) {
-            // Permission already granted — go straight to GPS fix + show sheet
-            requestFreshLocationAndProceed()
-        } else {
-            // First GPS permission request — show rationale toast, then request
-            Toast.makeText(
-                this,
-                "Location is needed to stamp your POD photo with the delivery address.",
-                Toast.LENGTH_LONG
-            ).show()
+            if (hasLocationPermission) {
+                // Permission already granted — go straight to GPS fix + show sheet
+                requestFreshLocationAndProceed()
+            } else {
+                // First GPS permission request — show rationale toast, then request
+                Toast.makeText(
+                    this,
+                    "Location is needed to stamp your POD photo with the delivery address.",
+                    Toast.LENGTH_LONG
+                ).show()
             locationPermissionLauncher.launch(ACCESS_FINE_LOCATION)
+        }
+        } catch (e: Throwable) {
+            Log.e(TAG, "showObdStatusSheet CRASHED: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
+            Toast.makeText(this, "Error opening camera: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -437,14 +445,15 @@ class MyTripActivity : AppCompatActivity() {
         lat: Double?,
         lng: Double?
     ) {
-        Log.d(TAG, "showObdStatusSheetWithLocation: lat=$lat, lng=$lng, capturedAt=$capturedAtMillis, item=${item["obdNumber"]}")
-        // Reverse-geocode — uses Android's on-device Geocoder, no internet needed (~30ms)
-        val locationLabel: String? = if (lat != null && lng != null) {
-            ImageStorageHelper.formatLocationLabel(lat, lng, this)
-        } else null
+        try {
+            Log.d(TAG, "showObdStatusSheetWithLocation: lat=$lat, lng=$lng, capturedAt=$capturedAtMillis, item=${item["obdNumber"]}")
+            // Reverse-geocode — uses Android's on-device Geocoder, no internet needed (~30ms)
+            val locationLabel: String? = if (lat != null && lng != null) {
+                ImageStorageHelper.formatLocationLabel(lat, lng, this)
+            } else null
 
-        ObdStatusBottomSheet.newInstance(item, shipmentDocId).apply {
-            onConfirmWithStatus = { status, lineItem, docId ->
+            val sheet = ObdStatusBottomSheet.newInstance(item, shipmentDocId)
+            sheet.onConfirmWithStatus = { status, lineItem, docId ->
                 pendingPodData = PendingPodData(
                     status = status,
                     lineItem = lineItem,
@@ -476,7 +485,13 @@ class MyTripActivity : AppCompatActivity() {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
             }
-        }.show(supportFragmentManager, ObdStatusBottomSheet.TAG)
+            sheet.show(supportFragmentManager, ObdStatusBottomSheet.TAG)
+            Log.d(TAG, "showObdStatusSheetWithLocation: ObdStatusBottomSheet.show() called OK")
+        } catch (e: Throwable) {
+            Log.e(TAG, "showObdStatusSheetWithLocation CRASHED: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
+            Toast.makeText(this, "Error opening status sheet: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     /**

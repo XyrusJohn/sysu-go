@@ -407,12 +407,13 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                         tvUnloadAction?.elevation = 8f
                         tvUnloadAction?.setOnClickListener {
                             Log.d(TAG, "CAPTURE clicked! obd=${item["obdNumber"]}")
-                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
-                            if (clickedItem != null) {
-                                Log.d(TAG, "CAPTURE: calling onUnloadingDone for $shipmentDocId")
-                                onUnloadingDone?.invoke(clickedItem, shipmentDocId)
-                            } else {
-                                Log.w(TAG, "CAPTURE: clickedItem was NULL — tvDeliveryStatus.tag is null")
+                            Log.d(TAG, "CAPTURE: directly calling showObdStatusSheet via onObdCameraTap")
+                            try {
+                                onObdCameraTap?.invoke(item, shipmentDocId)
+                                Log.d(TAG, "CAPTURE: onObdCameraTap returned OK")
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "CAPTURE: onObdCameraTap THREW: ${t.javaClass.simpleName}: ${t.message}")
+                                t.printStackTrace()
                             }
                         }
                     } else {
