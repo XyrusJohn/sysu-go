@@ -394,44 +394,36 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             tvDeliveryStatus.alpha = 1f
 
             // No camera icon in PENDING or UNLOADING — fool-proof: must UNLOAD first
-            ivPodIndicator.visibility = View.GONE
+            // Use INVISIBLE (not GONE) so it stays in layout z-order and doesn't block CAPTURE button
+            ivPodIndicator.visibility = View.INVISIBLE
 
             if (rowLayoutType == RowLayoutType.POD && podCaptureEnabled) {
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
                     val rowView = parentView as? android.view.View ?: return@let
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
-                    val tvCancelAction = rowView.findViewById<TextView>(R.id.tvObdQuantity) // placeholder for cancel btn area
 
                     if (isUnloading) {
-                        // ── UNLOADING: show CAPTURE + CANCEL ──
+                        // ── UNLOADING: show CAPTURE button (orange) ──
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "CAPTURE"
+                        tvUnloadAction?.alpha = 1f
                         tvUnloadAction?.setBackgroundResource(R.drawable.bg_status_pill_orange)
                         tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.white))
+                        tvUnloadAction?.translationZ = 2f  // ensure it's above siblings
                         tvUnloadAction?.setOnClickListener {
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
                             if (clickedItem != null) {
                                 onUnloadingDone?.invoke(clickedItem, shipmentDocId)
                             }
                         }
-
-                        // CANCEL button — outlined grey, to the right of CAPTURE
-                        tvCancelAction?.visibility = View.VISIBLE
-                        tvCancelAction?.text = "CANCEL"
-                        tvCancelAction?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
-                        tvCancelAction?.setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
-                        tvCancelAction?.setOnClickListener {
-                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
-                            if (clickedItem != null) {
-                                onUnloadCancel?.invoke(clickedItem, shipmentDocId)
-                            }
-                        }
                     } else {
-                        // ── PENDING: show UNLOAD button only ──
+                        // ── PENDING: show UNLOAD button only (amber pill) ──
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "UNLOAD"
+                        tvUnloadAction?.alpha = 1f
                         tvUnloadAction?.setBackgroundResource(R.drawable.bg_pod_pending_pill)
                         tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.transit_amber_dark))
+                        tvUnloadAction?.translationZ = 0f
                         tvUnloadAction?.setOnClickListener {
                             val context = rowView.context
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
@@ -445,13 +437,10 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         }
-
-                        // Hide CANCEL button in PENDING state
-                        tvCancelAction?.visibility = View.GONE
                     }
                 }
             } else {
-                // DETAIL layout: no UNLOAD/CANCEL buttons
+                // DETAIL layout: no UNLOAD/CAPTURE buttons
             }
         } else {
             // ── COMPLETED states: delivery status pill + RETAKE button ──
