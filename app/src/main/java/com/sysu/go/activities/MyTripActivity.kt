@@ -1306,10 +1306,13 @@ class MyTripActivity : AppCompatActivity() {
                 }
             },
             onObdCameraTap = { item, docId ->
-                // Persist UPLOADING state BEFORE camera fires — survives app kill during upload
                 val obd = item["obdNumber"] as? String ?: return@newInstance
+                Log.d(TAG, "onObdCameraTap FIRED: obd=$obd, docId=$docId")
+                // Persist UPLOADING state BEFORE camera fires — survives app kill during upload
                 writeUnloadStatus(docId, obd, "UPLOADING")
+                Log.d(TAG, "onObdCameraTap: calling showObdStatusSheet NOW")
                 showObdStatusSheet(item, docId)
+                Log.d(TAG, "onObdCameraTap: showObdStatusSheet RETURNED (camera should be open)")
             },
             onUnloadConfirm = { item, docId ->
                 val obd = item["obdNumber"] as? String ?: return@newInstance
