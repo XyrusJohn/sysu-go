@@ -666,6 +666,7 @@ class MyTripActivity : AppCompatActivity() {
             }
 
             val original = lineItems[targetIndex].toMutableMap()
+            original["unloadStatus"] = null      // clears journey tracker on completion
             original["deliveryStatus"] = status
             original["podImageUrl"] = podImageUrl
             original["podCapturedAt"] = Timestamp(java.util.Date(capturedAtMillis))
@@ -676,6 +677,77 @@ class MyTripActivity : AppCompatActivity() {
         }.await()
 
         Log.d(TAG, "OBD lineItem updated for obdNumber=$obdNumber in doc=$shipmentDocId")
+    }
+
+    /**
+     * Writes unloadStatus for one OBD in the shipment's lineItems array.
+     * Values: "UNLOADING" | "UPLOADING" | null (to clear)
+     * Used to persist the driver's unloading journey state across app restarts.
+     */
+    private fun writeUnloadStatus(shipmentDocId: String, obdNumber: String, status: String?) {
+        lifecycleScope.launch {
+            try {
+                val docRef = db.collection("sap_assignments").document(shipmentDocId)
+                db.runTransaction { transaction ->
+                    val snap = transaction.get(docRef)
+                    if (!snap.exists()) return@runTransaction
+                    @Suppress("UNCHECKED_CAST")
+                    val lineItems = (snap.get("lineItems") as? List<Map<String, Any?>>)
+                        ?.toMutableList() ?: return@runTransaction
+                    val idx = lineItems.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }
+                    if (idx == -1) return@runTransaction
+                    val updated = lineItems[idx].toMutableMap()
+                    if (status != null) {
+                        updated["unloadStatus"] = status
+                    } else {
+                        updated.remove("unloadStatus")
+                    }
+                    lineItems[idx] = updated
+                    transaction.update(docRef, "lineItems", lineItems)
+                }.await()
+            } catch (e: Exception) {
+                Log.e(TAG, "writeUnloadStatus failed for obd=$obdNumber: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Handles RETAKE tap on a COMPLETE OBD row.
+     * 1. Clear podImageUrl + isPodCompleted + deliveryStatus in Firestore
+     * 2. Set unloadStatus=UNLOADING (driver sees "UNLOADING..." immediately on refresh)
+     * 3. Fire showObdStatusSheet (same camera flow as first capture)
+     */
+    private fun retakeObdPod(item: Map<String, Any?>, shipmentDocId: String) {
+        val obdNumber = item["obdNumber"] as? String ?: return
+        lifecycleScope.launch {
+            try {
+                val docRef = db.collection("sap_assignments").document(shipmentDocId)
+                db.runTransaction { transaction ->
+                    val snap = transaction.get(docRef)
+                    if (!snap.exists()) return@runTransaction
+                    @Suppress("UNCHECKED_CAST")
+                    val lineItems = (snap.get("lineItems") as? List<Map<String, Any?>>)
+                        ?.toMutableList() ?: return@runTransaction
+                    val idx = lineItems.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }
+                    if (idx == -1) return@runTransaction
+                    val updated = lineItems[idx].toMutableMap()
+                    updated["podImageUrl"] = null
+                    updated.remove("podImageUrl")
+                    updated["isPodCompleted"] = false
+                    updated["deliveryStatus"] = null
+                    updated.remove("deliveryStatus")
+                    updated.remove("podCapturedAt")
+                    updated["unloadStatus"] = "UNLOADING"
+                    lineItems[idx] = updated
+                    transaction.update(docRef, "lineItems", lineItems)
+                }.await()
+                // Fire the camera flow — same as first-time capture
+                showObdStatusSheet(item, shipmentDocId)
+            } catch (e: Exception) {
+                Log.e(TAG, "retakeObdPod failed: ${e.message}")
+                Toast.makeText(this@MyTripActivity, "Retake failed", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     companion object {
@@ -735,7 +807,7 @@ class MyTripActivity : AppCompatActivity() {
         shipmentAdapter = MyTripTabAdapter(
             hasActiveTrip = false,
             activeShipmentId = null,
-            onTripActionClicked = { assignment -> onTripActionClicked(assignment) },
+            onTripActionClicked = { assignment, action -> onTripActionClicked(assignment, action) },
             onObdTap = { lineItems, docId -> openObdBottomSheet(lineItems, docId) },
             onShowVerification = { assignment -> showGuardVerificationSheet(assignment) }
         )
@@ -965,10 +1037,13 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
-        // Block auto-navigation if we are in the "returned from TransitActivity" state.
-        // returnedFromTransitDocId stays set for the entire visible lifetime of MyTripActivity
-        // after BACK TO MY TRIP — it is cleared only when the session ends (trip completes/cancels).
         val isReturningFromTransit = returnedFromTransitDocId != null
+
+        // Suppress auto-navigation only when the user explicitly opened MyTripActivity
+        // (no specific shipment_doc_id) AND is NOT returning from TransitActivity.
+        // In that case, show the full card list so the user can browse.
+        // Returning from TransitActivity → still auto-navigate to that shipment (continuity).
+        val suppressAutoNav = intentDocId == null && !isReturningFromTransit
 
         // If launched with a specific shipment_doc_id — load that shipment card
         // without auto-navigating. This handles both fresh Intent launches
@@ -1003,22 +1078,25 @@ class MyTripActivity : AppCompatActivity() {
 
         // Normal start (app launch, no in-flight return) — auto-navigate if in_transit
         val inTransit = list.find { it.tripStatus == "in_transit" }
-        if (inTransit != null) {
+        if (inTransit != null && !suppressAutoNav) {
             launchDeliveryActivity(inTransit.docId)
             return
         }
 
-        // Show confirmed-but-not-in-transit shipments as cards
-        val confirmed = list.filter {
-            it.guardVerified && it.driverConfirmed && it.tripStatus != "in_transit" && it.tripStatus != "completed"
+        // Show confirmed-but-not-in-transit and in_transit shipments as cards.
+        // In_transit shipments are included so the user can see their active trip
+        // without auto-navigation (suppressAutoNav case from home tab).
+        val showable = list.filter {
+            (it.guardVerified && it.driverConfirmed && it.tripStatus != "in_transit" && it.tripStatus != "completed") ||
+            it.tripStatus == "in_transit"
         }
 
         shipmentAdapter.hasActiveTrip = false
         shipmentAdapter.activeShipmentId = null
-        shipmentAdapter.submitList(confirmed.toList())
+        shipmentAdapter.submitList(showable.toList())
 
-        updateAggregateBadge(confirmed)
-        updateEmptyState(confirmed.isEmpty(), list.isEmpty())
+        updateAggregateBadge(showable)
+        updateEmptyState(showable.isEmpty(), list.isEmpty())
         binding.tvBadgeText.text = getString(R.string.my_trip_badge_trips_ready)
     }
 
@@ -1065,13 +1143,17 @@ class MyTripActivity : AppCompatActivity() {
 
     // ─── Per-card action ───────────────────────────────────────────────────────
 
-    private fun onTripActionClicked(assignment: Assignment) {
-        when {
-            assignment.tripStatus == "in_transit" -> {
-                // Open delivery execution for this shipment
+    private fun onTripActionClicked(assignment: Assignment, action: String) {
+        when (action) {
+            "END_TRIP" -> {
+                // All PODs complete — end this single shipment and return to the card list
+                endSingleShipment(assignment.docId)
+            }
+            "OPEN_ACTIVE_TRIP" -> {
+                // Navigate to TransitActivity for ongoing POD work
                 launchDeliveryActivity(assignment.docId)
             }
-            assignment.guardVerified && assignment.driverConfirmed -> {
+            "START_TRIP" -> {
                 // Confirmed but no active trip — show START TRIP dialog
                 AlertDialog.Builder(this)
                     .setTitle(R.string.confirm_start_trip_title)
@@ -1082,23 +1164,10 @@ class MyTripActivity : AppCompatActivity() {
                     .setNegativeButton(R.string.cancel, null)
                     .show()
             }
-            assignment.guardVerified && !assignment.driverConfirmed -> {
-                // Guard verified but driver not yet confirmed → confirm first
-                AlertDialog.Builder(this)
-                    .setTitle(R.string.confirm_shipment_title)
-                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
-                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ ->
-                        confirmShipment(assignment) {
-                            confirmAndStartTrip(assignment)
-                        }
-                    }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
-            }
-            else -> {
-                // Not yet guard verified — redirect to AssignmentActivity
-                Toast.makeText(this, "Please complete guard verification first.", Toast.LENGTH_SHORT).show()
-                finish()
+            "VIEW_SUMMARY" -> {
+                // Completed shipment — refresh the list instead.
+                // (TransitActivity handles viewing completed trip details in read mode.)
+                loadAssignments()
             }
         }
     }
@@ -1138,15 +1207,12 @@ class MyTripActivity : AppCompatActivity() {
                 Log.d(TAG, "startTrip: ${assignment.docId} → in_transit")
                 Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
 
-                // Navigate to TransitActivity (live map / delivery tracking screen) — NOT MyTripActivity
-                // Do NOT call finish() here — keep MyTripActivity in the back stack so that
-                // TransitActivity's "BACK TO MY TRIP" can use CLEAR_TOP|SINGLE_TOP to
-                // resume the existing MyTripActivity instead of creating a duplicate.
-                val intent = Intent(this@MyTripActivity, TransitActivity::class.java).apply {
-                    putExtra("shipment_doc_id", assignment.docId)
-                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                startActivity(intent)
+                // Navigate back to the card list so the driver can confirm / start remaining shipments.
+            // ALL confirmed → map icon appears on MainActivity → tapped map → TransitActivity.
+            // Do NOT call finish() here — keep this activity in the stack so the updated
+            // card list is visible (Firestore snapshot will refresh it automatically).
+            Toast.makeText(this@MyTripActivity, "Trip confirmed! Complete verification for remaining shipments.", Toast.LENGTH_LONG).show()
+            loadAssignments()
             } catch (e: Exception) {
                 Log.e(TAG, "confirmAndStartTrip error: ${e.message}")
                 sessionManager.saveActiveSapDocId(null)
@@ -1166,6 +1232,51 @@ class MyTripActivity : AppCompatActivity() {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
+    }
+
+    /**
+     * Marks a single shipment as completed when all PODs have been captured.
+     * Called from "END TRIP" button in MyTripActivity card list.
+     * Updates Firestore, clears session for this shipment, and reloads the card list.
+     */
+    private fun endSingleShipment(docId: String) {
+        // Set ending state on the card — shows "ENDING..." disabled button
+        shipmentAdapter.setEndingDocId(docId)
+        shipmentAdapter.notifyDataSetChanged()
+
+        lifecycleScope.launch {
+            try {
+                val updates = mapOf(
+                    "tripStatus" to "completed",
+                    "completedAt" to Timestamp.now()
+                )
+                db.collection("sap_assignments").document(docId)
+                    .update(updates)
+                    .await()
+
+                Log.d(TAG, "endSingleShipment: $docId → completed")
+
+                // If this was the active session shipment, clear session
+                if (sessionManager.getActiveSapDocId() == docId) {
+                    sessionManager.clearTripSession()
+                }
+
+                runOnUiThread {
+                    Toast.makeText(this@MyTripActivity, "Shipment completed!", Toast.LENGTH_LONG).show()
+                }
+
+                // Clear ending state and reload so card transitions to "VIEW SUMMARY"
+                shipmentAdapter.setEndingDocId(null)
+                loadAssignments()
+            } catch (e: Exception) {
+                Log.e(TAG, "endSingleShipment error: ${e.message}")
+                shipmentAdapter.setEndingDocId(null)
+                shipmentAdapter.notifyDataSetChanged()
+                runOnUiThread {
+                    Toast.makeText(this@MyTripActivity, "Failed to end trip. Try again.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     /**
@@ -1192,7 +1303,30 @@ class MyTripActivity : AppCompatActivity() {
                 }
             },
             onObdCameraTap = { item, docId ->
+                // Persist UPLOADING state BEFORE camera fires — survives app kill during upload
+                val obd = item["obdNumber"] as? String ?: return@onObdCameraTap
+                writeUnloadStatus(docId, obd, "UPLOADING")
                 showObdStatusSheet(item, docId)
+            },
+            onUnloadConfirm = { item, docId ->
+                // Persist UNLOADING state — survives app restart
+                val obd = item["obdNumber"] as? String ?: return@onUnloadConfirm
+                writeUnloadStatus(docId, obd, "UNLOADING")
+                // Refresh bottom sheet to show UNLOADING state immediately
+                val sheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
+                    as? ObdItemsBottomSheet)
+                sheet?.let { s ->
+                    @Suppress("UNCHECKED_CAST")
+                    val current = s.lineItems.toMutableList()
+                    val idx = current.indexOfFirst { (it["obdNumber"] as? String) == obd }
+                    if (idx != -1) {
+                        current[idx] = current[idx].toMutableMap().apply { this["unloadStatus"] = "UNLOADING" }
+                        s.refreshWith(current)
+                    }
+                }
+            },
+            onRetakeTap = { item, docId ->
+                retakeObdPod(item, docId)
             }
         ).also { sheet ->
             // SAFETY NET: if socket pod_updated never fires (race, server issue, app kill),
