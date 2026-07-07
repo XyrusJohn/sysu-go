@@ -7,12 +7,22 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="10dp"
+    android:descendantFocusability="beforeDescendants"
     app:cardCornerRadius="@dimen/corner_radius_small"
     app:cardElevation="1dp"
     app:cardBackgroundColor="@color/white"
     app:strokeWidth="1dp"
     app:strokeColor="@color/surface2">
 
+    <!--
+        NOTE: No clickable/focusable/selectableItemBackground on this parent LinearLayout.
+        On MIUI, selectableItemBackground on a parent intercepts ALL child touch events
+        before they reach child views (tvUnloadAction, tvDeliveryStatus, etc).
+        The row is NOT clickable — only tvUnloadAction (UNLOAD/CAPTURE/RETAKE buttons)
+        handles touch. This is intentional for the fool-proof design.
+        COMPLETED rows: row click is handled separately via rowView.setOnClickListener
+        in ObdItemsBottomSheet.kt inflatePodRow() — no layout-level click attribute needed.
+    -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -20,8 +30,7 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingVertical="12dp"
-        android:paddingEnd="14dp"
-        android:background="?attr/selectableItemBackground">
+        android:paddingEnd="14dp">
 
         <!-- Red left accent bar — matches existing OBD row pattern -->
         <View
@@ -92,7 +101,7 @@
             tools:textColor="@color/text_amber"
             tools:background="@color/amber_pill_bg" />
 
-        <!-- POD indicator — camera when pending, checkmark or preview thumbnail when completed -->
+        <!-- POD indicator — camera icon; hidden/disabled for PENDING and UNLOADING rows in inflatePodRow -->
         <ImageView
             android:id="@+id/ivPodIndicator"
             android:layout_width="40dp"
@@ -105,7 +114,14 @@
             tools:visibility="visible"
             app:tint="@color/transit_green" />
 
-        <!-- UNLOAD action button for pending POD rows -->
+        <!--
+            UNLOAD/CAPTURE/RETAKE action button — the only tappable control in the row.
+            - PENDING: displays "UNLOAD" (amber pill), triggers confirm dialog → unlock OBD
+            - UNLOADING: displays "CAPTURE" (orange pill), fires camera/POD flow
+            - COMPLETE: displays "RETAKE" (outlined grey), redoes POD from scratch
+            This is intentionally the ONLY interactive element — fool-proof design means
+            no camera icon, no row click, no other targets during PENDING/UNLOADING.
+        -->
         <TextView
             android:id="@+id/tvUnloadAction"
             android:layout_width="wrap_content"
