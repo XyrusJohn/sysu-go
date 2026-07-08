@@ -105,10 +105,14 @@ class TransitActivity : AppCompatActivity() {
         }
 
         // Restore trip session state if driver re-opens app mid-trip (including after force-stop)
+        // NOTE: isTripActive is intentionally NOT checked here — SplashActivity ALWAYS resets
+        // it to false on cold start (to fix wrong routing when app was backgrounded, not killed).
+        // We use savedDocId as the SOLE restore criterion. If a doc ID exists in SharedPrefs,
+        // we restore regardless of isTripActive state. loadTripData() will verify the actual
+        // tripStatus from Firestore and set button state from source-of-truth.
         val savedDocId = sessionManager.getCurrentSapDocId()
-        val wasTripActive = sessionManager.isTripActive()
-        Log.d(TAG, "[STATE RESTORE] docId=$savedDocId isTripActive=$wasTripActive")
-        if (savedDocId != null && wasTripActive) {
+        Log.d(TAG, "[STATE RESTORE] docId=$savedDocId")
+        if (savedDocId != null) {
             currentSapDocId = savedDocId
             isTripStarted = true
             isSessionRestored = true
