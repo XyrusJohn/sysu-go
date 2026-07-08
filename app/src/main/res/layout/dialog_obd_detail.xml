@@ -151,8 +151,11 @@
         android:layout_marginHorizontal="24dp"
         android:layout_marginTop="8dp"
         android:text="Close"
+        android:textColor="@color/white"
         android:textSize="@dimen/text_size_button"
         android:textStyle="bold"
+        android:clickable="true"
+        android:focusable="true"
         app:backgroundTint="@color/sysu_red"
         app:cornerRadius="@dimen/corner_radius_button"
         app:elevation="0dp" />

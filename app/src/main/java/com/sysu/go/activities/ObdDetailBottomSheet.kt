@@ -37,6 +37,11 @@ class ObdDetailBottomSheet : BottomSheetDialogFragment() {
         }
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        isCancelable = true
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
