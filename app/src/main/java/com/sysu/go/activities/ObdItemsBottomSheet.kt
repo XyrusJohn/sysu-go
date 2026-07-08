@@ -222,16 +222,14 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         // Click handling — disabled while loading
         if (!isLoading) {
             if (isPodCompleted) {
-                // Tap OBD# → info dialog (OBD Number + Customer Name)
+                // Tap OBD# → info bottom sheet (OBD Number + Customer Name + Status pill)
                 val customerName = item["customerName"] as? String ?: "—"
+                val status = item["deliveryStatus"] as? String
                 tvObdNumber.isClickable = true
                 tvObdNumber.isFocusable = true
                 tvObdNumber.setOnClickListener {
-                    AlertDialog.Builder(requireContext())
-                        .setTitle("OBD Detail")
-                        .setMessage("OBD Number: $obd\nCustomer: $customerName")
-                        .setPositiveButton("OK", null)
-                        .show()
+                    ObdDetailBottomSheet.newInstance(obd, customerName, status)
+                        .show(parentFragmentManager, ObdDetailBottomSheet.TAG)
                 }
 
                 ivPodIndicator.isClickable = true
