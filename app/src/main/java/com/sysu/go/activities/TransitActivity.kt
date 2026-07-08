@@ -127,17 +127,9 @@ class TransitActivity : AppCompatActivity() {
                 val lastLng = sessionManager.getLastEmitLng()
                 Log.d(TAG, "[RESTORE] Re-emitting last location: [$lastLat, $lastLng]")
                 SocketManager.emitDriverMoving(lastLat, lastLng, currentSapDocId, "online")
-
-                // Idempotent Firestore update — safe to re-call on reopen
-                val updates = mapOf(
-                    "tripStatus" to "in_transit",
-                    "startedAt" to Timestamp.now()
-                )
-                db.collection("sap_assignments").document(currentSapDocId)
-                    .update(updates)
-                    .addOnFailureListener { e ->
-                        Log.w(TAG, "[RESTORE] Firestore update failed (non-fatal): ${e.message}")
-                    }
+                // NOTE: DO NOT unconditionally write tripStatus = "in_transit" here.
+                // If the session was restored from returning_to_base, this would overwrite
+                // the correct tripStatus. Let loadTripData() read source-of-truth instead.
             }
             socketConnectListener?.let { SocketManager.addOnConnectListener(it) }
 
@@ -173,6 +165,36 @@ class TransitActivity : AppCompatActivity() {
         // so sysu-app updates the driver marker to green without waiting for driver_moving
         if (isSessionRestored || isTripStarted) {
             SocketManager.emitStatusUpdate("online", sessionManager.getDriverName() ?: "Driver")
+        }
+        // Refresh ALL state when returning from MyTripActivity.
+        // The driver may have completed all PODs, or tripStatus may have changed
+        // (e.g. returning_to_base from dispatch web), while we were in the background.
+        // This ensures button shows correct state without requiring activity recreate.
+        if (currentSapDocId.isNotBlank()) {
+            activityScope.launch {
+                try {
+                    val doc = db.collection("sap_assignments")
+                        .document(currentSapDocId)
+                        .get()
+                        .await()
+                    if (doc.exists()) {
+                        val tripStatus = doc.getString("tripStatus")
+                        val lineItemsAll = doc.get("lineItems") as? List<Map<String, Any?>>
+                        isPodCompleteForAll = lineItemsAll?.all {
+                            (it["isPodCompleted"] as? Boolean) == true
+                        } ?: false
+                        // Sync all derived flags with the tripStatus from Firestore
+                        isTripEnded = tripStatus == "completed"
+                        isReturningToBase = tripStatus == "returning_to_base"
+                        isTripStarted = tripStatus == "in_transit"
+                        Log.d(TAG, "[onResume refresh] tripStatus=$tripStatus isPodCompleteForAll=$isPodCompleteForAll " +
+                            "isReturningToBase=$isReturningToBase isTripEnded=$isTripEnded")
+                        updateProgressStepper()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[onResume refresh] failed to re-fetch: ${e.message}")
+                }
+            }
         }
     }
 
@@ -601,7 +623,7 @@ class TransitActivity : AppCompatActivity() {
                                 }
                             return@addOnSuccessListener
                         }
-                        val sapDoc = snap.documents.first()
+                        val sapDoc = sapSnap.documents.first()
                         currentSapDocId = sapDoc.id
                         // Compute isPodCompleteForAll
                         val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
