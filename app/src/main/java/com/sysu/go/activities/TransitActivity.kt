@@ -150,6 +150,16 @@ class TransitActivity : AppCompatActivity() {
             Log.d(TAG, "[STATE RESTORE] No active trip or session was cleared")
             sessionManager.clearCurrentSapDocId()
 
+            // No session = no active trip. Redirect immediately to AssignmentActivity (My Queue)
+            // so driver sees the queue instead of TransitActivity's empty START TRIP state.
+            // This covers: cold-open after all shipments complete, map icon with no active session.
+            val redirectIntent = Intent(this, AssignmentActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            startActivity(redirectIntent)
+            finish()
+            return
+
             // Pre-connect sockets for normal non-restore path (Start Trip flow)
             SocketManager.init(this)
             SocketManager.connect()
@@ -537,6 +547,17 @@ class TransitActivity : AppCompatActivity() {
                                 isReturningToBase = tripStatus == "returning_to_base"
                                 isTripEnded = tripStatus == "completed"
                                 Log.d(TAG, "[LOAD] State synced: isTripStarted=$isTripStarted isReturningToBase=$isReturningToBase isTripEnded=$isTripEnded")
+                                // If shipment is completed, redirect to AssignmentActivity (My Queue).
+                                // Driver should not be shown TransitActivity's completed state —
+                                // they need to pick the next shipment from the queue.
+                                if (isTripEnded) {
+                                    Log.d(TAG, "[LOAD] Restored doc is completed — redirecting to AssignmentActivity")
+                                    startActivity(Intent(this@TransitActivity, AssignmentActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                    })
+                                    finish()
+                                    return@addOnSuccessListener
+                                }
                                 populateShipmentUI(doc, currentHelper, currentTruckType)
                             } else {
                                 Log.w(TAG, "[LOAD] Direct fetch doc $docId not found — falling back to queue join")
@@ -562,6 +583,15 @@ class TransitActivity : AppCompatActivity() {
                                 isTripStarted = tripStatus == "in_transit"
                                 isReturningToBase = tripStatus == "returning_to_base"
                                 isTripEnded = tripStatus == "completed"
+                                // Same redirect check: if completed, send to AssignmentActivity instead
+                                if (isTripEnded) {
+                                    Log.d(TAG, "[LOAD] (queue-lookup-fail path) Restored doc is completed — redirecting")
+                                    startActivity(Intent(this@TransitActivity, AssignmentActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                    })
+                                    finish()
+                                    return@addOnSuccessListener
+                                }
                                 populateShipmentUI(doc, null, null)
                             } else {
                                 loadTripDataFromQueue(driverId)
