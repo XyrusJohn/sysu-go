@@ -222,6 +222,18 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         // Click handling — disabled while loading
         if (!isLoading) {
             if (isPodCompleted) {
+                // Tap OBD# → info dialog (OBD Number + Customer Name)
+                val customerName = item["customerName"] as? String ?: "—"
+                tvObdNumber.isClickable = true
+                tvObdNumber.isFocusable = true
+                tvObdNumber.setOnClickListener {
+                    AlertDialog.Builder(requireContext())
+                        .setTitle("OBD Detail")
+                        .setMessage("OBD Number: $obd\nCustomer: $customerName")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+
                 ivPodIndicator.isClickable = true
                 ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
                 rowView.setOnClickListener { onItemClick?.invoke(item) }
@@ -229,12 +241,17 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 // No camera/row click for PENDING/UNLOADING — fool-proof, use buttons only
                 ivPodIndicator.setOnClickListener(null)
                 ivPodIndicator.isClickable = false
+                tvObdNumber.setOnClickListener(null)
+                tvObdNumber.isClickable = false
+                tvObdNumber.isFocusable = false
 
                 // Row click: ONLY fires for COMPLETED rows (preview tap)
                 rowView.setOnClickListener(null)
             }
         } else {
             ivPodIndicator.isClickable = false
+            tvObdNumber.isClickable = false
+            tvObdNumber.isFocusable = false
             rowView.setOnClickListener(null)
         }
 
