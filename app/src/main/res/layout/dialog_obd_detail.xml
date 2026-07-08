@@ -17,17 +17,19 @@
         android:layout_marginBottom="16dp"
         android:background="@drawable/bg_drag_handle" />
 
-    <!-- Header -->
+    <!-- Header — matches dialog_obd_status.xml header style (professional, bold, red) -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingHorizontal="24dp"
-        android:paddingBottom="16dp"
-        android:text="OBD Detail"
-        android:textColor="@color/text_primary"
+        android:paddingHorizontal="22dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="14dp"
+        android:text="OBD DETAILS"
+        android:textColor="@color/sysu_red"
         android:textSize="@dimen/text_size_title"
         android:textStyle="bold"
-        android:letterSpacing="0.02" />
+        android:letterSpacing="0.08"
+        android:fontFamily="@font/atkinson_hyperlegible_bold" />
 
     <!-- Divider -->
     <View
