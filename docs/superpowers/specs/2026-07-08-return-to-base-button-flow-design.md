@@ -224,8 +224,8 @@ When a driver has an `in_transit` session (app killed, restarts):
 - [x] Scope check: surgical — only button-state transitions, no new screens
 - [x] `isPodCompleteForAll` is the only new computed state; everything else is existing code
 - [x] Session clearing: confirmed `clearTripSession()` is called on `performEndTrip()`
-- [ ] Action item: verify `onResume()` refresh of `isPodCompleteForAll` in TransitActivity
-- [ ] Action item: verify session-restore path handles `returning_to_base`
+- [x] Action item: verify `onResume()` refresh of `isPodCompleteForAll` in TransitActivity ✅ DONE
+- [x] Action item: verify session-restore path handles `returning_to_base` ✅ FIXED — stale in_transit write removed
 
 ---
 
