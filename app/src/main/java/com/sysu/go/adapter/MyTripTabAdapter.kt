@@ -17,10 +17,19 @@ import java.util.Locale
 class MyTripTabAdapter(
     var hasActiveTrip: Boolean,
     var activeShipmentId: String?,
-    private val onTripActionClicked: (Assignment) -> Unit,
+    private val onTripActionClicked: (Assignment, String) -> Unit,
     private val onObdTap: (List<Map<String, Any>>, String) -> Unit,
     private val onShowVerification: (Assignment) -> Unit
 ) : ListAdapter<Assignment, MyTripTabAdapter.MyTripTabViewHolder>(AssignmentDiffCallback()) {
+
+    /** Set to a docId while its card is performing END_TRIP Firestore update */
+    var endingDocId: String? = null
+        private set
+
+    /** Called by MyTripActivity to mark which card is being ended */
+    fun setEndingDocId(docId: String?) {
+        endingDocId = docId
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MyTripTabViewHolder {
         val binding = ItemMyTripTabCardBinding.inflate(
@@ -57,6 +66,15 @@ class MyTripTabAdapter(
 
             // OBD count
             binding.tvObdCount.text = assignment.lineItems.size.toString()
+
+            // POD pending count — items still needing POD capture
+            val podPending = assignment.lineItems.count { (it["isPodCompleted"] as? Boolean) != true }
+            if (podPending > 0) {
+                binding.tvPodPending.text = "$podPending pending"
+                binding.tvPodPending.visibility = View.VISIBLE
+            } else {
+                binding.tvPodPending.visibility = View.GONE
+            }
 
             // ─── Guard verified pill ───────────────────────────────────────────
 
@@ -144,13 +162,26 @@ class MyTripTabAdapter(
                         ContextCompat.getColor(ctx, R.color.white)
                     )
 
-                    // My Trip tab only navigates to TransitActivity — END TRIP lives in TransitActivity
-                    // Lock icon on button if POD is incomplete as visual guidance only
-                    val canEndTrip = assignment.isPodComplete
-                    binding.btnTripAction.text = if (canEndTrip) "OPEN ACTIVE TRIP" else "OPEN ACTIVE TRIP 🔒"
-                    binding.btnTripAction.isEnabled = true  // Always clickable — navigates to TransitActivity
-                    binding.btnTripAction.alpha = 1.0f
-                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+                    val isEnding = assignment.docId == endingDocId
+
+                    // END TRIP appears when all PODs captured and not already ending.
+                    // If ending (Firestore in-flight), show ENDING... disabled button.
+                    if (isEnding) {
+                        binding.btnTripAction.text = "ENDING..."
+                        binding.btnTripAction.isEnabled = false
+                        binding.btnTripAction.alpha = 0.5f
+                    } else if (assignment.isPodComplete) {
+                        // All PODs done — driver can initiate return-to-base flow
+                        binding.btnTripAction.text = "START RETURNING TO BASE"
+                        binding.btnTripAction.isEnabled = true
+                        binding.btnTripAction.alpha = 1.0f
+                        binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
+                    } else {
+                        binding.btnTripAction.text = "OPEN ACTIVE TRIP 🔒"
+                        binding.btnTripAction.isEnabled = true
+                        binding.btnTripAction.alpha = 1.0f
+                        binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+                    }
 
                     binding.btnShowVerification.visibility = View.GONE
                 }
@@ -223,7 +254,13 @@ class MyTripTabAdapter(
             }
 
             binding.btnTripAction.setOnClickListener {
-                onTripActionClicked(assignment)
+                val action = when (binding.btnTripAction.text) {
+                    "END TRIP" -> "END_TRIP"
+                    "START TRIP" -> "START_TRIP"
+                    "VIEW SUMMARY" -> "VIEW_SUMMARY"
+                    else -> "OPEN_ACTIVE_TRIP"  // "OPEN ACTIVE TRIP 🔒"
+                }
+                onTripActionClicked(assignment, action)
             }
 
             // OBD row: unlocked only when trip is ON TRANSIT or COMPLETED.
@@ -250,12 +287,11 @@ class MyTripTabAdapter(
             }
 
             binding.root.setOnClickListener {
-                // Card tap: if in_transit (and no child button was tapped), trigger OBD view.
-                // Guard with isPressed() to avoid double-firing when a child button was clicked
-                // (Android fires child-button click THEN card-root click even when button is disabled).
+                // Card tap: if in_transit (and no child button was tapped), trigger same action as button.
+                // Guard with isPressed() to avoid double-firing when the button was clicked.
                 if (assignment.tripStatus == "in_transit" &&
                     !binding.btnTripAction.isPressed) {
-                    onTripActionClicked(assignment)
+                    onTripActionClicked(assignment, "OPEN_ACTIVE_TRIP")
                 }
             }
         }

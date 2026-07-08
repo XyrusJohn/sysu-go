@@ -501,9 +501,11 @@ class TransitActivity : AppCompatActivity() {
         // OPTIMIZATION: If currentSapDocId is already set (from session restore on open),
         // load that specific doc directly instead of running the full queue→sap join.
         // This is faster and avoids silent failures in the async join.
-        val restoredDocId = currentSapDocId
-        if (restoredDocId.isNotBlank()) {
-            Log.d(TAG, "[LOAD] currentSapDocId already set from session: $restoredDocId — fetching directly")
+        // currentSapDocId may be set from session-restore in onCreate() before this call,
+        // so always check the member var as source of truth.
+        val docId = currentSapDocId
+        if (docId.isNotBlank()) {
+            Log.d(TAG, "[LOAD] currentSapDocId already set from session: $docId — fetching directly")
             // First look up the queue doc so we get currentHelper and currentTruckType
             // (those fields don't exist in sap_assignments — they only live in the queue doc)
             db.collection("queue")
@@ -520,7 +522,7 @@ class TransitActivity : AppCompatActivity() {
                         Log.w(TAG, "[LOAD] No queue doc for driverId=$driverId")
                     }
                     // Now fetch the sap doc and populate UI with the queue-derived fields
-                    db.collection("sap_assignments").document(restoredDocId)
+                    db.collection("sap_assignments").document(docId)
                         .get()
                         .addOnSuccessListener { doc ->
                             if (doc.exists()) {
@@ -529,9 +531,15 @@ class TransitActivity : AppCompatActivity() {
                                 // Compute isPodCompleteForAll
                                 val lineItemsAll = doc.get("lineItems") as? List<Map<String, Any?>>
                                 isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
+                                // Sync all state flags from Firestore source-of-truth
+                                val tripStatus = doc.getString("tripStatus")
+                                isTripStarted = tripStatus == "in_transit"
+                                isReturningToBase = tripStatus == "returning_to_base"
+                                isTripEnded = tripStatus == "completed"
+                                Log.d(TAG, "[LOAD] State synced: isTripStarted=$isTripStarted isReturningToBase=$isReturningToBase isTripEnded=$isTripEnded")
                                 populateShipmentUI(doc, currentHelper, currentTruckType)
                             } else {
-                                Log.w(TAG, "[LOAD] Direct fetch doc $restoredDocId not found — falling back to queue join")
+                                Log.w(TAG, "[LOAD] Direct fetch doc $docId not found — falling back to queue join")
                                 loadTripDataFromQueue(driverId)
                             }
                         }
@@ -543,10 +551,17 @@ class TransitActivity : AppCompatActivity() {
                 .addOnFailureListener { e ->
                     Log.w(TAG, "[LOAD] Queue lookup failed: ${e.message} — fetching sap doc without helper/truckType")
                     // Still try to load the sap doc even if queue lookup fails
-                    db.collection("sap_assignments").document(restoredDocId)
+                    db.collection("sap_assignments").document(docId)
                         .get()
                         .addOnSuccessListener { doc ->
                             if (doc.exists()) {
+                                currentSapDocId = doc.id
+                                val lineItemsAll = doc.get("lineItems") as? List<Map<String, Any?>>
+                                isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
+                                val tripStatus = doc.getString("tripStatus")
+                                isTripStarted = tripStatus == "in_transit"
+                                isReturningToBase = tripStatus == "returning_to_base"
+                                isTripEnded = tripStatus == "completed"
                                 populateShipmentUI(doc, null, null)
                             } else {
                                 loadTripDataFromQueue(driverId)
@@ -565,10 +580,12 @@ class TransitActivity : AppCompatActivity() {
     }
 
     private fun loadTripDataFromQueue(driverId: String) {
-        // Clear any stale completed-session from previous trip so we start fresh
+        // Clear any stale completed-session from previous trip so we start fresh.
+        // isReturningToBase is also reset — will be re-set below from Firestore if needed.
         sessionManager.clearCurrentSapDocId()
         isTripStarted = false
         isTripEnded = false
+        isReturningToBase = false
 
         db.collection("queue")
             .whereEqualTo("driverId", driverId)
@@ -618,10 +635,11 @@ class TransitActivity : AppCompatActivity() {
                                     val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
                                     isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                                     val fbTripStatus = sapDoc.getString("tripStatus")
-                                    if (fbTripStatus == "completed") {
-                                        isTripStarted = false
-                                        isTripEnded = true
-                                    }
+                                    isReturningToBase = fbTripStatus == "returning_to_base"
+                                    isTripStarted = fbTripStatus == "in_transit"
+                                    isTripEnded = fbTripStatus == "completed"
+                                    Log.d(TAG, "[FALLBACK] Doc ${sapDoc.id} tripStatus=$fbTripStatus isReturningToBase=$isReturningToBase")
+                                    updateProgressStepper()
                                     populateShipmentUI(sapDoc, currentHelper, currentTruckType)
                                     return@addOnSuccessListener
                                 }
@@ -632,7 +650,10 @@ class TransitActivity : AppCompatActivity() {
                         // Compute isPodCompleteForAll
                         val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
                         isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
-                        Log.d(TAG, "Found sap doc id=${sapDoc.id} tripStatus=${sapDoc.getString("tripStatus")}")
+                        isReturningToBase = false          // query already filtered tripStatus=in_transit
+                        isTripStarted = true
+                        Log.d(TAG, "Found sap doc id=${sapDoc.id} tripStatus=in_transit isPodCompleteForAll=$isPodCompleteForAll")
+                        updateProgressStepper()
                         populateShipmentUI(sapDoc, currentHelper, currentTruckType)
                     }
                     .addOnFailureListener { e ->
