@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -228,8 +229,12 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 tvObdNumber.isClickable = true
                 tvObdNumber.isFocusable = true
                 tvObdNumber.setOnClickListener {
-                    ObdDetailBottomSheet.newInstance(obd, customerName, status)
-                        .show(parentFragmentManager, ObdDetailBottomSheet.TAG)
+                    val sheet = ObdDetailBottomSheet.newInstance(obd, customerName, status)
+                    try {
+                        sheet.show(parentFragmentManager, ObdDetailBottomSheet.TAG)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "ObdDetailBottomSheet show failed: ${t.javaClass.simpleName}: ${t.message}")
+                    }
                 }
 
                 ivPodIndicator.isClickable = true
@@ -269,7 +274,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         val tvDeliveryStatus = rowView.findViewById<TextView>(R.id.tvDeliveryStatus)
         // Tag the item for later use in configureStatusPill
         tvDeliveryStatus.tag = item
-        val ivPodIndicator   = rowView.findViewById<TextView>(R.id.ivPodIndicator)
+        val ivPodIndicator   = rowView.findViewById<ImageView>(R.id.ivPodIndicator)
         val pbItemLoading    = rowView.findViewById<ProgressBar>(R.id.pbItemLoading)
 
         val obd = safeObdNumber(item["obdNumber"])
@@ -296,7 +301,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         // Dim the indicator during loading
         if (!isLoading) {
             bindStatusBar(viewStatusBar, isPodCompleted, deliveryStatus)
-            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, obd, item, podImageUrl)
+            configureStatusPill(tvDeliveryStatus, null, isPodCompleted, deliveryStatus, obd, item, podImageUrl)
         } else {
             viewStatusBar.alpha = 0.4f
             tvDeliveryStatus.alpha = 1f
@@ -373,7 +378,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
      */
     private fun configureStatusPill(
         tvDeliveryStatus: TextView,
-        ivPodIndicator: TextView,
+        ivPodIndicator: TextView?,
         isPodCompleted: Boolean,
         deliveryStatus: String,
         obdNumber: String = "",
@@ -400,7 +405,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             tvDeliveryStatus.alpha = 1f
 
             // No camera icon in PENDING or UNLOADING — gone from layout entirely so it doesn't block CAPTURE button
-            ivPodIndicator.visibility = View.GONE
+            ivPodIndicator?.visibility = View.GONE
 
             if (rowLayoutType == RowLayoutType.POD) {
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
@@ -466,7 +471,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
             if (isPodCompletedItem && statusUpper.isNotBlank()) {
                 // Show delivery status pill (DELIVERED/REJECTED/DEL. W/ REJ)
-                ivPodIndicator.visibility = View.VISIBLE  // restore camera/checkmark for COMPLETED rows
+                ivPodIndicator?.visibility = View.VISIBLE  // restore camera/checkmark for COMPLETED rows
                 val appearance: StatusAppearance = when (statusUpper) {
                     "DELIVERED" -> StatusAppearance(R.drawable.bg_badge_green, R.drawable.bg_status_pill_green, R.color.white, "DELIVERED")
                     "REJECTED"  -> StatusAppearance(R.drawable.bg_badge_red, R.drawable.bg_status_pill_red, R.color.white, "REJECTED")

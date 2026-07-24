@@ -92,32 +92,52 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />
 
-        <!-- Status Badge -->
+        <!-- MaterialCardView wrapper with transparent card, drawable handles all frosted looks -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/statusBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             app:cardCornerRadius="20dp"
-            app:cardBackgroundColor="#22FFFFFF"
+            app:cardBackgroundColor="@android:color/transparent"
+            app:cardElevation="0dp"
             app:strokeWidth="0dp"
+            android:background="@drawable/bg_badge_frosted_not_in_queue"
             app:layout_constraintTop_toBottomOf="@id/tvDriverName"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintBottom_toBottomOf="parent">
 
-            <TextView
-                android:id="@+id/tvStatusBadgeText"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:paddingHorizontal="16dp"
-                android:paddingVertical="5dp"
-                android:text="Driver"
-                android:textColor="@color/white"
-                android:textSize="@dimen/text_size_micro"
-                android:textAllCaps="true"
-                android:letterSpacing="0.1"
-                android:fontFamily="@font/atkinson_hyperlegible_bold" />
+                android:orientation="vertical"
+                android:gravity="center"
+                android:paddingHorizontal="24dp"
+                android:paddingVertical="8dp">
+
+                <TextView
+                    android:id="@+id/tvStatusBadgeText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Not in queue"
+                    android:textColor="@color/status_not_in_queue"
+                    android:textSize="@dimen/text_size_micro"
+                    android:textAllCaps="true"
+                    android:letterSpacing="0.1"
+                    android:fontFamily="@font/atkinson_hyperlegible_bold" />
+
+                <TextView
+                    android:id="@+id/tvAssignedCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text=""
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9sp"
+                    android:fontFamily="@font/atkinson_hyperlegible_regular"
+                    android:visibility="gone" />
+            </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
     </androidx.constraintlayout.widget.ConstraintLayout>
 

@@ -159,112 +159,95 @@ class AssignmentAdapter(
             //   guardVerified   → "SHOW VERIFICATION"  (outline red) — shows saved verification
             // =============================================
 
+            // ── State evaluation order (must match AssignmentActivity.onAssignmentAction) ──
+            //
+            // 1. isCompleted          → terminal, no interaction
+            // 2. isInTransit          → END TRIP active
+            // 3. driverConfirmed      → READY ✓ (checked BEFORE isLocked so confirmed
+            //                            shipments never show LOCKED even with stale session)
+            // 4. canConfirmTrip       → CONFIRM SHIPMENT (guard signed, driver next)
+            // 5. isLocked             → LOCKED (only unconfirmed shipments can be blocked
+            //                            by a stale session; confirmed ones are protected)
+            // 6. else                 → PENDING VERIFICATION (guard not signed)
+
             when {
-                // ── STATE A: Guard NOT yet verified ──────────────────────────────
-                !assignment.guardVerified -> {
-                    // TOP: Locked out, awaiting guard verification
-                    binding.btnTripAction.text = "PENDING VERIFICATION"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.gray_disabled))
-                    binding.btnTripAction.isEnabled = false
-                    binding.btnTripAction.alpha = 0.7f
-                    // BOTTOM: "GUARD VERIFICATION" — solid red, clickable, triggers guard flow
-                    binding.btnShowVerification.text = "GUARD VERIFICATION"
-                    binding.btnShowVerification.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.white))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
-                    // Clear stroke for solid look
-                    binding.btnShowVerification.strokeWidth = 0
-                }
-
-                // ── Another shipment in transit — lock this one ──────────────────
-                isLocked -> {
-                    binding.btnTripAction.text = "LOCKED"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.text_muted))
-                    binding.btnTripAction.isEnabled = false
-                    binding.btnTripAction.alpha = 0.6f
-                    // BOTTOM: "SHOW VERIFICATION" — outline style (post-verify, read-only)
-                    binding.btnShowVerification.text = "SHOW VERIFICATION"
-                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
-                }
-
-                // ── This shipment is in progress ─────────────────────────────────
-                isInTransit -> {
-                    binding.btnTripAction.text = "END TRIP"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.transit_green))
-                    binding.btnTripAction.isEnabled = true
-                    binding.btnTripAction.alpha = 1f
-                    // BOTTOM: "SHOW VERIFICATION" — outline
-                    binding.btnShowVerification.text = "SHOW VERIFICATION"
-                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
-                }
-
-                // ── Trip completed ────────────────────────────────────────────────
                 assignment.isCompleted -> {
                     binding.btnTripAction.text = "COMPLETED"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.text_muted))
                     binding.btnTripAction.isEnabled = false
                     binding.btnTripAction.alpha = 0.6f
-                    // BOTTOM: "SHOW VERIFICATION" — outline
-                    binding.btnShowVerification.text = "SHOW VERIFICATION"
-                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
                 }
 
-                // ── STATE B: Guard verified AND driver confirmed — READY for transit ──
-                assignment.guardVerified && assignment.driverConfirmed -> {
+                assignment.isInTransit -> {
+                    binding.btnTripAction.text = "END TRIP"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.transit_green))
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1f
+                }
+
+                assignment.driverConfirmed -> {
                     binding.btnTripAction.text = "READY ✓"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.transit_green))
                     binding.btnTripAction.isEnabled = false
                     binding.btnTripAction.alpha = 0.8f
-                    // BOTTOM: "SHOW VERIFICATION" — outline
-                    binding.btnShowVerification.text = "SHOW VERIFICATION"
-                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
                 }
 
-                // ── STATE C: Guard verified, driver NOT yet confirmed ──────────────
                 assignment.canConfirmTrip -> {
                     binding.btnTripAction.text = "CONFIRM SHIPMENT"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
                     binding.btnTripAction.isEnabled = true
                     binding.btnTripAction.alpha = 1f
-                    // BOTTOM: "SHOW VERIFICATION" — outline
-                    binding.btnShowVerification.text = "SHOW VERIFICATION"
-                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                    binding.btnShowVerification.setTextColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnShowVerification.isEnabled = true
-                    binding.btnShowVerification.alpha = 1f
-                    binding.btnShowVerification.visibility = View.VISIBLE
                 }
 
-                // ── Fallback — should not reach here ─────────────────────────────
-                else -> {
-                    binding.btnTripAction.text = "—"
+                isLocked -> {
+                    binding.btnTripAction.text = "LOCKED"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.text_muted))
                     binding.btnTripAction.isEnabled = false
-                    binding.btnShowVerification.visibility = View.GONE
+                    binding.btnTripAction.alpha = 0.6f
+                }
+
+                else -> {
+                    binding.btnTripAction.text = "PENDING VERIFICATION"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.gray_disabled))
+                    binding.btnTripAction.isEnabled = false
+                    binding.btnTripAction.alpha = 0.7f
                 }
             }
 
-            // Click listener — top button, guards via isEnabled state
+            // ── Bottom btnShowVerification button — separate state machine ─────────
+            //
+            // !guardVerified  → "GUARD VERIFICATION" (solid red, clickable)
+            // guardVerified   → "SHOW VERIFICATION"  (outline red, read-only)
+            //
+            if (!assignment.guardVerified) {
+                binding.btnShowVerification.text = "GUARD VERIFICATION"
+                binding.btnShowVerification.setBackgroundColor(
+                    ContextCompat.getColor(ctx, R.color.sysu_red)
+                )
+                binding.btnShowVerification.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.white)
+                )
+                binding.btnShowVerification.isEnabled = true
+                binding.btnShowVerification.alpha = 1f
+                binding.btnShowVerification.strokeWidth = 0
+            } else {
+                binding.btnShowVerification.text = "SHOW VERIFICATION"
+                binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
+                binding.btnShowVerification.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.sysu_red)
+                )
+                binding.btnShowVerification.isEnabled = true
+                binding.btnShowVerification.alpha = 1f
+            }
+            binding.btnShowVerification.visibility = View.VISIBLE
+
+            // Click listener — only fires for canConfirmTrip (enabled, guard signed, not confirmed)
             binding.btnTripAction.setOnClickListener {
-                if (!isLocked && !assignment.isCompleted && assignment.guardVerified) {
+                if (!isLocked && !assignment.isCompleted && assignment.guardVerified && !assignment.driverConfirmed) {
+                    android.util.Log.d("AssignmentAdapter", "TAP: btnTripAction → calling onTripActionClick for ${assignment.docId}")
                     onTripActionClick(assignment)
+                } else {
+                    android.util.Log.d("AssignmentAdapter", "TAP BLOCKED: isLocked=$isLocked isCompleted=${assignment.isCompleted} guardVerified=${assignment.guardVerified} driverConfirmed=${assignment.driverConfirmed}")
                 }
             }
         }

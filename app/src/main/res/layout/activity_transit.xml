@@ -343,7 +343,7 @@
             android:layout_marginTop="10dp"
             android:fontFamily="@font/atkinson_hyperlegible_bold"
             android:gravity="center"
-            android:text="Waiting for truck..."
+            android:text="Trip in progress"
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_size_body" />
 
@@ -592,7 +592,7 @@
             android:layout_width="match_parent"
             android:layout_height="@dimen/btn_height"
             android:fontFamily="@font/atkinson_hyperlegible_bold"
-            android:text="START TRIP"
+            android:text="BACK TO HOME"
             android:textAllCaps="false"
             android:textColor="@color/white"
             android:textSize="@dimen/text_size_button"

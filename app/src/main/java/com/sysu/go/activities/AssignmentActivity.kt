@@ -127,18 +127,28 @@ class AssignmentActivity : AppCompatActivity() {
      * Delegates to same AlertDialog / performStartTrip flow from the old screen.
      */
     private fun onAssignmentAction(assignment: Assignment) {
+        // Source-of-truth lock check — derived from Firestore state, not SharedPreferences.
+        // Survives session clear when the active trip ends (clearTripSession nulls activeSapDocId).
+        val inTransitDocId: String? = assignments.firstOrNull { it.isInTransit }?.docId
+        android.util.Log.d(TAG, "onAssignmentAction: docId=${assignment.docId} isLocked=${assignment.isLocked(inTransitDocId)}")
         when {
-            assignment.isLocked(sessionManager.getActiveSapDocId()) -> {
-                Toast.makeText(this, "Another trip is in progress", Toast.LENGTH_SHORT).show()
-            }
-            assignment.isInTransit -> {
-                launchTransitActivity(assignment.docId)
-            }
+            // Terminal — completed shipments cannot be acted on
             assignment.isCompleted -> {
                 Toast.makeText(this, "This trip has already been completed", Toast.LENGTH_SHORT).show()
             }
+            // Active in-transit trip — can re-open OBD/POD
+            assignment.isInTransit -> {
+                launchTransitActivity(assignment.docId)
+            }
+            // Guard verified AND driver confirmed — READY, block guard re-entry
+            assignment.driverConfirmed -> {
+                android.util.Log.d(TAG, " → driverConfirmed branch: showing toast")
+                Toast.makeText(this, "Shipment is READY. Waiting to start trip.", Toast.LENGTH_SHORT).show()
+            }
+            // Guard verified, driver NOT yet confirmed — MUST check before isLocked
+            // to unblock driver confirmation even when another trip's session is stale.
             assignment.canConfirmTrip -> {
-                // Guard verified, driver NOT yet confirmed — show confirm dialog
+                android.util.Log.d(TAG, " → canConfirmTrip branch: showing dialog")
                 AlertDialog.Builder(this)
                     .setTitle(R.string.confirm_shipment_title)
                     .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
@@ -146,10 +156,11 @@ class AssignmentActivity : AppCompatActivity() {
                     .setNegativeButton(R.string.cancel, null)
                     .show()
             }
-            assignment.guardVerified && assignment.canStartTrip -> {
-                // Guard verified AND driver confirmed — direct to TransitActivity
-                launchTransitActivity(assignment.docId)
+            // Locked by another actively in-transit shipment (Firestore state-based, survives session clear)
+            assignment.isLocked(inTransitDocId) -> {
+                Toast.makeText(this, "Another trip is in progress", Toast.LENGTH_SHORT).show()
             }
+            // Normal flow — guard still needs to verify
             else -> {
                 openGuardVerification(assignment)
             }
@@ -217,6 +228,22 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Guard verification saved for ${assignment.docId}")
+                        // Optimistically update local list so the card instantly shows "CONFIRM SHIPMENT"
+                        // instead of waiting for the next Firestore snapshot to fire.
+                        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                        if (idx >= 0) {
+                            assignments = assignments.toMutableList().apply {
+                                set(idx, assignments[idx].copy(
+                                    guardVerified = true,
+                                    guardFirstName = guard.firstName,
+                                    guardLastName = guard.lastName
+                                ))
+                            }
+                            submitToAdapter(assignments)
+                            updateAggregateBadge(assignments)
+                        }
+                        // Snapshot listener will fire automatically with authoritative server state —
+                        // no manual reload needed. Re-registering creates race conditions.
                         Toast.makeText(
                             this@AssignmentActivity,
                             "Guard verification complete!",
@@ -327,6 +354,18 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
+                        // Optimistically update local list so the card instantly shows "CONFIRMED"
+                        // instead of waiting for the next Firestore snapshot to fire.
+                        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                        if (idx >= 0) {
+                            assignments = assignments.toMutableList().apply {
+                                set(idx, assignments[idx].copy(driverConfirmed = true))
+                            }
+                            submitToAdapter(assignments)
+                            updateAggregateBadge(assignments)
+                        }
+                        // Snapshot listener will fire automatically with authoritative server state —
+                        // no manual reload needed. Re-registering creates race conditions.
                         Toast.makeText(
                             this@AssignmentActivity,
                             R.string.confirm_shipment_toast,
@@ -538,9 +577,22 @@ class AssignmentActivity : AppCompatActivity() {
         // Must be: (a) present in current list AND (b) actually in_transit in Firestore.
         // Prevents stale SharedPreferences from locking cards from past sessions.
         val rawActiveId = sessionManager.getActiveSapDocId()
-        val sessionActiveDocId = rawActiveId?.takeIf { storedId ->
-            list.any { it.docId == storedId && it.isInTransit }
+
+        // If the stored session docId is no longer backed by any in-transit shipment,
+        // clear it — it came from a cancelled/aborted past trip. This ensures
+        // stale sessions from past trips never lock current pre-confirmation cards.
+        val effectiveActiveId = if (rawActiveId != null && !list.any { it.docId == rawActiveId && it.isInTransit }) {
+            sessionManager.saveActiveSapDocId(null)
+            null
+        } else {
+            rawActiveId
         }
+
+        // Find which shipment (if any) has tripStatus == "in_transit" in Firestore right now.
+        // Used to lock all other confirmed shipments while a trip is active.
+        // This is the source-of-truth — not SharedPreferences — so the lock is Reliable
+        // even after the active trip's session is cleared on end.
+        val inTransitDocId: String? = list.firstOrNull { it.isInTransit }?.docId
 
         val adapter = (binding.rvAssignments.adapter as? AssignmentAdapter)
             ?: AssignmentAdapter(
@@ -553,8 +605,8 @@ class AssignmentActivity : AppCompatActivity() {
                 }
             ).also { binding.rvAssignments.adapter = it }
 
-        // Always refresh sessionActiveDocId so bind() has the current value
-        adapter.sessionActiveDocId = sessionActiveDocId
+        // Always refresh inTransitDocId so bind() has the current value from Firestore
+        adapter.sessionActiveDocId = inTransitDocId
         adapter.submitList(list.toList())
 
         if (list.isEmpty()) {
@@ -584,7 +636,10 @@ class AssignmentActivity : AppCompatActivity() {
                     if (idx < mutableList.size) {
                         mutableList[idx] = updated
                         assignments = mutableList
-                        adapter.sessionActiveDocId = sessionManager.getActiveSapDocId()
+                        // Note: do NOT re-set adapter.sessionActiveDocId here —
+                        // that would override inTransitDocId with a potentially stale session value.
+                        // submitToAdapter is called again (below) which recomputes inTransitDocId fresh
+                        // from Firestore state anyway.
                         adapter.submitList(assignments.toList())
                     }
                 }

@@ -27,6 +27,11 @@ class SplashActivity : AppCompatActivity() {
 
         startFerrisWheelAnimation()
 
+        // ALWAYS clear stale isTripActive flag on cold start.
+        // This fixes: app was hard-killed during a trip → isTripActive=true stuck in SharedPrefs →
+        // SplashActivity wrongly routes to TransitActivity (red-banner My Trip) instead of MainActivity.
+        SessionManager(this).setTripActive(false)
+
         Handler(Looper.getMainLooper()).postDelayed({
             checkUserSession()
         }, 2000)

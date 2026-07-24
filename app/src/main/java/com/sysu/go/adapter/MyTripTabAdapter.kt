@@ -171,11 +171,24 @@ class MyTripTabAdapter(
                         binding.btnTripAction.isEnabled = false
                         binding.btnTripAction.alpha = 0.5f
                     } else if (assignment.isPodComplete) {
-                        // All PODs done — driver can initiate return-to-base flow
-                        binding.btnTripAction.text = "START RETURNING TO BASE"
-                        binding.btnTripAction.isEnabled = true
-                        binding.btnTripAction.alpha = 1.0f
-                        binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
+                        // All PODs done — check if driver has OTHER shipments assigned.
+                        // Multi-shipment: END SHIPMENT directly so driver can immediately
+                        // move to the next shipment. Other confirmed shipments unlock
+                        // (Firestore: this shipment's tripStatus=completed → lock lifts).
+                        // Single-shipment: keep the full return-to-base flow (driver →
+                        // TransitActivity → ARRIVED AT WAREHOUSE → end trip).
+                        val isMultiShipment = itemCount > 1
+                        if (isMultiShipment) {
+                            binding.btnTripAction.text = "END SHIPMENT"
+                            binding.btnTripAction.isEnabled = true
+                            binding.btnTripAction.alpha = 1.0f
+                            binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.transit_green)
+                        } else {
+                            binding.btnTripAction.text = "START RETURNING TO BASE"
+                            binding.btnTripAction.isEnabled = true
+                            binding.btnTripAction.alpha = 1.0f
+                            binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
+                        }
                     } else {
                         binding.btnTripAction.text = "OPEN ACTIVE TRIP 🔒"
                         binding.btnTripAction.isEnabled = true
@@ -255,9 +268,10 @@ class MyTripTabAdapter(
 
             binding.btnTripAction.setOnClickListener {
                 val action = when (binding.btnTripAction.text) {
-                    "END TRIP" -> "END_TRIP"
+                    "END TRIP", "ENDING...", "END SHIPMENT" -> "END_TRIP"
                     "START TRIP" -> "START_TRIP"
                     "VIEW SUMMARY" -> "VIEW_SUMMARY"
+                    "START RETURNING TO BASE" -> "RETURNING_TO_BASE"
                     else -> "OPEN_ACTIVE_TRIP"  // "OPEN ACTIVE TRIP 🔒"
                 }
                 onTripActionClicked(assignment, action)

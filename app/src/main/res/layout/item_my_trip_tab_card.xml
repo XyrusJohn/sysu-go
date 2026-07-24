@@ -370,6 +370,21 @@
                     android:textSize="@dimen/text_size_caption"
                     android:textStyle="bold" />
 
+                <!-- POD pending badge — hidden when all items have POD -->
+                <TextView
+                    android:id="@+id/tvPodPending"
+                    android:layout_width="wrap_content"
+                    android:layout_height="20dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="6dp"
+                    android:background="@drawable/bg_pod_pending_pill"
+                    android:textColor="@color/transit_amber_dark"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:visibility="gone"
+                    tools:text="2 pending"
+                    tools:visibility="visible" />
+
                 <ImageView
                     android:id="@+id/ivObdChevron"
                     android:layout_width="18dp"

@@ -456,8 +456,9 @@ class MainActivity : AppCompatActivity() {
                     startActivity(intent)
                 }
                 assignment.isCompleted -> {
-                    // Already completed → show as read-only in AssignmentActivity
-                    val intent = Intent(this, AssignmentActivity::class.java)
+                    // Completed → read-only per-shipment detail view
+                    val intent = Intent(this, QueueDetailsActivity::class.java)
+                    intent.putExtra("shipment_doc_id", assignment.docId)
                     startActivity(intent)
                 }
                 else -> {
@@ -765,7 +766,7 @@ class MainActivity : AppCompatActivity() {
             // Check both in-memory list (fast) and SharedPreferences (survives app restart after START TRIP).
             val sessionMgr = SessionManager(this)
             val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
-                || sessionMgr.getActiveSapDocId() != null
+                || (sessionMgr.getActiveSapDocId() != null && sessionMgr.isTripActive())
 
             if (hasActiveTrip) {
                 // Active trip running — open TransitActivity live tracking screen
@@ -799,9 +800,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.cardMyQueue.setOnClickListener {
-            // Always open AssignmentActivity when there's a shipment or queue
-            if (isInQueue || hasShipment) {
-                startActivity(Intent(this, AssignmentActivity::class.java))
+            // Tapping the home card → show per-shipment detail (banner + card stack).
+            // Pass the first shipment's docId so QueueDetailsActivity loads correctly.
+            if (currentShipments.isNotEmpty()) {
+                val intent = Intent(this, com.sysu.go.activities.QueueDetailsActivity::class.java)
+                intent.putExtra("shipment_doc_id", currentShipments.first().docId)
+                startActivity(intent)
+            } else if (isInQueue) {
+                openQueueDetails()
             }
         }
 
@@ -1543,17 +1549,14 @@ class MainActivity : AppCompatActivity() {
                 val shipmentAdapter = com.sysu.go.adapter.MyTripTabAdapter(
                     hasActiveTrip = hasActiveTrip,
                     activeShipmentId = inTransit?.docId,
-                    onTripActionClicked = { assignment ->
-                        when {
-                            assignment.tripStatus == "in_transit" -> {
+                    onTripActionClicked = { assignment, action ->
+                        when (action) {
+                            "OPEN_ACTIVE_TRIP" -> {
                                 val intent = Intent(this, MyTripActivity::class.java)
                                 intent.putExtra("shipment_doc_id", assignment.docId)
                                 startActivity(intent)
                             }
-                            hasActiveTrip -> {
-                                Toast.makeText(this, "You already have an active trip.", Toast.LENGTH_SHORT).show()
-                            }
-                            else -> {
+                            "START_TRIP" -> {
                                 AlertDialog.Builder(this)
                                     .setTitle(R.string.confirm_start_trip_title)
                                     .setMessage(getString(R.string.confirm_start_trip_message))

@@ -160,22 +160,24 @@ object ImageStorageHelper {
 
     /**
      * Compresses a POD photo with a visible timestamp overlay (and optional
-     * location label) and returns it as a base64-encoded data URI. Suitable for
-     * storing directly in Firestore.
+     * location label + GPS coordinates) and returns it as a base64-encoded
+     * data URI. Suitable for storing directly in Firestore.
      *
      * Flow:
-     *   1. Draw timestamp watermark + location (bottom-left, white-on-black strip)
+     *   1. Draw bottom bar watermark: GPS coords → address (wrappable) → ISO timestamp
      *   2. Resize to ≤1280px max dimension
      *   3. Compress to JPEG 50%
      *   4. Base64-encode to data URI
      *
      * @param bitmap         The raw photo bitmap to process.
-     * @param timestampMillis Epoch millis for the timestamp shown in the watermark.
-     * @param context        Android context (for Geocoder reverse-geocoding).
+     * @param timestampMillis Epoch millis for the ISO timestamp shown in the bar.
+     * @param context        Android context.
      * @param onSuccess      Called on main thread with the base64 data URI string.
      * @param onFailure      Called on main thread with the error message string.
-     * @param locationLabel   Optional location string, e.g. "📍 Dasmarinas, Cavite".
-     *                        Pass null to show timestamp only.
+     * @param locationLabel   Optional locality string, e.g. "Dasmarinas, Cavite".
+     *                        If null, address line is hidden.
+     * @param latitude        Optional raw latitude for (LAT:, LNG:) line.
+     * @param longitude        Optional raw longitude for (LAT:, LNG:) line.
      */
     fun uploadPodImage(
         bitmap: Bitmap,
@@ -183,22 +185,20 @@ object ImageStorageHelper {
         context: Context,
         onSuccess: (String) -> Unit,
         onFailure: (String) -> Unit,
-        locationLabel: String? = null
+        locationLabel: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null
     ) {
-        // Step 1: Draw timestamp overlay + location (bottom-left corner, white on 90% black strip)
         val stampedBitmap = try {
-            drawTimestampOverlay(bitmap, timestampMillis, locationLabel)
+            drawTimestampOverlay(bitmap, timestampMillis, locationLabel, latitude, longitude)
         } catch (e: Exception) {
             Log.w(TAG, "drawTimestampOverlay failed — encoding without watermark: ${e.message}")
-            // Fallback: use original bitmap if overlay drawing fails
             bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
 
-        // Step 2: Resize (same logic as existing single-bitmap overload)
         val resized = resizeBitmap(stampedBitmap, MAX_DIMENSION)
         if (resized !== stampedBitmap) stampedBitmap.recycle()
 
-        // Step 3: Compress to JPEG
         val byteArray = compressToJpeg(resized, JPEG_QUALITY)
         resized.recycle()
 
@@ -207,7 +207,6 @@ object ImageStorageHelper {
             return
         }
 
-        // Step 4: Base64-encode
         val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
         val dataUri = "data:image/jpeg;base64,$base64String"
 
@@ -300,86 +299,140 @@ object ImageStorageHelper {
     }
 
     /**
-     * Draws a timestamp watermark in the bottom-left corner of the given bitmap.
-     * Returns a NEW bitmap (caller must recycle it) with the watermark drawn on top.
-     * The original bitmap is NOT modified.
+     * Draws a full-width black bottom bar containing:
+     *   Line 1: (LAT: X.6f, LNG: Y.6f) — 18sp bold, white
+     *   Line 2: Wrapped address — 15sp regular, white  (e.g. "Dasmarinas, Cavite")
+     *   Line 3: yyyy-MM-dd HH:mm:ss — 14sp regular, muted alpha  (ISO 24h)
      *
-     * Watermark style (Shopee/Lalamove-standard — large and instantly readable):
-     *   - Background strip: #E6000000 (90% black), full-width, tall padding
-     *   - Text line 1: 32sp bold, white (#FFFFFF), system sans-serif — datetime
-     *   - Text line 2: 22sp normal, white (#FFFFFF), system sans-serif — location
-     *   - Format: "Jun 23, 2026 • 2:30:45 PM" / "📍 Dasmarinas, Cavite"
-     *   - Position: 24px margin from bottom edge, left-aligned
+     * Bar geometry (all anchored from bar TOP, stacking downward):
+     *   - Full canvas width, from barTop to canvas bottom
+     *   - innerPaddingV = 14dp top/bottom padding
+     *   - lineGap = 10dp between lines
+     *   - marginBottom = 28dp from canvas bottom
+     *   - marginLeft = 24dp from left edge
      *
-     * @param bitmap          The source photo bitmap.
+     * Zero-dependency on any Activity context — pure bitmap math.
+     *
+     * @param bitmap          The source photo bitmap (NOT modified).
      * @param timestampMillis Epoch millis for the timestamp string.
-     * @param locationLabel   Optional location string, e.g. "📍 Dasmarinas, Cavite".
-     *                        If null, only the timestamp line is drawn.
+     * @param locationLabel   Optional locality string, e.g. "📍 Dasmarinas, Cavite".
+     *                        The pin emoji is stripped. If null, address line is hidden.
+     * @param latitude        Optional raw latitude for (LAT:, LNG:) display.
+     * @param longitude       Optional raw longitude for (LAT:, LNG:) display.
+     * @return A NEW bitmap with the bottom bar drawn on top. Caller must recycle
+     *         the returned bitmap and the original bitmap is NEVER modified.
      */
     private fun drawTimestampOverlay(
         bitmap: Bitmap,
         timestampMillis: Long,
-        locationLabel: String? = null
+        locationLabel: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null
     ): Bitmap {
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(result)
+        val canvasWidth = result.width.toFloat()
+        val canvasHeight = result.height.toFloat()
 
-        // Format timestamp
-        val dateFormat = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm:ss a", java.util.Locale.US)
-        val dateStr = dateFormat.format(java.util.Date(timestampMillis))
+        // ── Design tokens ────────────────────────────────────────────────────
+        val dp = android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+        val marginLeft = 24f * dp      // 24dp left inset
+        val marginBottom = 28f * dp    // 28dp from canvas bottom edge
+        val lineGap = 16f * dp         // 16dp gap between consecutive lines
+        val innerPaddingV = 20f * dp   // 20dp vertical padding inside bar
 
-        // Text paint — 32sp BOLD timestamp
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // ── Typography ───────────────────────────────────────────────────────
+        val gpsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {       // Line 1: 32sp bold
             color = android.graphics.Color.WHITE
-            textSize = 32f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            textSize = 32f * dp
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         }
-
-        // Location text paint — 22sp normal (smaller, secondary info)
-        val locationPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val addressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {   // Line 2: 26sp bold
             color = android.graphics.Color.WHITE
-            textSize = 22f * android.content.res.Resources.getSystem().displayMetrics.scaledDensity
+            textSize = 26f * dp
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val tsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {        // Line 3: 24sp regular, muted
+            color = android.graphics.Color.WHITE
+            textSize = 24f * dp
             typeface = android.graphics.Typeface.DEFAULT
-            alpha = 230  // slightly less than full white for visual hierarchy
+            alpha = 200
         }
-
-        // Measure text widths — use the wider of timestamp vs location for strip width
-        val tsWidth = textPaint.measureText(dateStr)
-        val locWidth = locationLabel?.let { locationPaint.measureText(it) } ?: 0f
-        val maxTextWidth = maxOf(tsWidth, locWidth)
-        val textHeight = textPaint.descent() - textPaint.ascent()
-        val locLineHeight = locationLabel?.let { (locationPaint.descent() - locationPaint.ascent()) } ?: 0f
-        val textBottomY = result.height - 24f
-
-        // Background strip rect — height varies if location is present
-        val stripLeft = 0f
-        val stripRight = maxTextWidth + 48f  // 24dp horizontal padding each side
-        val verticalPadding = 24f  // 12dp top+bottom internal padding
-        val stripTop = if (locationLabel != null) {
-            textBottomY - textHeight - 16f - locLineHeight - verticalPadding
-        } else {
-            textBottomY - textHeight - verticalPadding
-        }
-        val stripBottom = textBottomY + 16f
-
-        val stripRect = RectF(stripLeft, stripTop, stripRight, stripBottom)
-
-        // Draw background strip
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xE6000000.toInt()  // #E6000000 — 90% black
+            color = 0xE6000000.toInt()  // 90% black
         }
-        canvas.drawRoundRect(stripRect, 32f, 32f, bgPaint)  // 32dp corner radius
 
-        // Draw timestamp — baseline at stripBottom - 16f
-        val textX = stripLeft + 24f  // 24dp left padding
-        val tsBaseline = stripBottom - 16f - textPaint.descent()
-        canvas.drawText(dateStr, textX, tsBaseline, textPaint)
+        // ── Line content ────────────────────────────────────────────────────
+        val gpsLine = if (latitude != null && longitude != null) {
+            String.format(java.util.Locale.US, "(LAT: %.6f, LNG: %.6f)", latitude, longitude)
+        } else null
 
-        // Draw location line below timestamp
-        if (locationLabel != null) {
-            val locBaseline = tsBaseline + 8f + locLineHeight
-            canvas.drawText(locationLabel, textX, locBaseline, locationPaint)
+        val addressLine = locationLabel?.removePrefix("📍 ")?.trim()
+
+        // ISO 24-hour: YYYY-MM-DD HH:MM:SS
+        val isoTimestamp = java.text.SimpleDateFormat(
+            "yyyy-MM-dd HH:mm:ss", java.util.Locale.US
+        ).format(java.util.Date(timestampMillis))
+
+        // ── Measure font heights (ascent is negative; use absolute value) ────
+        val gpsAscent = -gpsPaint.ascent()      // distance baseline→top-of-text
+        val addrAscent = -addressPaint.ascent()
+        val tsAscent = -tsPaint.ascent()
+        val gpsH = gpsAscent + gpsPaint.descent()
+        val addrH = addrAscent + addressPaint.descent()
+        val tsH = tsAscent + tsPaint.descent()
+
+        // ── Word-wrap address into available width ─────────────────────────────
+        val availableWidth = canvasWidth - marginLeft * 2
+        val addressLines = mutableListOf<String>()
+        if (addressLine != null) {
+            val words = addressLine.split(" ")
+            var current = StringBuilder()
+            for (word in words) {
+                val test = if (current.isEmpty()) word else "$current $word"
+                if (addressPaint.measureText(test) <= availableWidth) {
+                    current = StringBuilder(test)
+                } else {
+                    if (current.isNotEmpty()) addressLines.add(current.toString())
+                    current = StringBuilder(word)
+                }
+            }
+            if (current.isNotEmpty()) addressLines.add(current.toString())
         }
+        val addrLineCount = if (addressLines.isEmpty() && addressLine != null) 1 else addressLines.size
+
+        // ── Calculate bar geometry ────────────────────────────────────────────
+        // barBottom = canvasHeight (bar flush at very bottom of image)
+        // barTop = canvasHeight - barHeight (top edge is higher = NOT at bottom of image)
+        val totalBarHeight = innerPaddingV * 2 + gpsH + lineGap + (addrH * addrLineCount) + lineGap + tsH
+        val barTop = canvasHeight - totalBarHeight
+        val barBottom = canvasHeight
+
+        // ── Draw full-width black bar at bottom of canvas ──────────────────
+        canvas.drawRect(0f, barTop, canvasWidth, barBottom, bgPaint)
+
+        // ── Build baselines from barTop + innerPaddingV going DOWNWARDS ──────
+        var y = barTop + innerPaddingV
+
+        // Line 1: GPS (top of content area)
+        if (gpsLine != null) {
+            canvas.drawText(gpsLine, marginLeft, y + gpsAscent, gpsPaint)
+            y += gpsH + lineGap
+        }
+
+        // Line 2: Address (wrappable, stacked below GPS)
+        if (addrLineCount > 0) {
+            for (i in 0 until addrLineCount) {
+                val lineText = if (addressLines.isEmpty()) addressLine ?: "" else addressLines[i]
+                canvas.drawText(lineText, marginLeft, y + addrAscent, addressPaint)
+                y += addrH
+                if (i < addrLineCount - 1) y += lineGap
+            }
+        }
+
+        // Line 3: Timestamp — anchored at BOTTOM of bar (canvasHeight - marginBottom)
+        val tsBaseline = barBottom - marginBottom
+        canvas.drawText(isoTimestamp, marginLeft, tsBaseline, tsPaint)
 
         return result
     }
@@ -408,7 +461,6 @@ object ImageStorageHelper {
                 } else if (region.isNotBlank()) {
                     region
                 } else {
-                    // Fall back to decimal degrees
                     String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)
                 }
                 "📍 $label"
@@ -416,7 +468,6 @@ object ImageStorageHelper {
                 "📍 ${String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)}"
             }
         } catch (e: Exception) {
-            // Geocoder can fail on flight mode or if service unavailable
             "📍 ${String.format(java.util.Locale.US, "%.4f, %.4f", latitude, longitude)}"
         }
     }

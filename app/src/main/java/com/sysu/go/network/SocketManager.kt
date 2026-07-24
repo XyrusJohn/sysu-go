@@ -55,6 +55,13 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
+    fun removeEventListener(event: String) {
+        eventListeners.remove(event)
+        listOf(mSocketGo, mSocketApp).forEach { socket ->
+            unregisterEventListenerOnSocket(event, null, socket)
+        }
+    }
+
     /**
      * Removes a previously registered listener. Safe to call even if the
      * socket has since disconnected — the event key is cleaned up on unregister.
@@ -84,7 +91,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         Log.d(TAG, "Registered socket listener for event='$event' on ${socket.id()}")
     }
 
-    private fun unregisterEventListenerOnSocket(event: String, listener: (data: Any?) -> Unit, socket: Socket?) {
+    private fun unregisterEventListenerOnSocket(event: String, listener: ((data: Any?) -> Unit)?, socket: Socket?) {
         socket ?: return
         // Socket.IO's off() needs the exact same function reference that was passed to on()
         // Since we wrapped it, we need to emit a no-op registration to remove all listeners for this event
@@ -396,6 +403,24 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
             Log.d(TAG, "Emitted pod_updated for shipment=$shipmentDocId")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to emit pod_updated: ${e.message}")
+        }
+    }
+
+    /**
+     * Emits a generic event to the sysu-go backend socket (mSocketGo).
+     * Used for request/response patterns where the server replies on a given event.
+     * Example: emit("get_driver_assignments", { driverId }) → server emits "driver_assignments" response.
+     */
+    fun emitGo(event: String, json: JSONObject) {
+        if (mSocketGo?.connected() != true) {
+            Log.w(TAG, "emitGo($event): go-socket not connected, skipping emit")
+            return
+        }
+        try {
+            mSocketGo?.emit(event, json)
+            Log.d(TAG, "Emitted $event: $json")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to emit $event: ${e.message}")
         }
     }
 

@@ -54,4 +54,22 @@
     <color name="orange_badge_bg">#FF6D00</color>
     <color name="text_orange">#E65100</color>
 
+    <!-- Frosted glass badge tokens -->
+    <color name="badge_glass_surface">#E6FFFFFF</color>
+    <color name="badge_top_reflection">#40FFFFFF</color>
+    <color name="badge_edge_luminosity">#30FFFFFF</color>
+
+    <!-- Status-specific frosted tints — state color at 12% opacity over glass surface -->
+    <color name="badge_in_transit_bg">#1A4CAF50</color>
+    <color name="badge_assigned_bg">#1AFF9800</color>
+    <color name="badge_in_queue_bg">#1A1565C0</color>
+    <color name="badge_not_in_queue_bg">#1A999999</color>
+
+    <!-- Status text colors (enterprise-grade contrast on frosted glass) -->
+    <color name="status_in_transit">#2E7D32</color>
+    <color name="status_transit_green">#1B5E20</color>
+    <color name="status_assigned">#E65100</color>
+    <color name="status_in_queue">#0D47A1</color>
+    <color name="status_not_in_queue">#757575</color>
+
 </resources>

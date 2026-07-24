@@ -22,7 +22,9 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityProfileBinding
 import com.sysu.go.firebase.FirebaseAuthManager
+import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.SessionManager
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -63,6 +65,7 @@ class ProfileActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         loadDriverInfo()
+        loadActiveShipments()
     }
 
     private fun startCircleAnimation() {
@@ -232,6 +235,92 @@ class ProfileActivity : AppCompatActivity() {
         // Logout button
         binding.btnLogout.setOnClickListener {
             logout()
+        }
+
+        // Load active shipment count + driver status
+        loadActiveShipments()
+    }
+
+    private fun updateStatusBadge(status: String, backgroundRes: Int, textColorRes: Int) {
+        binding.tvStatusBadgeText.text = status
+        binding.statusBadge.setBackgroundResource(backgroundRes)
+        binding.tvStatusBadgeText.setTextColor(ContextCompat.getColor(this, textColorRes))
+    }
+
+    private fun loadActiveShipments() {
+        val session = SessionManager(this)
+        val uid = session.getDriverId() ?: return
+
+        // queueDocId (queue document ID) is used as driverId in sap_assignments
+        // sessionDriverId (Firebase UID) is used as driverId in the queue collection
+        val queueDocIdOrUid = session.getCurrentQueueDocId() ?: uid
+
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Queue check uses Firebase UID (driverId field in queue collection)
+                val queueSnap = db.collection("queue")
+                    .whereEqualTo("driverId", uid)
+                    .get()
+                    .await()
+
+                val inQueue = queueSnap.documents.any {
+                    val s = it.getString("status")
+                    s != null && s != "left"
+                }
+
+                // sap_assignments uses queue doc ID as driverId (not Firebase UID)
+                val snaps = db.collection("sap_assignments")
+                    .whereEqualTo("driverId", queueDocIdOrUid)
+                    .get()
+                    .await()
+
+                val list = snaps.documents.mapNotNull { snap ->
+                    snap.data as? Map<String, Any?>
+                }
+
+                val count = list.size
+                val hasInTransit = list.any {
+                    val t = it["tripStatus"] as? String
+                    t == "in_transit" || t == "returning_to_base"
+                }
+                val hasAssigned = list.any {
+                    (it["guardVerified"] as? Boolean) == true &&
+                        (it["driverConfirmed"] as? Boolean) == true
+                }
+
+                when {
+                    !inQueue && count == 0 -> {
+                        updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
+                        binding.tvAssignedCount.visibility = View.GONE
+                    }
+                    hasInTransit -> {
+                        updateStatusBadge("In transit", R.drawable.bg_badge_frosted_transit, R.color.status_transit_green)
+                        binding.tvAssignedCount.visibility = View.VISIBLE
+                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
+                    }
+                    hasAssigned -> {
+                        updateStatusBadge("Assigned", R.drawable.bg_badge_frosted_assigned, R.color.status_assigned)
+                        binding.tvAssignedCount.visibility = View.VISIBLE
+                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
+                    }
+                    count > 0 -> {
+                        updateStatusBadge("In queue", R.drawable.bg_badge_frosted_queue, R.color.status_in_queue)
+                        binding.tvAssignedCount.visibility = View.VISIBLE
+                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
+                    }
+                    inQueue -> {
+                        updateStatusBadge("In queue", R.drawable.bg_badge_frosted_queue, R.color.status_in_queue)
+                        binding.tvAssignedCount.visibility = View.GONE
+                    }
+                    else -> {
+                        updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
+                        binding.tvAssignedCount.visibility = View.GONE
+                    }
+                }
+            } catch (e: Exception) {
+                updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
+                binding.tvAssignedCount.visibility = View.GONE
+            }
         }
     }
 

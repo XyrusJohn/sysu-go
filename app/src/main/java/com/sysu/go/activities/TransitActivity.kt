@@ -304,7 +304,17 @@ class TransitActivity : AppCompatActivity() {
                         finish()
                     }
                 }
-                else -> startTrip()              // not started → start trip
+                else -> {
+                    // This branch is unreachable in normal operation:
+                    // TransitActivity is only opened when a trip session exists (session restore path
+                    // has savedDocId != null, which redirects to ASSIGNMENT_ACTIVITY).
+                    // The defensive redirect ensures no broken state if ever reached.
+                    val intent = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                    startActivity(intent)
+                    finish()
+                }
             }
         }
     }
@@ -414,6 +424,17 @@ class TransitActivity : AppCompatActivity() {
     private fun performEndTrip() {
         if (currentSapDocId.isBlank()) {
             Toast.makeText(this, "No active trip to end.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Industry-standard: block trip completion if any POD is incomplete.
+        // Defense-in-depth — UI layer already protects this, but enforce at the
+        // business logic level so bypassing the UI cannot skip the requirement.
+        if (!isPodCompleteForAll) {
+            binding.btnStartTrip.isEnabled = true
+            binding.btnStartTrip.text = "BACK TO HOME"
+            Toast.makeText(this, "Complete all OBD items first before ending trip.", Toast.LENGTH_LONG).show()
+            Log.w(TAG, "[performEndTrip] BLOCKED — not all PODs are complete. isPodCompleteForAll=$isPodCompleteForAll")
             return
         }
 

@@ -832,8 +832,14 @@ class MyTripActivity : AppCompatActivity() {
 
         setupRecyclerView()
         setupUI()
-        startCircleAnimation()
-        startPulseRings()
+        // Defer animations so the first frame completes before GPU work starts.
+        // This prevents DequeueBuffer timeouts during activity transition.
+        binding.root.post {
+            if (!isFinishing) {
+                startCircleAnimation()
+                startPulseRings()
+            }
+        }
     }
 
     /** Prevents auto-navigation when TransitActivity has called BACK TO MY TRIP. */
@@ -861,11 +867,13 @@ class MyTripActivity : AppCompatActivity() {
         SocketManager.addEventListener("sap_updated", socketSapUpdatedListener)
         SocketManager.addEventListener("pod_updated", socketPodUpdatedListener)
 
-        // ── Load initial data ─────────────────────────────────────────────────
-        // Falls back to Firestore only if the server hasn't emitted sap_updated yet
-        // (e.g., during development before backend MySQL migration is complete).
-        // Once MySQL migration is done, server emits sap_updated immediately on connect.
-        loadAssignments()
+        // ── Load initial data (deferred by 150ms) ────────────────────────────
+        // Firestore listener triggers handleAssignmentList which can auto-navigate.
+        // Deferred start prevents GPU overload during first-frame render, avoiding
+        // DequeueBuffer timeouts that can cascade into Watchdog process kills.
+        binding.root.post {
+            if (!isFinishing) loadAssignments()
+        }
     }
 
     override fun onPause() {
@@ -1057,11 +1065,11 @@ class MyTripActivity : AppCompatActivity() {
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
         val isReturningFromTransit = returnedFromTransitDocId != null
 
-        // Suppress auto-navigation only when the user explicitly opened MyTripActivity
-        // (no specific shipment_doc_id) AND is NOT returning from TransitActivity.
-        // In that case, show the full card list so the user can browse.
-        // Returning from TransitActivity → still auto-navigate to that shipment (continuity).
-        val suppressAutoNav = intentDocId == null && !isReturningFromTransit
+        // Suppress auto-navigation when the user explicitly opened MyTripActivity
+        // (no shipment_doc_id Intent extra, not returning from TransitActivity).
+        // Let them browse the card list and tap OBD Items themselves.
+        // Only auto-navigate if launched with a specific shipment_doc_id (continuity).
+        val suppressAutoNav = intentDocId == null || isReturningFromTransit
 
         // If launched with a specific shipment_doc_id — load that shipment card
         // without auto-navigating. This handles both fresh Intent launches
@@ -1109,7 +1117,12 @@ class MyTripActivity : AppCompatActivity() {
             it.tripStatus == "in_transit"
         }
 
-        shipmentAdapter.hasActiveTrip = false
+        // Lock all non-in-transit cards if ANY shipment is in_transit.
+        // Derived from FULL list (not showable) so we catch in_transit even when
+        // it was filtered out of showable due to suppressAutoNav.
+        val hasOtherActiveTrip = list.any { it.tripStatus == "in_transit" }
+
+        shipmentAdapter.hasActiveTrip = hasOtherActiveTrip
         shipmentAdapter.activeShipmentId = null
         shipmentAdapter.submitList(showable.toList())
 
@@ -1187,6 +1200,34 @@ class MyTripActivity : AppCompatActivity() {
                 // (TransitActivity handles viewing completed trip details in read mode.)
                 loadAssignments()
             }
+            "RETURNING_TO_BASE" -> {
+                // All PODs done — initiate return-to-base flow.
+                // Mark shipment as returning_to_base in Firestore, then open TransitActivity
+                // so the driver can tap "ARRIVED AT WAREHOUSE" → END TRIP.
+                lifecycleScope.launch {
+                    try {
+                        // Set active trip session — required for TransitActivity routing
+                        sessionManager.saveCurrentSapDocId(assignment.docId)
+                        sessionManager.saveActiveSapDocId(assignment.docId)
+                        sessionManager.setTripActive(true)
+
+                        val updates = mapOf(
+                            "tripStatus" to "returning_to_base",
+                            "returnedToBaseAt" to Timestamp.now()
+                        )
+                        db.collection("sap_assignments").document(assignment.docId)
+                            .update(updates)
+                            .await()
+
+                        // Open TransitActivity — it will sync returning_to_base state
+                        // and show "ARRIVED AT WAREHOUSE" button
+                        launchDeliveryActivity(assignment.docId)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "RETURNING_TO_BASE transition error: ${e.message}")
+                        Toast.makeText(this@MyTripActivity, "Failed to start return. Try again.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 
@@ -1258,6 +1299,17 @@ class MyTripActivity : AppCompatActivity() {
      * Updates Firestore, clears session for this shipment, and reloads the card list.
      */
     private fun endSingleShipment(docId: String) {
+        // Industry-standard: block completion if any POD still pending.
+        // Defense-in-depth — the UI button guard (isPodComplete) already protects
+        // this path, but enforce at business-logic level in case of direct calls.
+        val shipment = shipmentAdapter.currentList.find { it.docId == docId }
+        val isPodComplete = shipment?.lineItems?.all { (it["isPodCompleted"] as? Boolean) == true } == true
+        if (!isPodComplete) {
+            Toast.makeText(this, "Complete all POD items before ending shipment.", Toast.LENGTH_LONG).show()
+            Log.w(TAG, "[endSingleShipment] BLOCKED — PODs incomplete for $docId")
+            return
+        }
+
         // Set ending state on the card — shows "ENDING..." disabled button
         shipmentAdapter.setEndingDocId(docId)
         shipmentAdapter.notifyDataSetChanged()
