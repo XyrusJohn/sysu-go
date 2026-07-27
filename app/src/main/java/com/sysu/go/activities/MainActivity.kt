@@ -40,6 +40,7 @@ import com.sysu.go.utils.TrackingStateMonitor
 import com.sysu.go.model.Assignment
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import com.google.firebase.Timestamp
 import java.util.Locale
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
@@ -1551,6 +1552,52 @@ class MainActivity : AppCompatActivity() {
                     activeShipmentId = inTransit?.docId,
                     onTripActionClicked = { assignment, action ->
                         when (action) {
+                            "START_LOADING" -> {
+                                lifecycleScope.launch {
+                                    try {
+                                        db.collection("sap_assignments").document(assignment.docId)
+                                            .update(
+                                                mapOf(
+                                                    "tripStatus" to "loading",
+                                                    "loadingStartedAt" to Timestamp.now()
+                                                )
+                                            )
+                                            .await()
+                                        fetchAndSetupMyTripCards()
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "START_LOADING error: ${e.message}")
+                                    }
+                                }
+                            }
+                            "FULLY_LOADED" -> {
+                                lifecycleScope.launch {
+                                    try {
+                                        db.collection("sap_assignments").document(assignment.docId)
+                                            .update(
+                                                mapOf(
+                                                    "tripStatus" to "fully_loaded",
+                                                    "fullyLoadedAt" to Timestamp.now()
+                                                )
+                                            )
+                                            .await()
+                                        val driverId = SessionManager(this).getDriverId() ?: ""
+                                        if (driverId.isNotBlank()) {
+                                            db.collection("drivers").document(driverId)
+                                                .update("isFull", true)
+                                                .await()
+                                        }
+                                        fetchAndSetupMyTripCards()
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                                    }
+                                }
+                            }
+                            "VERIFY_GUARD" -> {
+                                val intent = Intent(this, MyTripActivity::class.java).apply {
+                                    putExtra("shipment_doc_id", assignment.docId)
+                                }
+                                startActivity(intent)
+                            }
                             "OPEN_ACTIVE_TRIP" -> {
                                 val intent = Intent(this, MyTripActivity::class.java)
                                 intent.putExtra("shipment_doc_id", assignment.docId)
