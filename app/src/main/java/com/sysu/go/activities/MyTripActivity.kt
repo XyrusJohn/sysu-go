@@ -1462,6 +1462,18 @@ class MyTripActivity : AppCompatActivity() {
                 // Clear unloadStatus in Firestore — returns to PENDING state
                 val obd = item["obdNumber"] as? String ?: return@newInstance
                 writeUnloadStatus(docId, obd, null)
+                // Optimistic UI update — refresh sheet to show PENDING immediately
+                val s = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
+                    as? ObdItemsBottomSheet)
+                s?.let { sheet ->
+                    @Suppress("UNCHECKED_CAST")
+                    val current = sheet.lineItems.toMutableList()
+                    val idx = current.indexOfFirst { (it["obdNumber"] as? String) == obd }
+                    if (idx != -1) {
+                        current[idx] = current[idx].toMutableMap().apply { remove("unloadStatus") }
+                        sheet.refreshWith(current)
+                    }
+                }
             }
         ).also { sheet ->
             // SAFETY NET: if socket pod_updated never fires (race, server issue, app kill),
