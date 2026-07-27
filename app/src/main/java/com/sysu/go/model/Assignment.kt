@@ -82,6 +82,18 @@ data class Assignment(
     val isCompleted: Boolean get() = tripStatus == "completed"
     /** True if trip is returning to base (all PODs done, heading to warehouse) */
     val isReturningToBase: Boolean get() = tripStatus == "returning_to_base"
+    /** True if this shipment's delivery is done but trip hasn't closed yet.
+     *  Driver is free to start another shipment; this field only marks delivery completion. */
+    val isDelivered: Boolean get() = tripStatus == "delivered"
+
+    /** True if driver is actively loading cargo at the loading bay */
+    val isLoading: Boolean get() = tripStatus == "loading"
+
+    /** True if truck is physically fully loaded, awaiting guard verification */
+    val isFullyLoaded: Boolean get() = tripStatus == "fully_loaded"
+
+    /** True if guard has verified the loaded cargo — ready to start the trip */
+    val isLoaded: Boolean get() = tripStatus == "loaded"
 
     /**
      * Returns true only when ALL line items have isPodCompleted == true.
