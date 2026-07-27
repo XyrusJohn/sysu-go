@@ -226,6 +226,67 @@ class MyTripTabAdapter(
 
                     binding.btnShowVerification.visibility = View.GONE
                 }
+                            "loading" -> {
+                binding.tvTripStatusBadge.text = "LOADING..."
+                binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                binding.tvTripStatusBadge.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.white)
+                )
+
+                binding.btnTripAction.visibility = View.VISIBLE
+                binding.btnTripAction.text = "FULLY LOADED"
+                binding.btnTripAction.isEnabled = true
+                binding.btnTripAction.alpha = 1.0f
+                binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
+
+                binding.btnShowVerification.visibility = View.GONE
+            }
+            "fully_loaded" -> {
+                if (assignment.guardVerified) {
+                    // Guard already verified via external trigger; treat as loaded
+                    binding.tvTripStatusBadge.text = "LOADED"
+                    binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_green)
+                    binding.tvTripStatusBadge.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
+                    binding.btnTripAction.visibility = View.VISIBLE
+                    binding.btnTripAction.text = "START TRIP"
+                    binding.btnTripAction.isEnabled = !hasActiveTrip
+                    binding.btnTripAction.alpha = if (hasActiveTrip) 0.4f else 1.0f
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+                } else {
+                    binding.tvTripStatusBadge.text = "FULLY LOADED"
+                    binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_blue)
+                    binding.tvTripStatusBadge.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
+                    binding.btnTripAction.visibility = View.VISIBLE
+                    binding.btnTripAction.text = "VERIFY WITH GUARD"
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1.0f
+                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_amber)
+                }
+
+                binding.btnShowVerification.visibility = View.GONE
+            }
+            "loaded" -> {
+                binding.tvTripStatusBadge.text = "LOADED"
+                binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_green)
+                binding.tvTripStatusBadge.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.white)
+                )
+
+                binding.btnTripAction.visibility = View.VISIBLE
+                binding.btnTripAction.text = "START TRIP"
+                binding.btnTripAction.isEnabled = !hasActiveTrip
+                binding.btnTripAction.alpha = if (hasActiveTrip) 0.4f else 1.0f
+                binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+
+                binding.btnShowVerification.visibility = View.VISIBLE
+                binding.btnShowVerification.setOnClickListener {
+                    onShowVerification(assignment)
+                }
+            }
                 else -> {
                     // pending / confirmed
                     if (assignment.guardVerified && assignment.driverConfirmed) {
@@ -242,7 +303,7 @@ class MyTripTabAdapter(
                         )
                     }
 
-                    binding.btnTripAction.text = "START TRIP"
+                    binding.btnTripAction.text = "START LOADING"
 
                     if (hasActiveTrip) {
                         // Lock: another trip is already running
@@ -253,6 +314,7 @@ class MyTripTabAdapter(
                         binding.btnTripAction.alpha = 1.0f
                     }
                     binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+                    binding.btnTripAction.visibility = View.VISIBLE
 
                     // Show verification button if guard verified (to re-show saved verification)
                     binding.btnShowVerification.visibility = if (assignment.guardVerified) {
@@ -268,18 +330,26 @@ class MyTripTabAdapter(
 
             binding.btnTripAction.setOnClickListener {
                 val action = when (binding.btnTripAction.text) {
-                    "END TRIP", "ENDING...", "END SHIPMENT" -> "END_TRIP"
+                    "END TRIP", "ENDING..." -> "END_TRIP"
+                    "END SHIPMENT" -> "END_SHIPMENT"
                     "START TRIP" -> "START_TRIP"
-                    "VIEW SUMMARY" -> "VIEW_SUMMARY"
                     "START RETURNING TO BASE" -> "RETURNING_TO_BASE"
-                    else -> "OPEN_ACTIVE_TRIP"  // "OPEN ACTIVE TRIP 🔒"
+                    "START LOADING" -> "START_LOADING"
+                    "FULLY LOADED" -> "FULLY_LOADED"
+                    "VERIFY WITH GUARD" -> "VERIFY_GUARD"
+                    "VIEW SUMMARY" -> "VIEW_SUMMARY"
+                    "OPEN ACTIVE TRIP" -> "OPEN_ACTIVE_TRIP"
+                    else -> "OPEN_ACTIVE_TRIP"
                 }
                 onTripActionClicked(assignment, action)
             }
 
-            // OBD row: unlocked only when trip is ON TRANSIT or COMPLETED.
-            // CONFIRMED (pre-trip): OBD is locked — driver can't POD before trip starts.
-            val isObdLocked = assignment.tripStatus != "in_transit" && assignment.tripStatus != "completed"
+            // OBD row: unlocked only when trip is ON TRANSIT, COMPLETED, or LOADED.
+            // - CONFIRMED (pre-trip): OBD is locked — driver can't POD before trip starts.
+            // - RETURNING_TO_BASE: GPS still running, but POD work is done — lock for safety.
+            val isObdLocked = assignment.tripStatus != "in_transit" &&
+                assignment.tripStatus != "completed" &&
+                assignment.tripStatus != "loaded"
             if (isObdLocked) {
                 binding.ivObdChevron.setImageResource(R.drawable.ic_lock)
                 binding.rowObd.alpha = 0.5f
