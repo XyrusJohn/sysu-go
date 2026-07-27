@@ -232,21 +232,21 @@ class AssignmentActivity : AppCompatActivity() {
                         val idx = assignments.indexOfFirst { it.docId == assignment.docId }
                         if (idx >= 0) {
                             val currentTripStatus = assignments[idx].tripStatus
-                            if (currentTripStatus == \"fully_loaded\") {
-                                // Guard verified a fully-loaded shipment → auto-promote to \"loaded\"
+                            if (currentTripStatus == "fully_loaded") {
+                                // Guard verified a fully-loaded shipment → auto-promote to "loaded"
                                 assignments = assignments.toMutableList().apply {
                                     set(idx, assignments[idx].copy(
-                                        tripStatus = \"loaded\",
+                                        tripStatus = "loaded",
                                         guardVerified = true,
                                         guardFirstName = guard.firstName,
                                         guardLastName = guard.lastName
                                     ))
                                 }
-                                // Write \"loaded\" to Firestore alongside guard verification
-                                db.collection(\"sap_assignments\").document(assignment.docId)
-                                    .update(\"tripStatus\", \"loaded\")
+                                // Write "loaded" to Firestore alongside guard verification
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update("tripStatus", "loaded")
                                     .addOnFailureListener { e ->
-                                        Log.e(TAG, \"Auto-set loaded failed: ${e.message}\")
+                                        Log.e(TAG, "Auto-set loaded failed: ${e.message}")
                                     }
                             } else {
                                 assignments = assignments.toMutableList().apply {

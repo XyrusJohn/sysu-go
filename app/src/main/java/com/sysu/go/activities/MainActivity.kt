@@ -1580,7 +1580,7 @@ class MainActivity : AppCompatActivity() {
                                                 )
                                             )
                                             .await()
-                                        val driverId = SessionManager(this).getDriverId() ?: ""
+                                        val driverId = SessionManager(this@MainActivity).getDriverId() ?: ""
                                         if (driverId.isNotBlank()) {
                                             db.collection("drivers").document(driverId)
                                                 .update("isFull", true)
