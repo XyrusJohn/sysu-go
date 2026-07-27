@@ -996,18 +996,18 @@ class MyTripActivity : AppCompatActivity() {
         if (empty) { onReady(assignments); return }
 
         val mutableList = assignments.toMutableList()
-        var pending = assignments.count { it.queueId.isNotBlank() }
+        var pending = assignments.size
 
-        // No assignments have a queueId — skip the queue doc fetch entirely
         if (pending == 0) { onReady(assignments); return }
 
         for (idx in assignments.indices) {
             val assignment = assignments[idx]
-            if (assignment.queueId.isBlank()) continue
-            val queueId = assignment.queueId
-            db.collection("queue").document(queueId).get()
-                .addOnSuccessListener { queueDoc ->
-                    if (queueDoc.exists()) {
+            db.collection("queue")
+                .whereEqualTo("assignedShipment", assignment.shipmentNumber)
+                .get()
+                .addOnSuccessListener { queueDocs ->
+                    if (!queueDocs.isEmpty) {
+                        val queueDoc = queueDocs.documents[0]
                         mutableList[idx] = assignment.copy(
                             truckType = queueDoc.getString("truckType") ?: assignment.truckType,
                             helper = queueDoc.getString("helper") ?: assignment.helper

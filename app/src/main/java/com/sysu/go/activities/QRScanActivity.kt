@@ -21,6 +21,10 @@ import com.sysu.go.BuildConfig
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityQrScanBinding
 import com.sysu.go.network.QRApiService
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -146,23 +150,23 @@ class QRScanActivity : AppCompatActivity() {
             binding.progressBar.visibility = android.widget.ProgressBar.VISIBLE
         }
 
-        Thread {
+        lifecycleScope.launch(Dispatchers.IO) {
             val result = QRApiService.verifyToken(token)
             when (result) {
                 is QRApiService.Result.Success -> {
                     currentToken = token
-                    runOnUiThread {
+                    withContext(Dispatchers.Main) {
                         binding.tvStatus.text = "Token verified! Loading form…"
                         // Navigate directly to TripRegistrationActivity with the token
                         // Skip UpdateInfoActivity to make it a one-step process
-                        val intent = Intent(this, TripRegistrationActivity::class.java)
+                        val intent = Intent(this@QRScanActivity, TripRegistrationActivity::class.java)
                         intent.putExtra("token", token)
                         startActivity(intent)
                         finish()
                     }
                 }
                 is QRApiService.Result.Error -> {
-                    runOnUiThread {
+                    withContext(Dispatchers.Main) {
                         binding.progressBar.visibility = android.widget.ProgressBar.GONE
                         val msg = when {
                             result.code == 410 -> getString(R.string.token_expired)
@@ -173,7 +177,7 @@ class QRScanActivity : AppCompatActivity() {
                     }
                 }
             }
-        }.start()
+        }
     }
 
     private fun showErrorAndReset(message: String) {

@@ -1544,7 +1544,9 @@ class MainActivity : AppCompatActivity() {
                 for (doc in snaps.documents) {
                     doc.toObject(Assignment::class.java)?.let { assignments.add(it) }
                 }
-                val inTransit = assignments.find { it.tripStatus == "in_transit" }
+                // Enrich with driver + queue data, then render
+                enrichMyTripAssignments(driverId, assignments) { enriched ->
+                val inTransit = enriched.find { it.tripStatus == "in_transit" }
                 val hasActiveTrip = inTransit != null
 
                 val shipmentAdapter = com.sysu.go.adapter.MyTripTabAdapter(
@@ -1625,7 +1627,7 @@ class MainActivity : AppCompatActivity() {
                 tabRv.adapter = shipmentAdapter
 
                 // Update aggregate badge: show green "All Confirmed" if all trips ready
-                val allConfirmed = assignments.isNotEmpty() && assignments.all { it.guardVerified && it.driverConfirmed }
+                val allConfirmed = enriched.isNotEmpty() && enriched.all { it.guardVerified && it.driverConfirmed }
                 if (allConfirmed) {
                     aggregateBadgeContainer?.visibility = View.VISIBLE
                     aggregateBadgeContainer?.setBackgroundResource(R.drawable.bg_status_pill_green)
@@ -1634,8 +1636,8 @@ class MainActivity : AppCompatActivity() {
                     // Red banner badge: "TRIPS READY"
                     badgeVerified?.visibility = View.VISIBLE
                     tvBadgeText?.text = getString(R.string.my_trip_badge_trips_ready)
-                } else if (assignments.isNotEmpty()) {
-                    val pending = assignments.count { !it.guardVerified || !it.driverConfirmed }
+                } else if (enriched.isNotEmpty()) {
+                    val pending = enriched.count { !it.guardVerified || !it.driverConfirmed }
                     aggregateBadgeContainer?.visibility = View.VISIBLE
                     aggregateBadgeContainer?.setBackgroundResource(R.drawable.bg_status_pill_amber)
                     tvAggregateBadge?.text = "$pending pending"
@@ -1643,12 +1645,64 @@ class MainActivity : AppCompatActivity() {
                     badgeVerified?.visibility = View.GONE
                 }
 
-                emptyState.visibility = if (assignments.isEmpty()) View.VISIBLE else View.GONE
-                tabRv.visibility = if (assignments.isEmpty()) View.GONE else View.VISIBLE
+                emptyState.visibility = if (enriched.isEmpty()) View.VISIBLE else View.GONE
+                tabRv.visibility = if (enriched.isEmpty()) View.GONE else View.VISIBLE
+                }
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "fetchAndSetupMyTripCards: ${e.message}")
             }
+    }
+
+    /**
+     * First pass fetches driver data (requirements, truckingCompany).
+     * Second pass fetches queue docs (truckType, helper) via assignedShipment.
+     * Mirrors MyTripActivity.fetchDriverData + enrichWithQueueData pattern.
+     */
+    private fun enrichMyTripAssignments(
+        driverId: String,
+        assignments: List<Assignment>,
+        onReady: (List<Assignment>) -> Unit
+    ) {
+        if (assignments.isEmpty()) { onReady(assignments); return }
+
+        // First pass: get driver requirements + trucking company
+        db.collection("drivers").document(driverId).get()
+            .addOnSuccessListener { driverDoc ->
+                val requirements = driverDoc.get("requirements") as? Map<String, Boolean> ?: emptyMap()
+                val truckCompany = driverDoc.getString("truckingCompany") ?: ""
+
+                val withDriver = assignments.map { a ->
+                    a.copy(requirements = requirements, truckCompany = truckCompany)
+                }
+
+                // Second pass: get queue documents for truckType and helper
+                val mutableList = withDriver.toMutableList()
+                var pending = withDriver.size
+
+                for (idx in withDriver.indices) {
+                    val a = withDriver[idx]
+                    db.collection("queue")
+                        .whereEqualTo("assignedShipment", a.shipmentNumber)
+                        .get()
+                        .addOnSuccessListener { queueDocs ->
+                            if (!queueDocs.isEmpty) {
+                                val q = queueDocs.documents[0]
+                                mutableList[idx] = a.copy(
+                                    truckType = q.getString("truckType") ?: a.truckType,
+                                    helper = q.getString("helper") ?: a.helper
+                                )
+                            }
+                            pending--;
+                            if (pending <= 0) onReady(mutableList.toList())
+                        }
+                        .addOnFailureListener {
+                            pending--;
+                            if (pending <= 0) onReady(mutableList.toList())
+                        }
+                }
+            }
+            .addOnFailureListener { onReady(assignments) }
     }
 
     /**
