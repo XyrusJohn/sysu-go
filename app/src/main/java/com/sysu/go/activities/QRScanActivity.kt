@@ -2,6 +2,7 @@ package com.sysu.go.activities
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,6 +10,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -34,6 +37,9 @@ class QRScanActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private var hasScanned = false
     private var currentToken: String? = null
+    private var camera: Camera? = null
+    private var torchEnabled = false
+    private var isZoomingFromSlider = false
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -62,7 +68,72 @@ class QRScanActivity : AppCompatActivity() {
 
         binding.btnCancel.setOnClickListener { finish() }
 
+        // Zoom controls
+        setupZoomControls()
+
+        // Torch toggle
+        binding.btnTorch.setOnClickListener { toggleTorch() }
+
         cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+    }
+
+    private fun setupZoomControls() {
+        // Step zoom buttons
+        binding.btnZoomIn.setOnClickListener {
+            camera?.let { cam ->
+                val current = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+                val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 4f
+                val step = 0.3f
+                val newZoom = (current + step).coerceAtMost(maxZoom)
+                cam.cameraControl.setZoomRatio(newZoom)
+                syncSliderToZoom(newZoom, maxZoom)
+            }
+        }
+
+        binding.btnZoomOut.setOnClickListener {
+            camera?.let { cam ->
+                val current = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+                val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+                val step = 0.3f
+                val newZoom = (current - step).coerceAtLeast(minZoom)
+                cam.cameraControl.setZoomRatio(newZoom)
+                syncSliderToZoom(newZoom, cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 4f)
+            }
+        }
+
+        // Slider
+        binding.zoomSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser || isZoomingFromSlider) return
+                isZoomingFromSlider = true
+                camera?.let { cam ->
+                    val minZoom = cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+                    val maxZoom = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 4f
+                    val ratio = minZoom + (maxZoom - minZoom) * (progress / 100f)
+                    cam.cameraControl.setZoomRatio(ratio)
+                }
+                isZoomingFromSlider = false
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+    }
+
+    private fun syncSliderToZoom(zoomRatio: Float, maxZoom: Float) {
+        val minZoom = camera?.cameraInfo?.zoomState?.value?.minZoomRatio ?: 1f
+        val percent = ((zoomRatio - minZoom) / (maxZoom - minZoom) * 100f).toInt().coerceIn(0, 100)
+        binding.zoomSlider.progress = percent
+    }
+
+    private fun toggleTorch() {
+        camera?.let { cam ->
+            torchEnabled = !torchEnabled
+            cam.cameraControl.enableTorch(torchEnabled)
+            binding.btnTorch.setImageResource(
+                if (torchEnabled) R.drawable.ic_torch_on else R.drawable.ic_torch_off
+            )
+        }
     }
 
     private fun startCamera() {
@@ -92,9 +163,17 @@ class QRScanActivity : AppCompatActivity() {
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                camera = cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, imageAnalysis
                 )
+
+                // Initialize slider to current zoom range
+                camera?.cameraInfo?.zoomState?.let { zoomState ->
+                    val state = zoomState.value
+                    if (state != null) {
+                        syncSliderToZoom(state.zoomRatio, state.maxZoomRatio)
+                    }
+                }
             } catch (e: Exception) {
                 runOnUiThread {
                     Toast.makeText(this, "Camera error: ${e.message}", Toast.LENGTH_SHORT).show()

@@ -210,4 +210,8 @@
     <string name="pod_delivered_label">DELIVERED</string>
     <string name="pod_delivered_with_rejection_label">DEL. W/ REJECTION</string>
     <string name="pod_pending_label">PENDING</string>
+
+    <!-- Return to Base Panel -->
+    <string name="return_panel_all_delivered">All deliveries complete — ready to return to base.</string>
+    <string name="btn_start_returning_to_base">START RETURNING TO BASE</string>
 </resources>
