@@ -228,16 +228,34 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Guard verification saved for ${assignment.docId}")
-                        // Optimistically update local list so the card instantly shows "CONFIRM SHIPMENT"
-                        // instead of waiting for the next Firestore snapshot to fire.
+                        // Optimistically update local list so the card instantly shows the new state
                         val idx = assignments.indexOfFirst { it.docId == assignment.docId }
                         if (idx >= 0) {
-                            assignments = assignments.toMutableList().apply {
-                                set(idx, assignments[idx].copy(
-                                    guardVerified = true,
-                                    guardFirstName = guard.firstName,
-                                    guardLastName = guard.lastName
-                                ))
+                            val currentTripStatus = assignments[idx].tripStatus
+                            if (currentTripStatus == \"fully_loaded\") {
+                                // Guard verified a fully-loaded shipment → auto-promote to \"loaded\"
+                                assignments = assignments.toMutableList().apply {
+                                    set(idx, assignments[idx].copy(
+                                        tripStatus = \"loaded\",
+                                        guardVerified = true,
+                                        guardFirstName = guard.firstName,
+                                        guardLastName = guard.lastName
+                                    ))
+                                }
+                                // Write \"loaded\" to Firestore alongside guard verification
+                                db.collection(\"sap_assignments\").document(assignment.docId)
+                                    .update(\"tripStatus\", \"loaded\")
+                                    .addOnFailureListener { e ->
+                                        Log.e(TAG, \"Auto-set loaded failed: ${e.message}\")
+                                    }
+                            } else {
+                                assignments = assignments.toMutableList().apply {
+                                    set(idx, assignments[idx].copy(
+                                        guardVerified = true,
+                                        guardFirstName = guard.firstName,
+                                        guardLastName = guard.lastName
+                                    ))
+                                }
                             }
                             submitToAdapter(assignments)
                             updateAggregateBadge(assignments)
