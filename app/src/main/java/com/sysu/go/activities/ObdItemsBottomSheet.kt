@@ -413,8 +413,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
 
                     if (isUnloading) {
-                        // ── UNLOADING: CAPTURE button (ORANGE pill) ──
-                        Log.d(TAG, "configureStatusPill: UNLOADING branch for obd=${item["obdNumber"]} — setting CAPTURE button")
+                        // ── UNLOADING: CAPTURE button (ORANGE pill) + CANCEL button (RED outline) ──
+                        Log.d(TAG, "configureStatusPill: UNLOADING branch for obd=${item["obdNumber"]} — setting CAPTURE + CANCEL")
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "CAPTURE"
                         tvUnloadAction?.alpha = 1f
@@ -435,9 +435,22 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                                 t.printStackTrace()
                             }
                         }
+
+                        // CANCEL UNLOAD — returns to PENDING state
+                        val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
+                        val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
+                        tvCancelUnload?.visibility = View.VISIBLE
+                        tvCancelUnload?.setOnClickListener {
+                            val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                            if (clickedItem != null) {
+                                onUnloadCancel?.invoke(clickedItem, shipmentDocId)
+                            }
+                        }
                     } else {
-                        // ── PENDING: show UNLOAD button only (amber pill) ──
+                        // ── PENDING: show UNLOAD button only (amber pill), hide CANCEL ──
                         Log.d(TAG, "configureStatusPill: PENDING branch for obd=${item["obdNumber"]}")
+                        val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
+                        rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)?.visibility = View.GONE
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "UNLOAD"
                         tvUnloadAction?.alpha = 1f
@@ -486,6 +499,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 // Show RETAKE in the tvUnloadAction slot (same position as UNLOAD/CAPTURE)
                 val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
                 val tvRetake = rowCardView?.findViewById<TextView>(R.id.tvUnloadAction)
+                val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
+                tvCancelUnload?.visibility = View.GONE
                 tvRetake?.visibility = View.VISIBLE
                 tvRetake?.text = "RETAKE"
                 tvRetake?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)

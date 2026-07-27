@@ -154,5 +154,24 @@
             tools:visibility="visible"
             android:indeterminateTint="@color/sysu_red" />
 
+        <!-- CANCEL UNLOAD button — shown alongside CAPTURE during UNLOADING.
+             Tapping clears unloadStatus and returns to PENDING.
+             Default gone; all uppercase for visual weight matching CAPTURE. -->
+        <TextView
+            android:id="@+id/tvCancelUnload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:background="@drawable/bg_cancel_unload_pill"
+            android:textColor="@color/sysu_red"
+            android:textSize="@dimen/text_size_caption"
+            android:textStyle="bold"
+            android:text="CANCEL"
+            android:visibility="gone"
+            android:clickable="true"
+            android:focusable="true" />
+
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>
