@@ -1195,6 +1195,60 @@ class MyTripActivity : AppCompatActivity() {
                     .setNegativeButton(R.string.cancel, null)
                     .show()
             }
+            "START_LOADING" -> {
+                lifecycleScope.launch {
+                    try {
+                        db.collection("sap_assignments").document(assignment.docId)
+                            .update(
+                                mapOf(
+                                    "tripStatus" to "loading",
+                                    "loadingStartedAt" to Timestamp.now()
+                                )
+                            )
+                            .await()
+                        Log.d(TAG, "START_LOADING: ${assignment.docId}")
+                        loadAssignments()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "START_LOADING error: ${e.message}")
+                        Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            "FULLY_LOADED" -> {
+                lifecycleScope.launch {
+                    try {
+                        db.collection("sap_assignments").document(assignment.docId)
+                            .update(
+                                mapOf(
+                                    "tripStatus" to "fully_loaded",
+                                    "fullyLoadedAt" to Timestamp.now()
+                                )
+                            )
+                            .await()
+                        val driverId = sessionManager.getDriverId() ?: ""
+                        if (driverId.isNotBlank()) {
+                            db.collection("drivers").document(driverId)
+                                .update("isFull", true)
+                                .await()
+                        }
+                        Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
+                        loadAssignments()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                        Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            "VERIFY_GUARD" -> {
+                // Navigate to AssignmentActivity where guard verification happens.
+                // The existing guard verification flow writes guardVerified=true.
+                // Task 5 auto-detects tripStatus=="fully_loaded" + guardVerified==true → "loaded".
+                val intent = Intent(this@MyTripActivity, AssignmentActivity::class.java).apply {
+                    putExtra("shipment_doc_id", assignment.docId)
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                startActivity(intent)
+            }
             "VIEW_SUMMARY" -> {
                 // Completed shipment — refresh the list instead.
                 // (TransitActivity handles viewing completed trip details in read mode.)
