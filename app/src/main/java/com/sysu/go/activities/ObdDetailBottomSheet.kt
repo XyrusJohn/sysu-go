@@ -11,10 +11,9 @@ import com.google.android.material.button.MaterialButton
 import com.sysu.go.R
 
 /**
- * Lightweight bottom sheet that shows OBD detail when driver taps the OBD number
- * on a COMPLETED row inside ObdItemsBottomSheet.
+ * Lightweight bottom sheet that shows OBD item detail when driver taps an OBD row
+ * inside ObdItemsBottomSheet — works for ALL states (PENDING, UNLOADING, COMPLETE).
  *
- * Surgical: only touched by the OBD number tap handler.
  * Arguments are passed via Bundle (same pattern as ObdStatusBottomSheet).
  */
 class ObdDetailBottomSheet : BottomSheetDialogFragment() {
@@ -22,16 +21,15 @@ class ObdDetailBottomSheet : BottomSheetDialogFragment() {
     companion object {
         const val TAG = "ObdDetailBottomSheet"
 
-        fun newInstance(
-            obdNumber: String,
-            customerName: String,
-            deliveryStatus: String?
-        ): ObdDetailBottomSheet {
+        fun newInstance(item: Map<String, Any?>): ObdDetailBottomSheet {
             return ObdDetailBottomSheet().apply {
                 arguments = Bundle().apply {
-                    putString("obdNumber", obdNumber)
-                    putString("customerName", customerName)
-                    putString("deliveryStatus", deliveryStatus)
+                    putString("obdNumber", item["obdNumber"]?.toString())
+                    putString("customerName", item["customerName"] as? String)
+                    putString("deliveryStatus", item["deliveryStatus"] as? String)
+                    putString("unloadStatus", item["unloadStatus"] as? String)
+                    putString("quantity", item["quantity"]?.toString())
+                    putBoolean("isPodCompleted", item["isPodCompleted"] as? Boolean ?: false)
                 }
             }
         }
@@ -56,17 +54,26 @@ class ObdDetailBottomSheet : BottomSheetDialogFragment() {
         val obdNumber = arguments?.getString("obdNumber") ?: "—"
         val customerName = arguments?.getString("customerName") ?: "—"
         val deliveryStatus = arguments?.getString("deliveryStatus")?.uppercase()?.trim() ?: ""
+        val unloadStatus = arguments?.getString("unloadStatus") ?: ""
+        val quantity = arguments?.getString("quantity") ?: "—"
+        val isPodCompleted = arguments?.getBoolean("isPodCompleted") ?: false
 
         val tvObdNumber = view.findViewById<TextView>(R.id.tvObdNumber)
         val tvCustomerName = view.findViewById<TextView>(R.id.tvCustomerName)
         val tvDeliveryStatus = view.findViewById<TextView>(R.id.tvDeliveryStatus)
+        val tvUnloadStatus = view.findViewById<TextView>(R.id.tvUnloadStatus)
+        val tvQuantity = view.findViewById<TextView>(R.id.tvQuantity)
+        val tvPodCaptured = view.findViewById<TextView>(R.id.tvPodCaptured)
         val llStatusRow = view.findViewById<View>(R.id.llStatusRow)
+        val llUnloadRow = view.findViewById<View>(R.id.llUnloadRow)
+        val llQuantityRow = view.findViewById<View>(R.id.llQuantityRow)
+        val llPodRow = view.findViewById<View>(R.id.llPodRow)
         val btnClose = view.findViewById<MaterialButton>(R.id.btnClose)
 
         tvObdNumber.text = obdNumber
         tvCustomerName.text = customerName
 
-        // Style delivery status pill with correct color
+        // Delivery status pill — color-coded
         if (deliveryStatus.isNotBlank()) {
             llStatusRow.visibility = View.VISIBLE
             val (bgRes, textColor) = when (deliveryStatus) {
@@ -81,6 +88,22 @@ class ObdDetailBottomSheet : BottomSheetDialogFragment() {
         } else {
             llStatusRow.visibility = View.GONE
         }
+
+        // Unload state
+        if (unloadStatus.isNotBlank()) {
+            llUnloadRow.visibility = View.VISIBLE
+            tvUnloadStatus.text = unloadStatus
+        } else {
+            llUnloadRow.visibility = View.GONE
+        }
+
+        // Quantity
+        llQuantityRow.visibility = View.VISIBLE
+        tvQuantity.text = quantity
+
+        // POD captured
+        llPodRow.visibility = View.VISIBLE
+        tvPodCaptured.text = if (isPodCompleted) "YES" else "NO"
 
         btnClose.setOnClickListener { dismiss() }
     }

@@ -211,6 +211,7 @@ class ProfileActivity : AppCompatActivity() {
         // Requirements section — always show. Defaults to all unchecked (false).
         // Firestore callback (loadRequirements) will merge saved values on top.
         binding.requirementsSection.visibility = View.VISIBLE
+        binding.rvRequirements.layoutManager = LinearLayoutManager(this)
         val defaultAdapter = RequirementDisplayAdapter()
         binding.rvRequirements.adapter = defaultAdapter
         val defaultList = listOf(

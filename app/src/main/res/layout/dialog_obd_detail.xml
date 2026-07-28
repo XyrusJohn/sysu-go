@@ -145,6 +145,123 @@
             tools:background="@color/transit_green" />
     </LinearLayout>
 
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="24dp"
+        android:background="@color/divider" />
+
+    <!-- Quantity -->
+    <LinearLayout
+        android:id="@+id/llQuantityRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Quantity"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_size_caption"
+            android:letterSpacing="0.08"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/tvQuantity"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_size_body"
+            android:textStyle="bold"
+            tools:text="229" />
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="24dp"
+        android:background="@color/divider" />
+
+    <!-- Unload State -->
+    <LinearLayout
+        android:id="@+id/llUnloadRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Unload State"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_size_caption"
+            android:letterSpacing="0.08"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/tvUnloadStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_size_body"
+            tools:text="UNLOADING" />
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="24dp"
+        android:background="@color/divider" />
+
+    <!-- POD Captured -->
+    <LinearLayout
+        android:id="@+id/llPodRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="POD Captured"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_size_caption"
+            android:letterSpacing="0.08"
+            android:textAllCaps="true" />
+
+        <TextView
+            android:id="@+id/tvPodCaptured"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_size_body"
+            android:textStyle="bold"
+            tools:text="YES" />
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="24dp"
+        android:background="@color/divider" />
+
     <!-- Close Button -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnClose"

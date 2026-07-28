@@ -249,11 +249,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 }
 
                 dismiss()
-                val intent = Intent(requireContext(), AssignmentActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
-                startActivity(intent)
-                requireActivity().finish()
+                // Navigate to AssignmentActivity without flags — keep MainActivity
+                // in the back stack so pressing back returns to the dashboard.
+                startActivity(Intent(requireContext(), AssignmentActivity::class.java))
             } catch (e: FirebaseFirestoreException) {
                 Log.e(TAG, "performConfirmArrival error: ${e.message}")
                 Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()

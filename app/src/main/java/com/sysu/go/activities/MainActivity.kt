@@ -769,11 +769,53 @@ class MainActivity : AppCompatActivity() {
             val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
                 || (sessionMgr.getActiveSapDocId() != null && sessionMgr.isTripActive())
 
+            // ═══ RETURN PANEL takes priority over all other routes ═══
+            // Checked BEFORE hasActiveTrip because returning_to_base / completed
+            // shipments are no longer "in_transit" and would miss the gate.
+
+            // ── Route 0: all shipments completed → ARRIVED AT WAREHOUSE (finalize) ──
+            // Driver has already END SHIPMENT/END TRIP on every shipment.
+            // Show the return panel to clear the session and release the driver.
+            if (currentShipments.isNotEmpty() &&
+                currentShipments.all { it.isCompleted }) {
+                val docIds = currentShipments.joinToString(",") { it.docId }
+                ReturnToBaseBottomSheet.newInstanceReturning(docIds)
+                    .show(supportFragmentManager, "ReturnToBaseBottomSheet")
+                return@setOnClickListener
+            }
+
+            // ── Route 1: returning_to_base → ARRIVED AT WAREHOUSE ──
+            val returningShipments = currentShipments.filter {
+                it.tripStatus == "returning_to_base"
+            }
+            if (returningShipments.isNotEmpty()) {
+                val docIds = returningShipments.joinToString(",") { it.docId }
+                ReturnToBaseBottomSheet.newInstanceReturning(docIds)
+                    .show(supportFragmentManager, "ReturnToBaseBottomSheet")
+                return@setOnClickListener
+            }
+
+            // ── Route 2: all PODs complete → START RETURNING TO BASE ──
+            if (hasActiveTrip && currentShipments.isNotEmpty() &&
+                currentShipments.all { it.isPodComplete }) {
+                val docIds = currentShipments
+                    .filter { !it.isCompleted }
+                    .joinToString(",") { it.docId }
+                // Only show if there are eligible shipments (not all completed)
+                if (docIds.isNotBlank()) {
+                    ReturnToBaseBottomSheet.newInstance(docIds)
+                        .show(supportFragmentManager, "ReturnToBaseBottomSheet")
+                    return@setOnClickListener
+                }
+            }
+
             if (hasActiveTrip) {
-                // Active trip running — open TransitActivity live tracking screen
-                sessionMgr.getActiveSapDocId()?.let { activeDocId ->
+                val activeDocId = sessionMgr.getActiveSapDocId()
+
+                // Normal transit — open TransitActivity tracking screen
+                activeDocId?.let { docId ->
                     startActivity(Intent(this, TransitActivity::class.java).apply {
-                        putExtra("shipment_doc_id", activeDocId)
+                        putExtra("shipment_doc_id", docId)
                     })
                 } ?: startActivity(Intent(this, TransitActivity::class.java))
                 return@setOnClickListener
@@ -827,9 +869,9 @@ class MainActivity : AppCompatActivity() {
             binding.myTripTabContainer.visibility = View.GONE
         }
 
-        // Bottom nav — Profile/Map icon: show My Trip tab (shipment card list)
+        // Bottom nav — Profile icon: opens ProfileActivity (driver info, requirements, logout)
         binding.btnProfile.setOnClickListener {
-            startActivity(Intent(this, MyTripActivity::class.java))
+            startActivity(Intent(this, ProfileActivity::class.java))
         }
 
         // Back button inside My Trip tab — returns to Home tab

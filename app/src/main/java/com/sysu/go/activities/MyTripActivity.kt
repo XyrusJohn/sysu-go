@@ -695,36 +695,110 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     /**
+     * Saves a crash-proof unload-state checkpoint to SharedPreferences.
+     * Uses synchronous commit() so it survives ProcessDeath / kill before Firestore responds.
+     */
+    private fun saveUnloadCheckpoint(docId: String, obd: String, status: String) {
+        val prefs = getSharedPreferences(UNLOAD_CHECKPOINTS_PREFS, MODE_PRIVATE)
+        prefs.edit()
+            .putString("${docId}__${obd}", status)
+            .putLong("${docId}__${obd}_ts", System.currentTimeMillis())
+            .commit()
+    }
+
+    /**
+     * Clears a checkpoint after Firestore has successfully persisted the state.
+     * Uses async apply() — no need to block at this point.
+     */
+    private fun clearUnloadCheckpoint(docId: String, obd: String) {
+        getSharedPreferences(UNLOAD_CHECKPOINTS_PREFS, MODE_PRIVATE)
+            .edit()
+            .remove("${docId}__${obd}")
+            .remove("${docId}__${obd}_ts")
+            .apply()
+    }
+
+    /**
      * Writes unloadStatus for one OBD in the shipment's lineItems array.
      * Values: "UNLOADING" | "UPLOADING" | null (to clear)
      * Used to persist the driver's unloading journey state across app restarts.
+     *
+     * Crash-proof design:
+     * 1. Writes a local SharedPreferences checkpoint FIRST (synchronous, instant)
+     * 2. If lineItems is provided, does a direct docRef.update() — one write, no read-first transaction
+     * 3. Falls back to runTransaction only when lineItems isn't available
+     * 4. Clears the checkpoint on success; keeps it on failure so recovery can retry
      */
-    private fun writeUnloadStatus(shipmentDocId: String, obdNumber: String, status: String?) {
+    private fun writeUnloadStatus(
+        shipmentDocId: String,
+        obdNumber: String,
+        status: String?,
+        lineItems: List<Map<String, Any?>>? = null
+    ) {
         Log.d(TAG, "writeUnloadStatus: BEGIN docId=$shipmentDocId, obd=$obdNumber, status=$status")
+
+        // ── Layer 1: local checkpoint (survives any crash) ──
+        if (status != null) {
+            saveUnloadCheckpoint(shipmentDocId, obdNumber, status)
+        } else {
+            clearUnloadCheckpoint(shipmentDocId, obdNumber)
+        }
+
         lifecycleScope.launch {
             try {
                 val docRef = db.collection("sap_assignments").document(shipmentDocId)
-                db.runTransaction { transaction ->
-                    val snap = transaction.get(docRef)
-                    if (!snap.exists()) return@runTransaction
-                    @Suppress("UNCHECKED_CAST")
-                    val lineItems = (snap.get("lineItems") as? List<Map<String, Any?>>)
-                        ?.toMutableList() ?: return@runTransaction
-                    val idx = lineItems.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }
-                    if (idx == -1) return@runTransaction
-                    val updated = lineItems[idx].toMutableMap()
-                    if (status != null) {
-                        updated["unloadStatus"] = status
-                    } else {
-                        updated.remove("unloadStatus")
+
+                if (lineItems != null) {
+                    // ── FAST PATH: direct update — no read-first transaction ──
+                    // Since we have the full lineItems array in memory, compose the
+                    // updated version and write it in ONE Firestore call.
+                    val updated = lineItems.map { item ->
+                        if ((item["obdNumber"] as? String) == obdNumber) {
+                            item.toMutableMap().apply {
+                                if (status != null) this["unloadStatus"] = status
+                                else this.remove("unloadStatus")
+                            }
+                        } else {
+                            item
+                        }
                     }
-                    lineItems[idx] = updated
-                    transaction.update(docRef, "lineItems", lineItems)
-                    Log.d(TAG, "writeUnloadStatus: Firestore transaction updated unloadStatus=$status for obd=$obdNumber")
-                }.await()
+                    docRef.update("lineItems", updated).await()
+                    Log.d(TAG, "writeUnloadStatus: direct update → unloadStatus=$status for obd=$obdNumber")
+                } else {
+                    // ── FALLBACK: transaction (read-then-write) ──
+                    db.runTransaction { transaction ->
+                        val snap = transaction.get(docRef)
+                        if (!snap.exists()) return@runTransaction
+                        @Suppress("UNCHECKED_CAST")
+                        val items = (snap.get("lineItems") as? List<Map<String, Any?>>)
+                            ?.toMutableList() ?: return@runTransaction
+                        val idx = items.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }
+                        if (idx == -1) return@runTransaction
+                        val updated = items[idx].toMutableMap()
+                        if (status != null) {
+                            updated["unloadStatus"] = status
+                        } else {
+                            updated.remove("unloadStatus")
+                        }
+                        items[idx] = updated
+                        transaction.update(docRef, "lineItems", items)
+                        Log.d(TAG, "writeUnloadStatus: transaction → unloadStatus=$status for obd=$obdNumber")
+                    }.await()
+                }
+
+                // ── Success: clear the checkpoint ──
+                clearUnloadCheckpoint(shipmentDocId, obdNumber)
                 Log.d(TAG, "writeUnloadStatus: COMPLETE for obd=$obdNumber")
+
             } catch (e: Exception) {
                 Log.e(TAG, "writeUnloadStatus FAILED for obd=$obdNumber: ${e.message}")
+                runOnUiThread {
+                    Toast.makeText(
+                        this@MyTripActivity,
+                        "Network error. Status update will retry.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -737,6 +811,8 @@ class MyTripActivity : AppCompatActivity() {
      */
     private fun retakeObdPod(item: Map<String, Any?>, shipmentDocId: String) {
         val obdNumber = item["obdNumber"] as? String ?: return
+        // ── Crash-proof checkpoint: written BEFORE the Firestore transaction ──
+        saveUnloadCheckpoint(shipmentDocId, obdNumber, "UNLOADING")
         lifecycleScope.launch {
             try {
                 val docRef = db.collection("sap_assignments").document(shipmentDocId)
@@ -759,6 +835,8 @@ class MyTripActivity : AppCompatActivity() {
                     lineItems[idx] = updated
                     transaction.update(docRef, "lineItems", lineItems)
                 }.await()
+                // Success — clear the checkpoint
+                clearUnloadCheckpoint(shipmentDocId, obdNumber)
                 // Fire the camera flow — same as first-time capture
                 showObdStatusSheet(item, shipmentDocId)
             } catch (e: Exception) {
@@ -774,6 +852,8 @@ class MyTripActivity : AppCompatActivity() {
         private const val KEY_PENDING_OBD_ITEM = "pending_obd_item"
         private const val KEY_PENDING_SHIPMENT_DOC_ID = "pending_obd_shipment_doc_id"
         private const val KEY_PENDING_CAPTURED_AT = "pending_captured_at_millis"
+        /** SharedPreferences file name for unload state checkpoints — survives app crashes. */
+        private const val UNLOAD_CHECKPOINTS_PREFS = "unload_checkpoints"
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -1176,7 +1256,7 @@ class MyTripActivity : AppCompatActivity() {
 
     private fun onTripActionClicked(assignment: Assignment, action: String) {
         when (action) {
-            "END_TRIP" -> {
+            "END_TRIP", "END_SHIPMENT" -> {
                 // All PODs complete — end this single shipment and return to the card list
                 endSingleShipment(assignment.docId)
             }
@@ -1404,6 +1484,70 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     /**
+     * Scans SharedPreferences for orphaned unload-state checkpoints and reconciles them
+     * with the current Firestore lineItems. Called every time openObdBottomSheet loads.
+     *
+     * - If a checkpoint exists and the Firestore item already has that status → stale, clean it up
+     * - If a checkpoint exists and the Firestore item doesn't match → orphaned, re-apply + re-fire write
+     * - If no checkpoint exists → no-op
+     *
+     * Returns a potentially-modified copy of lineItems with recovered states applied.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun recoverOrphanedCheckpoints(
+        lineItems: List<Map<String, Any>>,
+        docId: String
+    ): List<Map<String, Any>> {
+        val prefs = getSharedPreferences(UNLOAD_CHECKPOINTS_PREFS, MODE_PRIVATE)
+        val prefix = "${docId}__"
+        val keys = prefs.all.keys.filter { it.startsWith(prefix) && !it.endsWith("_ts") }
+
+        if (keys.isEmpty()) return lineItems
+
+        var result = lineItems
+        val cleaned = mutableListOf<String>()
+
+        for (key in keys) {
+            val obd = key.removePrefix(prefix)
+            val checkpoint = prefs.getString(key, null) ?: continue
+
+            val idx = result.indexOfFirst { (it["obdNumber"] as? String) == obd }
+            if (idx == -1) continue
+
+            val firestoreStatus = result[idx]["unloadStatus"] as? String
+
+            when {
+                firestoreStatus == checkpoint -> {
+                    // Already in sync — just clean up stale checkpoint
+                    cleaned.add(obd)
+                }
+                else -> {
+                    // Orphaned checkpoint found — re-apply to local data and re-fire Firestore write
+                    Log.d(TAG, "Recovering orphaned checkpoint: obd=$obd status=$checkpoint")
+                    result = result.toMutableList().also {
+                        it[idx] = it[idx].toMutableMap().apply { this["unloadStatus"] = checkpoint }
+                    }
+                    // Re-fire write with full lineItems for direct update
+                    writeUnloadStatus(docId, obd, checkpoint, result)
+                    cleaned.add(obd)
+                }
+            }
+        }
+
+        // Batch-clean synced checkpoints
+        if (cleaned.isNotEmpty()) {
+            val editor = prefs.edit()
+            for (obd in cleaned) {
+                editor.remove("${docId}__${obd}")
+                editor.remove("${docId}__${obd}_ts")
+            }
+            editor.apply()
+        }
+
+        return result
+    }
+
+    /**
      * Opens the OBD items bottom sheet for any shipment state.
      * For in-transit shipments, tapping a row navigates to that shipment.
      * For confirmed/not-yet-in-transit shipments, items are read-only.
@@ -1415,8 +1559,11 @@ class MyTripActivity : AppCompatActivity() {
             return
         }
 
+        // ── Recover any orphaned unload-state checkpoints from a previous crash ──
+        val recoveredItems = recoverOrphanedCheckpoints(lineItems, shipmentDocId)
+
         val bottomSheet = ObdItemsBottomSheet.newInstance(
-            lineItems = lineItems,
+            lineItems = recoveredItems,
             shipmentDocId = shipmentDocId,
             onItemClick = { item ->
                 val isCompleted = item["isPodCompleted"] as? Boolean ?: false
@@ -1430,7 +1577,9 @@ class MyTripActivity : AppCompatActivity() {
                 val obd = item["obdNumber"] as? String ?: return@newInstance
                 Log.d(TAG, "onObdCameraTap FIRED: obd=$obd, docId=$docId")
                 // Persist UPLOADING state BEFORE camera fires — survives app kill during upload
-                writeUnloadStatus(docId, obd, "UPLOADING")
+                val sheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
+                    as? ObdItemsBottomSheet)
+                writeUnloadStatus(docId, obd, "UPLOADING", sheet?.lineItems)
                 Log.d(TAG, "onObdCameraTap: calling showObdStatusSheet NOW")
                 showObdStatusSheet(item, docId)
                 Log.d(TAG, "onObdCameraTap: showObdStatusSheet RETURNED (camera should be open)")
@@ -1438,11 +1587,11 @@ class MyTripActivity : AppCompatActivity() {
             onUnloadConfirm = { item, docId ->
                 val obd = item["obdNumber"] as? String ?: return@newInstance
                 Log.d(TAG, "onUnloadConfirm: OBD=$obd, docId=$docId")
-                Log.d(TAG, "onUnloadConfirm: calling writeUnloadStatus($docId, $obd, UNLOADING)")
-                writeUnloadStatus(docId, obd, "UNLOADING")
-                // Refresh bottom sheet to show UNLOADING state immediately
+                // Get sheet reference first so we can pass lineItems for direct Firestore write
                 val sheet = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
                     as? ObdItemsBottomSheet)
+                writeUnloadStatus(docId, obd, "UNLOADING", sheet?.lineItems)
+                // Refresh bottom sheet to show UNLOADING state immediately
                 sheet?.let { s ->
                     @Suppress("UNCHECKED_CAST")
                     val current = s.lineItems.toMutableList()
@@ -1461,10 +1610,10 @@ class MyTripActivity : AppCompatActivity() {
             onUnloadCancel = { item, docId ->
                 // Clear unloadStatus in Firestore — returns to PENDING state
                 val obd = item["obdNumber"] as? String ?: return@newInstance
-                writeUnloadStatus(docId, obd, null)
-                // Optimistic UI update — refresh sheet to show PENDING immediately
                 val s = (supportFragmentManager.findFragmentByTag(ObdItemsBottomSheet.TAG)
                     as? ObdItemsBottomSheet)
+                writeUnloadStatus(docId, obd, null, s?.lineItems)
+                // Optimistic UI update — refresh sheet to show PENDING immediately
                 s?.let { sheet ->
                     @Suppress("UNCHECKED_CAST")
                     val current = sheet.lineItems.toMutableList()

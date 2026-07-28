@@ -220,41 +220,34 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             ivPodIndicator.alpha = 0.35f
         }
 
-        // Click handling — disabled while loading
+        // Row click: tap anywhere on the row → OBD detail bottom sheet
+        // Works for ALL states (PENDING, UNLOADING, COMPLETE)
+        // Action buttons (CAPTURE, CANCEL, UNLOAD, PREVIEW) still intercept their own taps
         if (!isLoading) {
-            if (isPodCompleted) {
-                // Tap OBD# → info bottom sheet (OBD Number + Customer Name + Status pill)
-                val customerName = item["customerName"] as? String ?: "—"
-                val status = item["deliveryStatus"] as? String
-                tvObdNumber.isClickable = true
-                tvObdNumber.isFocusable = true
-                tvObdNumber.setOnClickListener {
-                    val sheet = ObdDetailBottomSheet.newInstance(obd, customerName, status)
-                    try {
-                        sheet.show(parentFragmentManager, ObdDetailBottomSheet.TAG)
-                    } catch (t: Throwable) {
-                        Log.e(TAG, "ObdDetailBottomSheet show failed: ${t.javaClass.simpleName}: ${t.message}")
-                    }
+            rowView.isClickable = true
+            rowView.isFocusable = true
+            rowView.setOnClickListener {
+                val sheet = ObdDetailBottomSheet.newInstance(item)
+                try {
+                    sheet.show(parentFragmentManager, ObdDetailBottomSheet.TAG)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "ObdDetailBottomSheet show failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
+            }
 
+            if (isPodCompleted) {
+                // PREVIEW indicator → fullscreen POD image
                 ivPodIndicator.isClickable = true
                 ivPodIndicator.setOnClickListener { onItemClick?.invoke(item) }
-                rowView.setOnClickListener { onItemClick?.invoke(item) }
             } else {
-                // No camera/row click for PENDING/UNLOADING — fool-proof, use buttons only
                 ivPodIndicator.setOnClickListener(null)
                 ivPodIndicator.isClickable = false
-                tvObdNumber.setOnClickListener(null)
-                tvObdNumber.isClickable = false
-                tvObdNumber.isFocusable = false
-
-                // Row click: ONLY fires for COMPLETED rows (preview tap)
-                rowView.setOnClickListener(null)
             }
         } else {
+            // Disabled while loading — no touch events
+            rowView.isClickable = false
+            rowView.isFocusable = false
             ivPodIndicator.isClickable = false
-            tvObdNumber.isClickable = false
-            tvObdNumber.isFocusable = false
             rowView.setOnClickListener(null)
         }
 
