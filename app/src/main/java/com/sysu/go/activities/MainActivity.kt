@@ -475,9 +475,42 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateScanButtonState() {
-        // 4-state pill: NOT ON QUEUE → IN QUEUE → ASSIGNED → READY FOR TRANSIT
+        // 6-state pill: NOT ON QUEUE → QUEUE → ASSIGNED → LOADING → LOADED → IN TRANSIT
+        val tripStatus = currentShipments.firstOrNull()?.tripStatus
         when {
-            // ── NEW STATE: All shipments verified AND confirmed — Map Icon activates ──
+            // ── IN TRANSIT — active trip in progress, map icon shows live tracking ──
+            tripStatus == "in_transit" -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "IN TRANSIT"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Trip In Progress"
+                binding.tvCTABody?.text = "Your delivery is on the way. Tap to open tracking."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+            }
+            // ── LOADED — verified, ready to start trip ──
+            tripStatus == "loaded" -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "LOADED (START TRIP)"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Cargo Verified & Loaded"
+                binding.tvCTABody?.text = "Guard has confirmed. Ready to start your trip."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+            }
+            // ── LOADING — cargo is being loaded at bay ──
+            tripStatus == "loading" || tripStatus == "fully_loaded" -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "LOADING CARGO"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Loading In Progress"
+                binding.tvCTABody?.text = "Your cargo is being loaded. Stay present until fully loaded."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
+            }
+            // ── All shipments verified AND confirmed — START TRIP ready ──
             currentShipments.isNotEmpty() &&
                 currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
@@ -1114,12 +1147,17 @@ class MainActivity : AppCompatActivity() {
                     binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
                     binding.tvScanHint.text = "Show QR code at booth to check in"
                     binding.tvScanHint.visibility = View.VISIBLE
-                    binding.tvQueueStatus.text = "Not In Queue"
+                    binding.tvQueueStatus.text = "NOT IN QUEUE"
                     binding.tvQueueStatus.textSize = 24f
                     binding.tvQueueStatusLabel.text = ""
                     binding.tvQueueStatusLabel.visibility = View.GONE
                     binding.tvQueueDetails.text = ""
                     binding.tvQueueDetails.visibility = View.GONE
+                    // Restore queue icon to default
+                    binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
+                    binding.ivQueueIcon.setColorFilter(
+                        ContextCompat.getColor(this, R.color.sysu_red)
+                    )
                     // Hide cancel button when out of queue
                     binding.dividerCancelQueue.visibility = View.GONE
                     binding.cancelQueueContainer.visibility = View.GONE
@@ -1268,58 +1306,100 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateQueueUI(position: Int?, status: String, truckType: String, shipmentId: String?) {
+    private fun updateQueueUI(position: Int?, queueStatus: String, truckType: String, shipmentId: String?) {
         runOnUiThread {
             binding.tvScanHint.text = ""
             binding.tvScanHint.visibility = View.GONE
 
-            val isAssigned = status == "loading" && shipmentId != null
-            binding.tvStatusBadgeText.text = if (isAssigned) "Assigned" else "In Queue"
+            // ── Derive display status from tripStatus (sap_assignments) ──────
+            // Check ALL shipments to determine the aggregate status
+            val allTripStatuses = currentShipments.mapNotNull { it.tripStatus }
+            val firstShipmentId = shipmentId ?: currentShipments.firstOrNull()?.docId
+
+            // Determine the canonical display status
+            val displayStatus: String = when {
+                allTripStatuses.any { it == "in_transit" } -> "IN TRANSIT"
+                allTripStatuses.all { it == "loaded" || it == "fully_loaded" }
+                    && allTripStatuses.isNotEmpty() -> "LOADED"
+                allTripStatuses.any { it == "loading" || it == "fully_loaded" } -> "LOADING"
+                else -> when {
+                    hasShipment && firstShipmentId != null -> "ASSIGNED"
+                    position != null -> String.format(Locale.US, "No. %d", position)
+                    else -> "IN QUEUE"
+                }
+            }
+
+            binding.tvQueueStatus.text = displayStatus
+            binding.tvQueueStatus.textSize = when (displayStatus) {
+                "NOT IN QUEUE" -> 24f
+                else -> 28f
+            }
+
+            // ── Badge (frosted pill at top) ──────────────────────────────────
+            binding.tvStatusBadgeText.text = when (displayStatus) {
+                "IN TRANSIT" -> "In Transit"
+                "LOADED" -> "Loaded"
+                "LOADING" -> "Loading"
+                "ASSIGNED" -> "Assigned"
+                else -> "In Queue"
+            }
             binding.statusBadge.setCardBackgroundColor(
-                if (isAssigned)
-                    ContextCompat.getColor(this, R.color.sysu_gold)
-                else android.graphics.Color.parseColor("#33FFFFFF")
+                when (displayStatus) {
+                    "IN TRANSIT" -> ContextCompat.getColor(this, R.color.sysu_blue)
+                    "LOADED" -> ContextCompat.getColor(this, R.color.sysu_green)
+                    "LOADING" -> ContextCompat.getColor(this, R.color.sysu_amber)
+                    "ASSIGNED" -> ContextCompat.getColor(this, R.color.sysu_gold)
+                    else -> ContextCompat.getColor(this, android.R.color.transparent)
+                }
             )
 
-            // When assigned (shipment received), show LOADING instead of position number
-            binding.tvQueueStatus.text = when {
-                isAssigned -> "ASSIGNED"
-                position != null -> String.format(Locale.US, "No. %d", position)
-                status == "loading" -> "LOADING"
-                else -> "IN QUEUE"
-            }
+            // ── Ticket icon — ticket, tint varies by status ──────────────────
+            binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
+            binding.ivQueueIcon.setColorFilter(
+                ContextCompat.getColor(this, when (displayStatus) {
+                    "IN TRANSIT" -> R.color.sysu_blue
+                    "LOADED" -> R.color.sysu_green
+                    "LOADING" -> R.color.sysu_amber
+                    "ASSIGNED" -> R.color.sysu_blue
+                    else -> R.color.sysu_red
+                })
+            )
 
-            binding.tvQueueStatus.textSize = when {
-                binding.tvQueueStatus.text == "LOADING" -> 28f
-                binding.tvQueueStatus.text == "ASSIGNED" -> 28f
-                binding.tvQueueStatus.text == "IN QUEUE" -> 28f
-                else -> 42f
-            }
-
-            binding.tvQueueStatusLabel.text = when (status) {
-                "waiting" -> position?.toString() ?: "Waiting"
-                "called" -> "Called!"
-                "loading" -> if (shipmentId != null) "Ready" else "Loading"
-                else -> ""
+            // ── Label ────────────────────────────────────────────────────────
+            binding.tvQueueStatusLabel.text = when (displayStatus) {
+                "IN TRANSIT" -> "On the road"
+                "LOADED" -> "Ready"
+                "LOADING" -> "Loading"
+                "ASSIGNED" -> "Ready"
+                else -> when (queueStatus) {
+                    "waiting" -> position?.toString() ?: "Waiting"
+                    "called" -> "Called!"
+                    else -> ""
+                }
             }
             binding.tvQueueStatusLabel.visibility = if (binding.tvQueueStatusLabel.text.isNotEmpty()) View.VISIBLE else View.GONE
 
-            binding.tvQueueDetails.text = when (status) {
-                "loading" -> {
-                    if (shipmentId != null) {
-                        "Shipment #$shipmentId • Being loaded"
-                    } else {
-                        "LOADING... • Please wait"
-                    }
+            // ── Detail line ──────────────────────────────────────────────────
+            binding.tvQueueDetails.text = when (displayStatus) {
+                "IN TRANSIT" -> "Shipment #${firstShipmentId ?: "—"} • On the road"
+                "LOADED" -> "Shipment #${firstShipmentId ?: "—"} • Verified & ready"
+                "LOADING" -> if (firstShipmentId != null) {
+                    "Shipment #$firstShipmentId • Being loaded"
+                } else {
+                    "LOADING... • Please wait"
                 }
-                "waiting" -> "Waiting in Queue • $truckType"
-                "called" -> "YOU ARE CALLED! • Proceed to bay"
-                else -> "Status: ${status.uppercase()} • $truckType"
+                "ASSIGNED" -> "Shipment #${firstShipmentId ?: "—"} • $truckType"
+                else -> when (queueStatus) {
+                    "waiting" -> "Waiting in Queue • $truckType"
+                    "called" -> "YOU ARE CALLED! • Proceed to bay"
+                    else -> "Status: ${queueStatus.uppercase()} • $truckType"
+                }
             }
             binding.tvQueueDetails.visibility = View.VISIBLE
 
-            // Show cancel queue button only for early-stage statuses (not yet assigned/loading)
-            val canCancel = isInQueue && !isAssigned && !hasShipment
+            // Show cancel queue only when driver is still waiting (not yet assigned/loading/loaded/transit)
+            val canCancel = isInQueue && !hasShipment &&
+                displayStatus !in listOf("ASSIGNED", "LOADING", "LOADED", "IN TRANSIT")
             binding.dividerCancelQueue.visibility = if (canCancel) View.VISIBLE else View.GONE
             binding.cancelQueueContainer.visibility = if (canCancel) View.VISIBLE else View.GONE
         }
@@ -1624,12 +1704,8 @@ class MainActivity : AppCompatActivity() {
                                                 )
                                             )
                                             .await()
-                                        val driverId = SessionManager(this@MainActivity).getDriverId() ?: ""
-                                        if (driverId.isNotBlank()) {
-                                            db.collection("drivers").document(driverId)
-                                                .update("isFull", true)
-                                                .await()
-                                        }
+                                        // Notify backend via socket: truck is fully loaded
+                                        SocketManager.emitDriverFull(true)
                                         fetchAndSetupMyTripCards()
                                     } catch (e: Exception) {
                                         Log.e(TAG, "FULLY_LOADED error: ${e.message}")

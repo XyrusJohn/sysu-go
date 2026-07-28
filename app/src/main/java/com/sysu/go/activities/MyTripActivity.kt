@@ -1307,9 +1307,7 @@ class MyTripActivity : AppCompatActivity() {
                             .await()
                         val driverId = sessionManager.getDriverId() ?: ""
                         if (driverId.isNotBlank()) {
-                            db.collection("drivers").document(driverId)
-                                .update("isFull", true)
-                                .await()
+                            SocketManager.emitDriverFull(true)
                         }
                         Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
                         loadAssignments()
@@ -1459,6 +1457,9 @@ class MyTripActivity : AppCompatActivity() {
                     .await()
 
                 Log.d(TAG, "endSingleShipment: $docId → completed")
+
+                // Notify backend: truck is no longer full — driver is done
+                SocketManager.emitDriverFull(false)
 
                 // If this was the active session shipment, clear session
                 if (sessionManager.getActiveSapDocId() == docId) {

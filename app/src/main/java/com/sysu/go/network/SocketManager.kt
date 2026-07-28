@@ -424,6 +424,30 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
+    /**
+     * Emits driver_is_full event so the backend updates drivers/{driverId}.isFull
+     * without requiring Firestore writes from the client.
+     *
+     * @param isFull  true when truck is FULLY LOADED, false when trip completes / arrives at warehouse
+     */
+    fun emitDriverFull(isFull: Boolean) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val json = JSONObject().apply {
+            put("driverId", uid)
+            put("isFull", isFull)
+        }
+        listOf(mSocketGo, mSocketApp).forEach { socket ->
+            if (socket?.connected() == true) {
+                try {
+                    socket.emit("driver_is_full", json)
+                    Log.d(TAG, "Emitted driver_is_full: isFull=$isFull for driver=$uid")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to emit driver_is_full: ${e.message}")
+                }
+            }
+        }
+    }
+
     fun disconnect() {
         // Remove this SocketManager as a listener from ConnectivityMonitor
         ConnectivityMonitor.removeListener(this)

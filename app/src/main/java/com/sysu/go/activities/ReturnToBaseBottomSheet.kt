@@ -18,6 +18,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.sysu.go.R
 import com.sysu.go.databinding.LayoutReturnPanelBinding
+import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -224,6 +225,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         .await()
                     Log.d(TAG, "performConfirmArrival: $docId → completed")
                 }
+
+                // Notify backend: truck is no longer full — all shipments done
+                SocketManager.emitDriverFull(false)
 
                 // Clear session state
                 sessionManager.clearTripSession()
