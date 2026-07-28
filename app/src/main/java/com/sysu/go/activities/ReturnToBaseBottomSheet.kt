@@ -253,9 +253,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 }
 
                 dismiss()
-                // Navigate to AssignmentActivity without flags — keep MainActivity
-                // in the back stack so pressing back returns to the dashboard.
-                startActivity(Intent(requireContext(), AssignmentActivity::class.java))
+                // Navigate back to MainActivity — no need to redirect to My Queue
+                // since the driver just returned from a completed trip.
+                startActivity(Intent(requireContext(), MainActivity::class.java))
             } catch (e: FirebaseFirestoreException) {
                 Log.e(TAG, "performConfirmArrival error: ${e.message}")
                 Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()

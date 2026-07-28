@@ -171,28 +171,14 @@ class MyTripTabAdapter(
                         binding.btnTripAction.isEnabled = false
                         binding.btnTripAction.alpha = 0.5f
                     } else if (assignment.isPodComplete) {
-                        // All PODs done — check if driver has OTHER shipments assigned.
-                        // Multi-shipment: END SHIPMENT directly so driver can immediately
-                        // move to the next shipment. Other confirmed shipments unlock
-                        // (Firestore: this shipment's tripStatus=completed → lock lifts).
-                        // Single-shipment: keep the full return-to-base flow (driver →
-                        // TransitActivity → ARRIVED AT WAREHOUSE → end trip).
-                        val isMultiShipment = itemCount > 1
-                        if (isMultiShipment) {
-                            // Multiple shipments — end this one, others remain active
-                            binding.btnTripAction.text = "END SHIPMENT"
-                            binding.btnTripAction.isEnabled = true
-                            binding.btnTripAction.alpha = 1.0f
-                            binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.transit_green)
-                        } else {
-                            // Last / only shipment — initiate return-to-warehouse flow
-                            // This is the ONLY path back to warehouse: START RETURNING TO BASE
-                            // → TransitActivity → ARRIVED AT WAREHOUSE → END TRIP
-                            binding.btnTripAction.text = "START RETURNING TO BASE"
-                            binding.btnTripAction.isEnabled = true
-                            binding.btnTripAction.alpha = 1.0f
-                            binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
-                        }
+                        // All PODs done — show END SHIPMENT so the driver must
+                        // explicitly press it before the map icon enables return-to-base.
+                        // This enforces the agreed flow: PODs done → END SHIPMENT
+                        // → all shipments completed → map icon → floating return panel.
+                        binding.btnTripAction.text = "END SHIPMENT"
+                        binding.btnTripAction.isEnabled = true
+                        binding.btnTripAction.alpha = 1.0f
+                        binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.transit_green)
                     } else {
                         binding.btnTripAction.text = "OPEN ACTIVE TRIP 🔒"
                         binding.btnTripAction.isEnabled = true

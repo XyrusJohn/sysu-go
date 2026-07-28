@@ -1398,12 +1398,11 @@ class MyTripActivity : AppCompatActivity() {
                 Log.d(TAG, "startTrip: ${assignment.docId} → in_transit")
                 Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
 
-                // Navigate back to the card list so the driver can confirm / start remaining shipments.
-            // ALL confirmed → map icon appears on MainActivity → tapped map → TransitActivity.
-            // Do NOT call finish() here — keep this activity in the stack so the updated
-            // card list is visible (Firestore snapshot will refresh it automatically).
-            Toast.makeText(this@MyTripActivity, "Trip confirmed! Complete verification for remaining shipments.", Toast.LENGTH_LONG).show()
-            loadAssignments()
+                // Navigate directly to TransitActivity for live tracking.
+                // Driver-driven: single tap selects which shipment to start tracking.
+                // For multi-shipment: driver completes this trip → BACK TO HOME →
+                // MainActivity → MyTripActivity → picks next shipment → same flow.
+                launchDeliveryActivity(assignment.docId)
             } catch (e: Exception) {
                 Log.e(TAG, "confirmAndStartTrip error: ${e.message}")
                 sessionManager.saveActiveSapDocId(null)

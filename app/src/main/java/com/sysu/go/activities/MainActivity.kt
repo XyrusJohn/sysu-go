@@ -828,19 +828,15 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // ── Route 2: all PODs complete → START RETURNING TO BASE ──
-            if (hasActiveTrip && currentShipments.isNotEmpty() &&
-                currentShipments.all { it.isPodComplete }) {
-                val docIds = currentShipments
-                    .filter { !it.isCompleted }
-                    .joinToString(",") { it.docId }
-                // Only show if there are eligible shipments (not all completed)
-                if (docIds.isNotBlank()) {
-                    ReturnToBaseBottomSheet.newInstance(docIds)
-                        .show(supportFragmentManager, "ReturnToBaseBottomSheet")
-                    return@setOnClickListener
-                }
-            }
+            // ── Route 2 REMOVED ──
+            // Previously: all PODs complete → START RETURNING TO BASE
+            // This used to fire the floating panel as soon as every shipment had
+            // its POD items captured, even before the user pressed END SHIPMENT.
+            // Per the agreed flow, the map icon must only enable return-to-base
+            // AFTER all shipments have been END SHIPMENT'd (Route 0 above).
+            // Mid-delivery (all PODs done but not all END'd), the map icon falls
+            // through to TransitActivity, where the in-screen
+            // "START RETURNING TO BASE" button handles the transition per spec.
 
             if (hasActiveTrip) {
                 val activeDocId = sessionMgr.getActiveSapDocId()

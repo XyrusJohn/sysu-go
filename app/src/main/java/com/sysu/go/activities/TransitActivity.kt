@@ -289,20 +289,14 @@ class TransitActivity : AppCompatActivity() {
                         .show()
                 }
                 isTripStarted -> {
-                    if (isPodCompleteForAll) {
-                        AlertDialog.Builder(this)
-                            .setTitle("Return to Base?")
-                            .setMessage("All OBD items are complete. Begin returning to the warehouse?")
-                            .setPositiveButton("Confirm") { _, _ -> transitionToReturningToBase() }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    } else {
-                        val intent = Intent(this, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        }
-                        startActivity(intent)
-                        finish()
+                    // Always navigate back to MainActivity. The return-to-base flow is
+                    // triggered from MainActivity's map icon AFTER all shipments have been
+                    // END SHIPMENT'd in MyTripActivity — not here in TransitActivity.
+                    val intent = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                     }
+                    startActivity(intent)
+                    finish()
                 }
                 else -> {
                     // This branch is unreachable in normal operation:
@@ -1044,19 +1038,11 @@ class TransitActivity : AppCompatActivity() {
             return
         }
 
-        // In transit — Verified done, Transit active(in progress), Done pending
+        // In transit — Verified done, Transit active (in progress), Done pending.
+        // Always show "Trip in progress" with BACK TO HOME during active transit.
+        // The return-to-base flow is triggered separately from MainActivity's center
+        // button after ALL shipments have been END SHIPMENT'd in MyTripActivity.
         if (isTripStarted) {
-            if (isPodCompleteForAll) {
-                setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
-                setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.DONE)
-                setStepState(R.id.dotTransit, null, R.id.checkTransit, R.id.labelTransit, StepState.DONE)
-                binding.tvSubStatus.text = "Ready to return"
-                binding.btnStartTrip.text = "START RETURNING TO BASE"
-                binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this, R.color.sysu_blue))
-                binding.btnStartTrip.isEnabled = true
-                return
-            }
-
             setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
             setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.ACTIVE)
             setStepState(R.id.dotTransit, R.id.numTransit, R.id.checkTransit, R.id.labelTransit, StepState.PENDING)
