@@ -15,12 +15,25 @@ import java.util.Date
 import java.util.Locale
 
 class MyTripTabAdapter(
-    var hasActiveTrip: Boolean,
+    initialHasActiveTrip: Boolean,
     var activeShipmentId: String?,
     private val onTripActionClicked: (Assignment, String) -> Unit,
     private val onObdTap: (List<Map<String, Any>>, String) -> Unit,
     private val onShowVerification: (Assignment) -> Unit
 ) : ListAdapter<Assignment, MyTripTabAdapter.MyTripTabViewHolder>(AssignmentDiffCallback()) {
+
+    /**
+     * When true, non-active shipments show START LOADING/START TRIP as disabled.
+     * Custom setter calls notifyDataSetChanged() so DiffUtil-based submitList()
+     * rebinds cards whose data hasn't changed but whose UI depends on this flag.
+     */
+    var hasActiveTrip: Boolean = initialHasActiveTrip
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyDataSetChanged()
+            }
+        }
 
     /** Set to a docId while its card is performing END_TRIP Firestore update */
     var endingDocId: String? = null
@@ -223,13 +236,24 @@ class MyTripTabAdapter(
                     ContextCompat.getColor(ctx, R.color.white)
                 )
 
+                // Primary: FULLY LOADED
                 binding.btnTripAction.visibility = View.VISIBLE
                 binding.btnTripAction.text = "FULLY LOADED"
                 binding.btnTripAction.isEnabled = true
                 binding.btnTripAction.alpha = 1.0f
                 binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
 
-                binding.btnShowVerification.visibility = View.GONE
+                // Secondary: CANCEL LOADING — rein free card to previous state
+                binding.btnShowVerification.visibility = View.VISIBLE
+                binding.btnShowVerification.text = "CANCEL LOADING"
+                binding.btnShowVerification.setTextColor(
+                    ContextCompat.getColor(ctx, R.color.sysu_red)
+                )
+                binding.btnShowVerification.isEnabled = true
+                binding.btnShowVerification.strokeColor = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
+                binding.btnShowVerification.setOnClickListener {
+                    onTripActionClicked(assignment, "CANCEL_LOADING")
+                }
             }
             "fully_loaded" -> {
                 if (assignment.guardVerified) {

@@ -35,6 +35,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
 import com.sysu.go.activities.ObdItemsBottomSheet
@@ -903,7 +904,7 @@ class MyTripActivity : AppCompatActivity() {
 
         // Create adapter once — stored as class field so we can update state without re-creating
         shipmentAdapter = MyTripTabAdapter(
-            hasActiveTrip = false,
+            initialHasActiveTrip = false,
             activeShipmentId = null,
             onTripActionClicked = { assignment, action -> onTripActionClicked(assignment, action) },
             onObdTap = { lineItems, docId -> openObdBottomSheet(lineItems, docId) },
@@ -1276,46 +1277,91 @@ class MyTripActivity : AppCompatActivity() {
                     .show()
             }
             "START_LOADING" -> {
-                lifecycleScope.launch {
-                    try {
-                        db.collection("sap_assignments").document(assignment.docId)
-                            .update(
-                                mapOf(
-                                    "tripStatus" to "loading",
-                                    "loadingStartedAt" to Timestamp.now()
-                                )
-                            )
-                            .await()
-                        Log.d(TAG, "START_LOADING: ${assignment.docId}")
-                        loadAssignments()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "START_LOADING error: ${e.message}")
-                        Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                AlertDialog.Builder(this)
+                    .setTitle("Start Loading?")
+                    .setMessage("Are you sure you want to start loading shipment ${assignment.shipmentNumber}?")
+                    .setPositiveButton("Yes, Start Loading") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update(
+                                        mapOf(
+                                            "tripStatus" to "loading",
+                                            "loadingStartedAt" to Timestamp.now()
+                                        )
+                                    )
+                                    .await()
+                                Log.d(TAG, "START_LOADING: ${assignment.docId}")
+                                loadAssignments()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "START_LOADING error: ${e.message}")
+                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
-                }
+                    .setNegativeButton("Cancel", null)
+                    .show()
             }
             "FULLY_LOADED" -> {
-                lifecycleScope.launch {
-                    try {
-                        db.collection("sap_assignments").document(assignment.docId)
-                            .update(
-                                mapOf(
-                                    "tripStatus" to "fully_loaded",
-                                    "fullyLoadedAt" to Timestamp.now()
-                                )
-                            )
-                            .await()
-                        val driverId = sessionManager.getDriverId() ?: ""
-                        if (driverId.isNotBlank()) {
-                            SocketManager.emitDriverFull(true)
+                AlertDialog.Builder(this)
+                    .setTitle("Fully Loaded?")
+                    .setMessage("Is shipment ${assignment.shipmentNumber} completely loaded and ready for guard verification?")
+                    .setPositiveButton("Yes, Fully Loaded") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update(
+                                        mapOf(
+                                            "tripStatus" to "fully_loaded",
+                                            "fullyLoadedAt" to Timestamp.now()
+                                        )
+                                    )
+                                    .await()
+                                val driverId = sessionManager.getDriverId() ?: ""
+                                if (driverId.isNotBlank()) {
+                                    SocketManager.emitDriverFull(true)
+                                }
+                                Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
+                                loadAssignments()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            }
                         }
-                        Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
-                        loadAssignments()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                        Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
                     }
-                }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            "CANCEL_LOADING" -> {
+                AlertDialog.Builder(this)
+                    .setTitle("Cancel Loading?")
+                    .setMessage("Revert shipment ${assignment.shipmentNumber} back to pending? This will cancel the loading process.")
+                    .setPositiveButton("Yes, Cancel") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update(
+                                        mapOf(
+                                            "tripStatus" to FieldValue.delete(),
+                                            "loadingStartedAt" to FieldValue.delete()
+                                        )
+                                    )
+                                    .await()
+                                // Emit driver_is_full=false since driver canceled loading
+                                val driverId = sessionManager.getDriverId() ?: ""
+                                if (driverId.isNotBlank()) {
+                                    SocketManager.emitDriverFull(false)
+                                }
+                                Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
+                                loadAssignments()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
+                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Keep Loading", null)
+                    .show()
             }
             "VERIFY_GUARD" -> {
                 // Navigate to AssignmentActivity where guard verification happens.

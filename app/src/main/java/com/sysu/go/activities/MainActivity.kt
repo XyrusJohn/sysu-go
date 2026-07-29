@@ -1668,7 +1668,7 @@ class MainActivity : AppCompatActivity() {
                 val hasActiveTrip = inTransit != null
 
                 val shipmentAdapter = com.sysu.go.adapter.MyTripTabAdapter(
-                    hasActiveTrip = hasActiveTrip,
+                    initialHasActiveTrip = hasActiveTrip,
                     activeShipmentId = inTransit?.docId,
                     onTripActionClicked = { assignment, action ->
                         when (action) {

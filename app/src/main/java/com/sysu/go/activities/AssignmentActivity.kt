@@ -15,6 +15,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
 import com.sysu.go.adapter.AssignmentAdapter
@@ -102,7 +103,8 @@ class AssignmentActivity : AppCompatActivity() {
             onVerificationAction = { assignment, guardVerified ->
                 if (guardVerified) showGuardVerificationSheet(assignment)
                 else openGuardVerification(assignment)
-            }
+            },
+            onCancelLoading = { assignment -> cancelLoading(assignment) }
         )
 
         binding.rvAssignments.apply {
@@ -130,23 +132,85 @@ class AssignmentActivity : AppCompatActivity() {
         // Source-of-truth lock check — derived from Firestore state, not SharedPreferences.
         // Survives session clear when the active trip ends (clearTripSession nulls activeSapDocId).
         val inTransitDocId: String? = assignments.firstOrNull { it.isInTransit }?.docId
-        android.util.Log.d(TAG, "onAssignmentAction: docId=${assignment.docId} isLocked=${assignment.isLocked(inTransitDocId)}")
+        android.util.Log.d(TAG, "onAssignmentAction: docId=${assignment.docId} tripStatus=${assignment.tripStatus} isLocked=${assignment.isLocked(inTransitDocId)}")
         when {
-            // Terminal — completed shipments cannot be acted on
+            // ── Loading state machine ──────────────────────────────────────────
+            // Must come BEFORE canConfirmTrip to ensure the linear flow
+            // pending → loading → fully_loaded → guard verify → loaded → verify
+
+            assignment.isLoading -> {
+                // Already loading → confirm FULLY LOADED
+                AlertDialog.Builder(this)
+                    .setTitle("Fully Loaded?")
+                    .setMessage("Is shipment ${assignment.shipmentNumber} completely loaded?")
+                    .setPositiveButton("Yes, Fully Loaded") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                // Optimistic UI update — card instantly shows fully_loaded
+                                val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                                if (idx >= 0) {
+                                    assignments = assignments.toMutableList().apply {
+                                        set(idx, assignments[idx].copy(tripStatus = "fully_loaded"))
+                                    }
+                                    submitToAdapter(assignments)
+                                    updateAggregateBadge(assignments)
+                                }
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update(mapOf(
+                                        "tripStatus" to "fully_loaded",
+                                        "fullyLoadedAt" to Timestamp.now()
+                                    ))
+                                    .await()
+                                Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                                Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+
+            assignment.isFullyLoaded && assignment.guardVerified -> {
+                // Guard already verified — ship is loaded, but driver hasn't confirmed yet
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.confirm_shipment_title)
+                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
+                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+
+            assignment.isFullyLoaded -> {
+                // Fully loaded but guard has NOT verified yet → open guard flow (gate allows fully_loaded)
+                openGuardVerification(assignment)
+            }
+
+            assignment.isLoaded -> {
+                // Guard verified, auto-promoted to loaded — driver needs to confirm
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.confirm_shipment_title)
+                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
+                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+
+            // ── Existing terminal/active states ───────────────────────────────
             assignment.isCompleted -> {
                 Toast.makeText(this, "This trip has already been completed", Toast.LENGTH_SHORT).show()
             }
-            // Active in-transit trip — can re-open OBD/POD
+
             assignment.isInTransit -> {
                 launchTransitActivity(assignment.docId)
             }
-            // Guard verified AND driver confirmed — READY, block guard re-entry
+
             assignment.driverConfirmed -> {
                 android.util.Log.d(TAG, " → driverConfirmed branch: showing toast")
                 Toast.makeText(this, "Shipment is READY. Waiting to start trip.", Toast.LENGTH_SHORT).show()
             }
-            // Guard verified, driver NOT yet confirmed — MUST check before isLocked
-            // to unblock driver confirmation even when another trip's session is stale.
+
             assignment.canConfirmTrip -> {
                 android.util.Log.d(TAG, " → canConfirmTrip branch: showing dialog")
                 AlertDialog.Builder(this)
@@ -156,18 +220,92 @@ class AssignmentActivity : AppCompatActivity() {
                     .setNegativeButton(R.string.cancel, null)
                     .show()
             }
-            // Locked by another actively in-transit shipment (Firestore state-based, survives session clear)
+
             assignment.isLocked(inTransitDocId) -> {
                 Toast.makeText(this, "Another trip is in progress", Toast.LENGTH_SHORT).show()
             }
-            // Normal flow — guard still needs to verify
+
+            // ── Pending — not yet loading, so start the loading flow ──
             else -> {
-                openGuardVerification(assignment)
+                AlertDialog.Builder(this)
+                    .setTitle("Start Loading?")
+                    .setMessage("Are you sure you want to start loading shipment ${assignment.shipmentNumber}?")
+                    .setPositiveButton("Yes, Start Loading") { _, _ ->
+                        lifecycleScope.launch {
+                            try {
+                                // Optimistic UI update — card instantly shows loading
+                                val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                                if (idx >= 0) {
+                                    assignments = assignments.toMutableList().apply {
+                                        set(idx, assignments[idx].copy(tripStatus = "loading"))
+                                    }
+                                    submitToAdapter(assignments)
+                                    updateAggregateBadge(assignments)
+                                }
+                                db.collection("sap_assignments").document(assignment.docId)
+                                    .update(mapOf(
+                                        "tripStatus" to "loading",
+                                        "loadingStartedAt" to Timestamp.now()
+                                    ))
+                                    .await()
+                                Log.d(TAG, "START_LOADING: ${assignment.docId}")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "START_LOADING error: ${e.message}")
+                                Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
             }
         }
     }
 
+    private fun cancelLoading(assignment: Assignment) {
+        AlertDialog.Builder(this)
+            .setTitle("Cancel Loading?")
+            .setMessage("Revert shipment ${assignment.shipmentNumber} back to pending and cancel loading?")
+            .setPositiveButton("Yes, Cancel") { _, _ ->
+                lifecycleScope.launch {
+                    try {
+                        // Optimistic UI update — card instantly reverts to pending
+                        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                        if (idx >= 0) {
+                            assignments = assignments.toMutableList().apply {
+                                set(idx, assignments[idx].copy(tripStatus = null))
+                            }
+                            submitToAdapter(assignments)
+                            updateAggregateBadge(assignments)
+                        }
+                        db.collection("sap_assignments").document(assignment.docId)
+                            .update(mapOf(
+                                "tripStatus" to FieldValue.delete(),
+                                "loadingStartedAt" to FieldValue.delete()
+                            ))
+                            .await()
+                        Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
+                        Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("Keep Loading", null)
+            .show()
+    }
+
     private fun openGuardVerification(assignment: Assignment) {
+        // Guard verification is only allowed after the truck is fully loaded.
+        // The guard must inspect a completely loaded truck before signing off.
+        // Any other status (pending, loading) means the truck isn't ready yet.
+        if (assignment.tripStatus != "fully_loaded") {
+            Toast.makeText(
+                this@AssignmentActivity,
+                "Fully loaded muna ang shipment. I-tap ang 'FULLY LOADED' bago mag-guard verification.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         lifecycleScope.launch {
             val repo = SecurityGuardRepository(this@AssignmentActivity)
             val guards = repo.refreshGuards().ifEmpty { repo.getCachedGuards() }
@@ -365,6 +503,18 @@ class AssignmentActivity : AppCompatActivity() {
      * when MainActivity CTA is tapped after ALL shipments are confirmed.
      */
     private fun confirmShipment(assignment: Assignment) {
+        // Optimistic UI update FIRST — card instantly shows "READY ✓" without
+        // waiting for Firestore network round-trip. Snapshot listener provides
+        // authoritative state later; this just bridges the latency gap.
+        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+        if (idx >= 0) {
+            assignments = assignments.toMutableList().apply {
+                set(idx, assignments[idx].copy(driverConfirmed = true))
+            }
+            submitToAdapter(assignments)
+            updateAggregateBadge(assignments)
+        }
+
         lifecycleScope.launch {
             try {
                 val updates = mapOf("driverConfirmed" to true)
@@ -372,18 +522,6 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
-                        // Optimistically update local list so the card instantly shows "CONFIRMED"
-                        // instead of waiting for the next Firestore snapshot to fire.
-                        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
-                        if (idx >= 0) {
-                            assignments = assignments.toMutableList().apply {
-                                set(idx, assignments[idx].copy(driverConfirmed = true))
-                            }
-                            submitToAdapter(assignments)
-                            updateAggregateBadge(assignments)
-                        }
-                        // Snapshot listener will fire automatically with authoritative server state —
-                        // no manual reload needed. Re-registering creates race conditions.
                         Toast.makeText(
                             this@AssignmentActivity,
                             R.string.confirm_shipment_toast,
@@ -392,6 +530,15 @@ class AssignmentActivity : AppCompatActivity() {
                     }
                     .addOnFailureListener { e ->
                         Log.e(TAG, "confirmShipment failed: ${e.message}")
+                        // Revert optimistic update on failure
+                        val revertIdx = assignments.indexOfFirst { it.docId == assignment.docId }
+                        if (revertIdx >= 0) {
+                            assignments = assignments.toMutableList().apply {
+                                set(revertIdx, assignments[revertIdx].copy(driverConfirmed = false))
+                            }
+                            submitToAdapter(assignments)
+                            updateAggregateBadge(assignments)
+                        }
                         Toast.makeText(
                             this@AssignmentActivity,
                             "Failed to confirm. Try again.",
@@ -620,7 +767,8 @@ class AssignmentActivity : AppCompatActivity() {
                 onVerificationAction = { assignment, guardVerified ->
                     if (guardVerified) showGuardVerificationSheet(assignment)
                     else openGuardVerification(assignment)
-                }
+                },
+                onCancelLoading = { assignment -> cancelLoading(assignment) }
             ).also { binding.rvAssignments.adapter = it }
 
         // Always refresh inTransitDocId so bind() has the current value from Firestore

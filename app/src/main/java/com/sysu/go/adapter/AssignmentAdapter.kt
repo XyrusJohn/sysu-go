@@ -28,7 +28,8 @@ class AssignmentAdapter(
     private val onTripActionClick: (Assignment) -> Unit,
     private val onGuardPillTap: (Assignment) -> Unit,
     private val onObdTap: (Assignment) -> Unit,
-    private val onVerificationAction: (assignment: Assignment, guardVerified: Boolean) -> Unit
+    private val onVerificationAction: (assignment: Assignment, guardVerified: Boolean) -> Unit,
+    private val onCancelLoading: (Assignment) -> Unit
 ) : ListAdapter<Assignment, AssignmentAdapter.AssignmentViewHolder>(AssignmentDiffCallback()) {
 
     // sessionActiveDocId is refreshed before every submitList() call so bind() always has the current value
@@ -54,14 +55,20 @@ class AssignmentAdapter(
             if (pos != RecyclerView.NO_POSITION) onObdTap(getItem(pos))
         }
 
-        // Bottom button — routes based on guardVerified state
-        // Pre-verify  → "GUARD VERIFICATION"  → opens guard selection flow
-        // Post-verify → "SHOW VERIFICATION"   → shows saved verification sheet
+        // Bottom button — routes based on guard state
+        // During loading: CANCEL LOADING → dispatch directly here
+        // During fully_loading + not verified: GUARD VERIFICATION → opens guard selection flow
+        // Post-verify: SHOW VERIFICATION → shows saved verification sheet
         holder.itemView.findViewById<View>(R.id.btnShowVerification)?.setOnClickListener {
             val pos = holder.bindingAdapterPosition
             if (pos != RecyclerView.NO_POSITION) {
                 val assignment = getItem(pos)
-                onVerificationAction(assignment, assignment.guardVerified)
+                if (assignment.isLoading) {
+                    // CANCEL LOADING — dedicated callback to handle revert
+                    onCancelLoading(assignment)
+                } else {
+                    onVerificationAction(assignment, assignment.guardVerified)
+                }
             }
         }
 
@@ -185,6 +192,35 @@ class AssignmentAdapter(
                     binding.btnTripAction.alpha = 1f
                 }
 
+                // ── Loading state machine ───────────────────────────────────────
+                assignment.isLoading -> {
+                    binding.btnTripAction.text = "FULLY LOADED"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_blue))
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1f
+                }
+
+                assignment.isFullyLoaded -> {
+                    if (assignment.guardVerified) {
+                        binding.btnTripAction.text = "START TRIP"
+                        binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
+                        binding.btnTripAction.isEnabled = true
+                        binding.btnTripAction.alpha = 1f
+                    } else {
+                        binding.btnTripAction.text = "VERIFY WITH GUARD"
+                        binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_amber))
+                        binding.btnTripAction.isEnabled = true
+                        binding.btnTripAction.alpha = 1f
+                    }
+                }
+
+                assignment.isLoaded -> {
+                    binding.btnTripAction.text = "CONFIRM SHIPMENT"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1f
+                }
+
                 assignment.driverConfirmed -> {
                     binding.btnTripAction.text = "READY ✓"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.transit_green))
@@ -207,47 +243,68 @@ class AssignmentAdapter(
                 }
 
                 else -> {
-                    binding.btnTripAction.text = "PENDING VERIFICATION"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.gray_disabled))
-                    binding.btnTripAction.isEnabled = false
-                    binding.btnTripAction.alpha = 0.7f
+                    // Pending — not yet loading
+                    binding.btnTripAction.text = "START LOADING"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1f
                 }
             }
 
             // ── Bottom btnShowVerification button — separate state machine ─────────
             //
-            // !guardVerified  → "GUARD VERIFICATION" (solid red, clickable)
-            // guardVerified   → "SHOW VERIFICATION"  (outline red, read-only)
+            // loading        → "CANCEL LOADING" (red outline)
+            // fully_loaded/loaded + !guardVerified → "GUARD VERIFICATION" (solid red)
+            // guardVerified  → "SHOW VERIFICATION"  (outline red, read-only)
+            // pending        → GONE (no verification needed yet)
             //
-            if (!assignment.guardVerified) {
-                binding.btnShowVerification.text = "GUARD VERIFICATION"
-                binding.btnShowVerification.setBackgroundColor(
-                    ContextCompat.getColor(ctx, R.color.sysu_red)
-                )
-                binding.btnShowVerification.setTextColor(
-                    ContextCompat.getColor(ctx, R.color.white)
-                )
-                binding.btnShowVerification.isEnabled = true
-                binding.btnShowVerification.alpha = 1f
-                binding.btnShowVerification.strokeWidth = 0
-            } else {
-                binding.btnShowVerification.text = "SHOW VERIFICATION"
-                binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
-                binding.btnShowVerification.setTextColor(
-                    ContextCompat.getColor(ctx, R.color.sysu_red)
-                )
-                binding.btnShowVerification.isEnabled = true
-                binding.btnShowVerification.alpha = 1f
+            when {
+                assignment.isLoading -> {
+                    binding.btnShowVerification.text = "CANCEL LOADING"
+                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
+                    binding.btnShowVerification.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.sysu_red)
+                    )
+                    binding.btnShowVerification.isEnabled = true
+                    binding.btnShowVerification.alpha = 1f
+                    binding.btnShowVerification.visibility = View.VISIBLE
+                }
+                !assignment.guardVerified && (assignment.isFullyLoaded || assignment.isLoaded) -> {
+                    binding.btnShowVerification.text = "GUARD VERIFICATION"
+                    binding.btnShowVerification.setBackgroundColor(
+                        ContextCompat.getColor(ctx, R.color.sysu_red)
+                    )
+                    binding.btnShowVerification.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.white)
+                    )
+                    binding.btnShowVerification.isEnabled = true
+                    binding.btnShowVerification.alpha = 1f
+                    binding.btnShowVerification.strokeWidth = 0
+                    binding.btnShowVerification.visibility = View.VISIBLE
+                }
+                assignment.guardVerified -> {
+                    binding.btnShowVerification.text = "SHOW VERIFICATION"
+                    binding.btnShowVerification.setBackgroundResource(R.drawable.bg_btn_outline_red)
+                    binding.btnShowVerification.setTextColor(
+                        ContextCompat.getColor(ctx, R.color.sysu_red)
+                    )
+                    binding.btnShowVerification.isEnabled = true
+                    binding.btnShowVerification.alpha = 1f
+                    binding.btnShowVerification.visibility = View.VISIBLE
+                }
+                else -> {
+                    binding.btnShowVerification.visibility = View.GONE
+                }
             }
-            binding.btnShowVerification.visibility = View.VISIBLE
 
-            // Click listener — only fires for canConfirmTrip (enabled, guard signed, not confirmed)
+            // Click listener — fires for any enabled, non-locked, non-completed state
             binding.btnTripAction.setOnClickListener {
-                if (!isLocked && !assignment.isCompleted && assignment.guardVerified && !assignment.driverConfirmed) {
-                    android.util.Log.d("AssignmentAdapter", "TAP: btnTripAction → calling onTripActionClick for ${assignment.docId}")
+                val isClickable = !isLocked && !assignment.isCompleted && binding.btnTripAction.isEnabled
+                if (isClickable) {
+                    android.util.Log.d("AssignmentAdapter", "TAP: btnTripAction → calling onTripActionClick for ${assignment.docId} state=${assignment.tripStatus}")
                     onTripActionClick(assignment)
                 } else {
-                    android.util.Log.d("AssignmentAdapter", "TAP BLOCKED: isLocked=$isLocked isCompleted=${assignment.isCompleted} guardVerified=${assignment.guardVerified} driverConfirmed=${assignment.driverConfirmed}")
+                    android.util.Log.d("AssignmentAdapter", "TAP BLOCKED: isLocked=$isLocked isCompleted=${assignment.isCompleted} enabled=${binding.btnTripAction.isEnabled}")
                 }
             }
         }
