@@ -15,6 +15,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.card.MaterialCardView
 import android.content.res.ColorStateList
 import android.app.AlertDialog
+import com.google.android.material.button.MaterialButton
 import android.util.Log
 import com.sysu.go.R
 import com.sysu.go.databinding.DialogObdItemsBinding
@@ -453,17 +454,23 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                         tvUnloadAction?.setTextColor(ContextCompat.getColor(ctx, R.color.transit_amber_dark))
                         tvUnloadAction?.translationZ = 0f
                         tvUnloadAction?.setOnClickListener {
-                            val context = rowView.context
+                            val ctx = rowView.context
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
                             if (clickedItem == null) return@setOnClickListener
-                            AlertDialog.Builder(context)
-                                .setTitle("Start Unloading?")
-                                .setMessage("Begin unloading for $obdNumber at ${clickedItem["customerName"] as? String ?: "this location"}?")
-                                .setPositiveButton("Confirm") { _, _ ->
-                                    onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
-                                }
-                                .setNegativeButton("Cancel", null)
-                                .show()
+                            val dlgView = LayoutInflater.from(ctx).inflate(R.layout.dialog_sysu_confirmation, null)
+                                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+                                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Start Unloading?"
+							dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Begin unloading for $obdNumber at ${clickedItem["customerName"] as? String ?: "this location"}?"
+							val dialog = AlertDialog.Builder(ctx).setView(dlgView).create()
+							dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+								text = "Unload"
+								backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.sysu_red))
+								setOnClickListener { dialog.dismiss()
+									onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
+								}
+							}
+							dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+							dialog.show()
                         }
                     }
                 }

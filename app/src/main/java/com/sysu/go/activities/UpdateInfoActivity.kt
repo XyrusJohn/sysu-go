@@ -2,7 +2,12 @@ package com.sysu.go.activities
 
 import android.content.Intent
 import android.os.Bundle
+import android.content.res.ColorStateList
 import android.view.LayoutInflater
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
@@ -155,7 +160,7 @@ class UpdateInfoActivity : AppCompatActivity() {
             if (!hasError) {
                 val fullName = buildString {
                     append(fn)
-                    if (mi.isNotEmpty()) append(" $mi.")
+                    if (mi.isNotEmpty()) append(" ${mi.replace(".", "")}.")
                     append(" $ln")
                 }.trim()
                 helpers.add(fullName)
@@ -218,11 +223,13 @@ class UpdateInfoActivity : AppCompatActivity() {
 
                     val returnedQueueId = result.data.queueId
                     if (returnedQueueId == null) {
-                        AlertDialog.Builder(this@UpdateInfoActivity)
-                            .setTitle("Error")
-                            .setMessage("No queue ID returned. Please contact support.")
-                            .setPositiveButton("OK") { _, _ -> finish() }
-                            .show()
+                        val dlgView = LayoutInflater.from(this@UpdateInfoActivity).inflate(R.layout.dialog_sysu_info, null)
+                        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+                        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Error"
+                        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "No queue ID returned. Please contact support."
+                        val dialog = AlertDialog.Builder(this@UpdateInfoActivity).setView(dlgView).create()
+                        dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss(); finish() }
+                        dialog.show()
                         return@launch
                     }
 
@@ -247,13 +254,16 @@ class UpdateInfoActivity : AppCompatActivity() {
                         result.code == 410 -> getString(R.string.token_expired)
                         else -> "Error ${result.code}: ${result.message}"
                     }
-                    AlertDialog.Builder(this@UpdateInfoActivity)
-                        .setTitle("Registration Error")
-                        .setMessage(msg)
-                        .setPositiveButton("OK") { _, _ ->
-                            if (result.code == 410) finish()
-                        }
-                        .show()
+                    val dlgView2 = LayoutInflater.from(this@UpdateInfoActivity).inflate(R.layout.dialog_sysu_info, null)
+                    dlgView2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+                    dlgView2.findViewById<TextView>(R.id.tvDialogTitle).text = "Registration Error"
+                    dlgView2.findViewById<TextView>(R.id.tvDialogMessage).text = msg
+                    val dialog2 = AlertDialog.Builder(this@UpdateInfoActivity).setView(dlgView2).create()
+                    dlgView2.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener {
+                        dialog2.dismiss()
+                        if (result.code == 410) finish()
+                    }
+                    dialog2.show()
                 }
             }
         }

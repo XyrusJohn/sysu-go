@@ -498,6 +498,25 @@
                     app:strokeColor="@color/sysu_red"
                     app:cornerRadius="@dimen/corner_radius_button" />
 
+                <!-- Tertiary Action: "CANCEL VERIFICATION" (reverts fully_loaded → loading) -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCancelVerification"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/btn_height"
+                    android:layout_marginTop="8dp"
+                    android:text="CANCEL VERIFICATION"
+                    android:textAllCaps="false"
+                    android:textColor="@color/sysu_red"
+                    android:textSize="@dimen/text_size_button"
+                    android:fontFamily="@font/atkinson_hyperlegible_bold"
+                    android:textStyle="bold"
+                    android:visibility="gone"
+                    app:elevation="4dp"
+                    app:strokeWidth="1.5dp"
+                    app:backgroundTint="@android:color/transparent"
+                    app:strokeColor="@color/sysu_red"
+                    app:cornerRadius="@dimen/corner_radius_button" />
+
             </LinearLayout>
 
         </LinearLayout>

@@ -1,10 +1,15 @@
 package com.sysu.go.activities
 
 import android.content.Intent
+import android.content.res.ColorStateList
+import androidx.core.content.res.ResourcesCompat
 import android.os.Bundle
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
@@ -14,6 +19,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.button.MaterialButton
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -57,6 +63,7 @@ class AssignmentActivity : AppCompatActivity() {
     // Bouncing circles
     private val circleAnimators = mutableListOf<android.animation.Animator>()
     private val circleViews = mutableListOf<View>()
+    private var aggregateDotPulse: android.animation.ObjectAnimator? = null
 
     companion object {
         private const val TAG = "AssignmentActivity"
@@ -104,7 +111,8 @@ class AssignmentActivity : AppCompatActivity() {
                 if (guardVerified) showGuardVerificationSheet(assignment)
                 else openGuardVerification(assignment)
             },
-            onCancelLoading = { assignment -> cancelLoading(assignment) }
+            onCancelLoading = { assignment -> cancelLoading(assignment) },
+            onCancelVerification = { assignment -> cancelVerification(assignment) }
         )
 
         binding.rvAssignments.apply {
@@ -140,46 +148,55 @@ class AssignmentActivity : AppCompatActivity() {
 
             assignment.isLoading -> {
                 // Already loading → confirm FULLY LOADED
-                AlertDialog.Builder(this)
-                    .setTitle("Fully Loaded?")
-                    .setMessage("Is shipment ${assignment.shipmentNumber} completely loaded?")
-                    .setPositiveButton("Yes, Fully Loaded") { _, _ ->
-                        lifecycleScope.launch {
-                            try {
-                                // Optimistic UI update — card instantly shows fully_loaded
-                                val idx = assignments.indexOfFirst { it.docId == assignment.docId }
-                                if (idx >= 0) {
-                                    assignments = assignments.toMutableList().apply {
-                                        set(idx, assignments[idx].copy(tripStatus = "fully_loaded"))
-                                    }
-                                    submitToAdapter(assignments)
-                                    updateAggregateBadge(assignments)
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Fully Loaded?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Is shipment ${assignment.shipmentNumber} completely loaded?"
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = "Yes, Fully Loaded"
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_blue))
+                    setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                        try {
+                            val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                            if (idx >= 0) {
+                                assignments = assignments.toMutableList().apply {
+                                    set(idx, assignments[idx].copy(tripStatus = "fully_loaded"))
                                 }
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update(mapOf(
-                                        "tripStatus" to "fully_loaded",
-                                        "fullyLoadedAt" to Timestamp.now()
-                                    ))
-                                    .await()
-                                Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                                Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                                submitToAdapter(assignments)
+                                updateAggregateBadge(assignments)
                             }
+                            db.collection("sap_assignments").document(assignment.docId)
+                                .update(mapOf(
+                                    "tripStatus" to "fully_loaded",
+                                    "fullyLoadedAt" to Timestamp.now()
+                                ))
+                                .await()
+                            Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                            Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+                    }}
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
 
             assignment.isFullyLoaded && assignment.guardVerified -> {
                 // Guard already verified — ship is loaded, but driver hasn't confirmed yet
-                AlertDialog.Builder(this)
-                    .setTitle(R.string.confirm_shipment_title)
-                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
-                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = getString(R.string.btn_confirm_shipment)
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
 
             assignment.isFullyLoaded -> {
@@ -189,12 +206,18 @@ class AssignmentActivity : AppCompatActivity() {
 
             assignment.isLoaded -> {
                 // Guard verified, auto-promoted to loaded — driver needs to confirm
-                AlertDialog.Builder(this)
-                    .setTitle(R.string.confirm_shipment_title)
-                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
-                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = getString(R.string.btn_confirm_shipment)
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
 
             // ── Existing terminal/active states ───────────────────────────────
@@ -213,85 +236,150 @@ class AssignmentActivity : AppCompatActivity() {
 
             assignment.canConfirmTrip -> {
                 android.util.Log.d(TAG, " → canConfirmTrip branch: showing dialog")
-                AlertDialog.Builder(this)
-                    .setTitle(R.string.confirm_shipment_title)
-                    .setMessage(getString(R.string.confirm_shipment_message, assignment.shipmentNumber))
-                    .setPositiveButton(R.string.btn_confirm_shipment) { _, _ -> confirmShipment(assignment) }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = getString(R.string.btn_confirm_shipment)
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
 
             assignment.isLocked(inTransitDocId) -> {
-                Toast.makeText(this, "Another trip is in progress", Toast.LENGTH_SHORT).show()
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_alert)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.locked_has_active_trip_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.locked_has_active_trip_msg)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
 
             // ── Pending — not yet loading, so start the loading flow ──
             else -> {
-                AlertDialog.Builder(this)
-                    .setTitle("Start Loading?")
-                    .setMessage("Are you sure you want to start loading shipment ${assignment.shipmentNumber}?")
-                    .setPositiveButton("Yes, Start Loading") { _, _ ->
-                        lifecycleScope.launch {
-                            try {
-                                // Optimistic UI update — card instantly shows loading
-                                val idx = assignments.indexOfFirst { it.docId == assignment.docId }
-                                if (idx >= 0) {
-                                    assignments = assignments.toMutableList().apply {
-                                        set(idx, assignments[idx].copy(tripStatus = "loading"))
-                                    }
-                                    submitToAdapter(assignments)
-                                    updateAggregateBadge(assignments)
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Start Loading?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to start loading shipment ${assignment.shipmentNumber}?"
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = "Start Loading"
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                        try {
+                            val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                            if (idx >= 0) {
+                                assignments = assignments.toMutableList().apply {
+                                    set(idx, assignments[idx].copy(tripStatus = "loading"))
                                 }
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update(mapOf(
-                                        "tripStatus" to "loading",
-                                        "loadingStartedAt" to Timestamp.now()
-                                    ))
-                                    .await()
-                                Log.d(TAG, "START_LOADING: ${assignment.docId}")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "START_LOADING error: ${e.message}")
-                                Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                                submitToAdapter(assignments)
+                                updateAggregateBadge(assignments)
                             }
+                            db.collection("sap_assignments").document(assignment.docId)
+                                .update(mapOf(
+                                    "tripStatus" to "loading",
+                                    "loadingStartedAt" to Timestamp.now()
+                                ))
+                                .await()
+                            Log.d(TAG, "START_LOADING: ${assignment.docId}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "START_LOADING error: ${e.message}")
+                            Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+                    }}
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
         }
     }
 
     private fun cancelLoading(assignment: Assignment) {
-        AlertDialog.Builder(this)
-            .setTitle("Cancel Loading?")
-            .setMessage("Revert shipment ${assignment.shipmentNumber} back to pending and cancel loading?")
-            .setPositiveButton("Yes, Cancel") { _, _ ->
-                lifecycleScope.launch {
-                    try {
-                        // Optimistic UI update — card instantly reverts to pending
-                        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
-                        if (idx >= 0) {
-                            assignments = assignments.toMutableList().apply {
-                                set(idx, assignments[idx].copy(tripStatus = null))
-                            }
-                            submitToAdapter(assignments)
-                            updateAggregateBadge(assignments)
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Cancel Loading?"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Revert shipment ${assignment.shipmentNumber} back to pending and cancel loading?"
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Yes, Cancel"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                try {
+                    // Optimistic UI update — card instantly reverts to pending
+                    val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                    if (idx >= 0) {
+                        assignments = assignments.toMutableList().apply {
+                            set(idx, assignments[idx].copy(tripStatus = null))
                         }
-                        db.collection("sap_assignments").document(assignment.docId)
-                            .update(mapOf(
-                                "tripStatus" to FieldValue.delete(),
-                                "loadingStartedAt" to FieldValue.delete()
-                            ))
-                            .await()
-                        Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                        Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                        submitToAdapter(assignments)
+                        updateAggregateBadge(assignments)
                     }
+                    db.collection("sap_assignments").document(assignment.docId)
+                        .update(mapOf(
+                            "tripStatus" to FieldValue.delete(),
+                            "loadingStartedAt" to FieldValue.delete()
+                        ))
+                        .await()
+                    Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
+                    Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
                 }
-            }
-            .setNegativeButton("Keep Loading", null)
-            .show()
+            }}
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).apply {
+            text = "Keep Loading"
+            setOnClickListener { dialog.dismiss() }
+        }
+        dialog.show()
+    }
+
+    /**
+     * Reverts shipment from fully_loaded back to loading state.
+     * Undoes the "VERIFY WITH GUARD" state — btnTripAction goes back to FULLY LOADED.
+     */
+    private fun cancelVerification(assignment: Assignment) {
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_alert)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Cancel Verification?"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Revert shipment ${assignment.shipmentNumber} back to loading? The FULLY LOADED button will reappear."
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Yes, Revert"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_amber))
+            setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                try {
+                    val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                    if (idx >= 0) {
+                        assignments = assignments.toMutableList().apply {
+                            set(idx, assignments[idx].copy(tripStatus = "loading"))
+                        }
+                        submitToAdapter(assignments)
+                        updateAggregateBadge(assignments)
+                    }
+                    db.collection("sap_assignments").document(assignment.docId)
+                        .update(mapOf(
+                            "tripStatus" to "loading",
+                            "fullyLoadedAt" to FieldValue.delete()
+                        ))
+                        .await()
+                    Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading")
+                } catch (e: Exception) {
+                    Log.e(TAG, "CANCEL_VERIFICATION error: ${e.message}")
+                    Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                }
+            }}
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).apply {
+            text = "Keep"
+            setOnClickListener { dialog.dismiss() }
+        }
+        dialog.show()
     }
 
     private fun openGuardVerification(assignment: Assignment) {
@@ -522,6 +610,10 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
+                        // Set optimistic bridge flag so MainActivity can immediately
+                        // reflect the confirmed state on resume, without waiting for
+                        // the Firestore snapshot to catch up (~900ms race window).
+                        sessionManager.savePendingConfirmedDocId(assignment.docId)
                         Toast.makeText(
                             this@AssignmentActivity,
                             R.string.confirm_shipment_toast,
@@ -768,7 +860,8 @@ class AssignmentActivity : AppCompatActivity() {
                     if (guardVerified) showGuardVerificationSheet(assignment)
                     else openGuardVerification(assignment)
                 },
-                onCancelLoading = { assignment -> cancelLoading(assignment) }
+                onCancelLoading = { assignment -> cancelLoading(assignment) },
+            onCancelVerification = { assignment -> cancelVerification(assignment) }
             ).also { binding.rvAssignments.adapter = it }
 
         // Always refresh inTransitDocId so bind() has the current value from Firestore
@@ -828,19 +921,40 @@ class AssignmentActivity : AppCompatActivity() {
 
         val pendingCount = list.count { !it.guardVerified }
         if (pendingCount == 0) {
+            // Stop dot pulse
+            aggregateDotPulse?.cancel()
+            aggregateDotPulse = null
             binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_green)
             binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
+            binding.aggregateBadgeDot.alpha = 1f
             binding.tvAggregateBadge.text = getString(R.string.assignment_badge_all_verified)
+            binding.tvAggregateBadge.setTextColor(ContextCompat.getColor(this, R.color.white))
+            binding.tvAggregateBadge.setTypeface(ResourcesCompat.getFont(this, R.font.atkinson_hyperlegible_regular))
             binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_green)
             binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_green)
             binding.tvBadgeText.text = getString(R.string.assignment_badge_all_verified)
         } else {
+            // Aggregate badge — transparent bg, bold orange text + pulsing dot
             binding.aggregateBadgeContainer.setBackgroundResource(R.drawable.bg_status_pill_queued)
             binding.aggregateBadgeDot.setBackgroundResource(R.drawable.bg_status_dot_gold)
             binding.tvAggregateBadge.text = getString(R.string.assignment_badge_pending)
-            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_queued)
+            binding.tvAggregateBadge.setTextColor(ContextCompat.getColor(this, R.color.sysu_amber))
+            binding.tvAggregateBadge.setTypeface(ResourcesCompat.getFont(this, R.font.atkinson_hyperlegible_bold))
+            // Pulsing glow dot
+            if (aggregateDotPulse == null) {
+                aggregateDotPulse = android.animation.ObjectAnimator.ofFloat(binding.aggregateBadgeDot, "alpha", 0.35f, 1f).apply {
+                    duration = 900L
+                    repeatMode = android.animation.ObjectAnimator.REVERSE
+                    repeatCount = android.animation.ValueAnimator.INFINITE
+                    interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+                    start()
+                }
+            }
+            // Banner badge — solid orange pill on red (white text)
+            binding.badgeVerified.setBackgroundResource(R.drawable.bg_status_pill_orange)
             binding.badgeDot.setBackgroundResource(R.drawable.bg_status_dot_gold)
             binding.tvBadgeText.text = getString(R.string.assignment_badge_pending)
+            binding.tvBadgeText.setTextColor(ContextCompat.getColor(this, R.color.white))
         }
     }
 

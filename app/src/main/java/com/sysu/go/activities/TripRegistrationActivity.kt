@@ -3,9 +3,13 @@ package com.sysu.go.activities
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputFilter
+import android.content.res.ColorStateList
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ArrayAdapter
+import android.widget.ImageView
+import android.widget.TextView
+import com.google.android.material.button.MaterialButton
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
@@ -15,6 +19,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.sysu.go.R
 import com.sysu.go.databinding.ActivityTripRegistrationBinding
 import com.sysu.go.databinding.ItemHelperInputBinding
 import com.sysu.go.firebase.FirebaseAuthManager
@@ -83,12 +88,13 @@ class TripRegistrationActivity : AppCompatActivity() {
         currentToken = intent.getStringExtra("token")
 
         if (queueId == null && currentToken == null) {
-            AlertDialog.Builder(this)
-                .setTitle("Error")
-                .setMessage("Invalid session. Please scan QR code again.")
-                .setPositiveButton("OK") { _, _ -> finish() }
-                .setCancelable(false)
-                .show()
+            val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+            dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+            dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Error"
+            dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Invalid session. Please scan QR code again."
+            val dialog = AlertDialog.Builder(this).setView(dlgView).setCancelable(false).create()
+            dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss(); finish() }
+            dialog.show()
             return
         }
 
@@ -539,11 +545,13 @@ class TripRegistrationActivity : AppCompatActivity() {
                         if (result.code == 500 || result.code == 409) {
                             navigateToHome()
                         } else {
-                            AlertDialog.Builder(this@TripRegistrationActivity)
-                                .setTitle("Failed")
-                                .setMessage(result.message)
-                                .setPositiveButton("OK", null)
-                                .show()
+                            val dlgView2 = LayoutInflater.from(this@TripRegistrationActivity).inflate(R.layout.dialog_sysu_info, null)
+                            dlgView2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+                            dlgView2.findViewById<TextView>(R.id.tvDialogTitle).text = "Failed"
+                            dlgView2.findViewById<TextView>(R.id.tvDialogMessage).text = result.message
+                            val dialog2 = AlertDialog.Builder(this@TripRegistrationActivity).setView(dlgView2).create()
+                            dlgView2.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog2.dismiss() }
+                            dialog2.show()
                         }
                     }
                 }

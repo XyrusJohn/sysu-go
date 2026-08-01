@@ -120,6 +120,9 @@
             android:layout_weight="2"
             android:text="CONFIRM SIGNATURE"
             android:textAllCaps="true"
+            android:textColor="@color/white"
+            android:fontFamily="@font/atkinson_hyperlegible_bold"
+            android:textStyle="bold"
             android:letterSpacing="0.06"
             app:backgroundTint="@color/sysu_red"
             app:cornerRadius="@dimen/corner_radius_small" />

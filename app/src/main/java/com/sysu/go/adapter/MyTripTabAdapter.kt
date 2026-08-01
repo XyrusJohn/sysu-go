@@ -265,8 +265,8 @@ class MyTripTabAdapter(
                     )
                     binding.btnTripAction.visibility = View.VISIBLE
                     binding.btnTripAction.text = "START TRIP"
-                    binding.btnTripAction.isEnabled = !hasActiveTrip
-                    binding.btnTripAction.alpha = if (hasActiveTrip) 0.4f else 1.0f
+                    binding.btnTripAction.isEnabled = true  // always clickable — locked tap shows help dialog
+                    binding.btnTripAction.alpha = if (hasActiveTrip) 0.45f else 1.0f
                     binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
                 } else {
                     binding.tvTripStatusBadge.text = "FULLY LOADED"
@@ -292,8 +292,8 @@ class MyTripTabAdapter(
 
                 binding.btnTripAction.visibility = View.VISIBLE
                 binding.btnTripAction.text = "START TRIP"
-                binding.btnTripAction.isEnabled = !hasActiveTrip
-                binding.btnTripAction.alpha = if (hasActiveTrip) 0.4f else 1.0f
+                binding.btnTripAction.isEnabled = true  // always clickable — locked tap shows help dialog
+                binding.btnTripAction.alpha = if (hasActiveTrip) 0.45f else 1.0f
                 binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
 
                 binding.btnShowVerification.visibility = View.VISIBLE
@@ -319,14 +319,9 @@ class MyTripTabAdapter(
 
                     binding.btnTripAction.text = "START LOADING"
 
-                    if (hasActiveTrip) {
-                        // Lock: another trip is already running
-                        binding.btnTripAction.isEnabled = false
-                        binding.btnTripAction.alpha = 0.4f
-                    } else {
-                        binding.btnTripAction.isEnabled = true
-                        binding.btnTripAction.alpha = 1.0f
-                    }
+                    // Always clickable — locked tap shows help dialog explaining why
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = if (hasActiveTrip) 0.45f else 1.0f
                     binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_red)
                     binding.btnTripAction.visibility = View.VISIBLE
 
@@ -343,7 +338,7 @@ class MyTripTabAdapter(
             }
 
             binding.btnTripAction.setOnClickListener {
-                val action = when (binding.btnTripAction.text) {
+                val baseAction = when (binding.btnTripAction.text) {
                     "END TRIP", "ENDING..." -> "END_TRIP"
                     "END SHIPMENT" -> "END_SHIPMENT"
                     "START TRIP" -> "START_TRIP"
@@ -352,8 +347,16 @@ class MyTripTabAdapter(
                     "FULLY LOADED" -> "FULLY_LOADED"
                     "VERIFY WITH GUARD" -> "VERIFY_GUARD"
                     "VIEW SUMMARY" -> "VIEW_SUMMARY"
-                    "OPEN ACTIVE TRIP" -> "OPEN_ACTIVE_TRIP"
+                    "OPEN ACTIVE TRIP 🔒", "OPEN ACTIVE TRIP" -> "OPEN_ACTIVE_TRIP"
+                    "ARRIVED AT WAREHOUSE" -> "RETURNING_TO_BASE"
                     else -> "OPEN_ACTIVE_TRIP"
+                }
+                // Route locked taps to contextual help: when another trip is in
+                // transit, tapping START TRIP or START LOADING explains why it's blocked.
+                val action = if (hasActiveTrip && (baseAction == "START_TRIP" || baseAction == "START_LOADING")) {
+                    "LOCKED_HAS_ACTIVE_TRIP"
+                } else {
+                    baseAction
                 }
                 onTripActionClicked(assignment, action)
             }
@@ -376,7 +379,7 @@ class MyTripTabAdapter(
                 if (isObdLocked) {
                     android.widget.Toast.makeText(
                         ctx,
-                        "Simulan mo muna ang trip para makapag-POD",
+                        ctx.getString(R.string.obd_locked_msg),
                         android.widget.Toast.LENGTH_SHORT
                     ).show()
                     return@setOnClickListener

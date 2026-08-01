@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -13,6 +14,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -20,6 +22,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.google.android.material.button.MaterialButton
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1257,111 +1260,116 @@ class MyTripActivity : AppCompatActivity() {
 
     private fun onTripActionClicked(assignment: Assignment, action: String) {
         when (action) {
+            "LOCKED_HAS_ACTIVE_TRIP" -> {
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_alert)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.locked_has_active_trip_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.locked_has_active_trip_msg)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss() }
+                dialog.show()
+            }
             "END_TRIP", "END_SHIPMENT" -> {
-                // All PODs complete — end this single shipment and return to the card list
                 endSingleShipment(assignment.docId)
             }
             "OPEN_ACTIVE_TRIP" -> {
-                // Navigate to TransitActivity for ongoing POD work
                 launchDeliveryActivity(assignment.docId)
             }
             "START_TRIP" -> {
-                // Confirmed but no active trip — show START TRIP dialog
-                AlertDialog.Builder(this)
-                    .setTitle(R.string.confirm_start_trip_title)
-                    .setMessage(R.string.confirm_start_trip_message)
-                    .setPositiveButton(R.string.btn_start_trip) { _, _ ->
-                        confirmAndStartTrip(assignment)
-                    }
-                    .setNegativeButton(R.string.cancel, null)
-                    .show()
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_start_trip_title)
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_start_trip_message)
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = getString(R.string.btn_start_trip)
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); confirmAndStartTrip(assignment) }
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
             "START_LOADING" -> {
-                AlertDialog.Builder(this)
-                    .setTitle("Start Loading?")
-                    .setMessage("Are you sure you want to start loading shipment ${assignment.shipmentNumber}?")
-                    .setPositiveButton("Yes, Start Loading") { _, _ ->
-                        lifecycleScope.launch {
-                            try {
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update(
-                                        mapOf(
-                                            "tripStatus" to "loading",
-                                            "loadingStartedAt" to Timestamp.now()
-                                        )
-                                    )
-                                    .await()
-                                Log.d(TAG, "START_LOADING: ${assignment.docId}")
-                                loadAssignments()
-                            } catch (e: Exception) {
-                                Log.e(TAG, "START_LOADING error: ${e.message}")
-                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
-                            }
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Start Loading?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to start loading shipment ${assignment.shipmentNumber}?"
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = "Yes, Start Loading"
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                        try {
+                            db.collection("sap_assignments").document(assignment.docId)
+                                .update(mapOf("tripStatus" to "loading", "loadingStartedAt" to Timestamp.now()))
+                                .await()
+                            Log.d(TAG, "START_LOADING: ${assignment.docId}")
+                            loadAssignments()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "START_LOADING error: ${e.message}")
+                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+                    }}
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
             "FULLY_LOADED" -> {
-                AlertDialog.Builder(this)
-                    .setTitle("Fully Loaded?")
-                    .setMessage("Is shipment ${assignment.shipmentNumber} completely loaded and ready for guard verification?")
-                    .setPositiveButton("Yes, Fully Loaded") { _, _ ->
-                        lifecycleScope.launch {
-                            try {
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update(
-                                        mapOf(
-                                            "tripStatus" to "fully_loaded",
-                                            "fullyLoadedAt" to Timestamp.now()
-                                        )
-                                    )
-                                    .await()
-                                val driverId = sessionManager.getDriverId() ?: ""
-                                if (driverId.isNotBlank()) {
-                                    SocketManager.emitDriverFull(true)
-                                }
-                                Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
-                                loadAssignments()
-                            } catch (e: Exception) {
-                                Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
-                            }
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Fully Loaded?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Is shipment ${assignment.shipmentNumber} completely loaded and ready for guard verification?"
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = "Yes, Fully Loaded"
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                        try {
+                            db.collection("sap_assignments").document(assignment.docId)
+                                .update(mapOf("tripStatus" to "fully_loaded", "fullyLoadedAt" to Timestamp.now()))
+                                .await()
+                            val driverId = sessionManager.getDriverId() ?: ""
+                            if (driverId.isNotBlank()) SocketManager.emitDriverFull(true)
+                            Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
+                            loadAssignments()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+                    }}
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                dialog.show()
             }
             "CANCEL_LOADING" -> {
-                AlertDialog.Builder(this)
-                    .setTitle("Cancel Loading?")
-                    .setMessage("Revert shipment ${assignment.shipmentNumber} back to pending? This will cancel the loading process.")
-                    .setPositiveButton("Yes, Cancel") { _, _ ->
-                        lifecycleScope.launch {
-                            try {
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update(
-                                        mapOf(
-                                            "tripStatus" to FieldValue.delete(),
-                                            "loadingStartedAt" to FieldValue.delete()
-                                        )
-                                    )
-                                    .await()
-                                // Emit driver_is_full=false since driver canceled loading
-                                val driverId = sessionManager.getDriverId() ?: ""
-                                if (driverId.isNotBlank()) {
-                                    SocketManager.emitDriverFull(false)
-                                }
-                                Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
-                                loadAssignments()
-                            } catch (e: Exception) {
-                                Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                                Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
-                            }
+                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Cancel Loading?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Revert shipment ${assignment.shipmentNumber} back to pending? This will cancel the loading process."
+                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                    text = "Yes, Cancel"
+                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+                    setOnClickListener { dialog.dismiss(); lifecycleScope.launch {
+                        try {
+                            db.collection("sap_assignments").document(assignment.docId)
+                                .update(mapOf("tripStatus" to FieldValue.delete(), "loadingStartedAt" to FieldValue.delete()))
+                                .await()
+                            val driverId = sessionManager.getDriverId() ?: ""
+                            if (driverId.isNotBlank()) SocketManager.emitDriverFull(false)
+                            Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
+                            loadAssignments()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
+                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                    .setNegativeButton("Keep Loading", null)
-                    .show()
+                    }}
+                }
+                dlgView.findViewById<MaterialButton>(R.id.btnCancel).apply {
+                    text = "Keep Loading"
+                    setOnClickListener { dialog.dismiss() }
+                }
+                dialog.show()
             }
             "VERIFY_GUARD" -> {
                 // Navigate to AssignmentActivity where guard verification happens.

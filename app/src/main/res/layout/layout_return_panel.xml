@@ -114,6 +114,34 @@
                     android:textSize="@dimen/text_size_caption"
                     tools:text="Shipments 001 and 002 delivered" />
 
+                <!-- Loading indicator -->
+                <LinearLayout
+                    android:id="@+id/llLoading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:visibility="gone"
+                    tools:visibility="visible">
+
+                    <ProgressBar
+                        android:id="@+id/pbReturnLoading"
+                        style="?android:attr/progressBarStyle"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_marginEnd="8dp"
+                        android:indeterminateTint="@color/sysu_blue" />
+
+                    <TextView
+                        android:id="@+id/tvLoadingText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Updating..."
+                        android:textColor="@color/text_secondary"
+                        android:textSize="@dimen/text_size_caption" />
+                </LinearLayout>
+
                 <!-- Primary action button -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnConfirmReturn"

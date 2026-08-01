@@ -28,6 +28,7 @@ class SessionManager(context: Context) {
          *  Used by AssignmentActivity as the first approach when querying sap_assignments
          *  (many docs use queue doc ID as driverId, not Firebase UID). */
         private const val KEY_CURRENT_QUEUE_DOC_ID = "current_queue_doc_id"
+        private const val KEY_PENDING_CONFIRMED_DOC_ID = "pendingConfirmedDocId"
     }
 
     private val prefs: SharedPreferences =
@@ -37,7 +38,7 @@ class SessionManager(context: Context) {
         val parts = parseNameParts(name)
         prefs.edit {
             putString(KEY_DRIVER_ID, uid)
-            putString(KEY_DRIVER_NAME, name)
+            putString(KEY_DRIVER_NAME, Sanitizer.sanitizeDisplayName(name))
             putString(KEY_DRIVER_EMAIL, email)
             putString(KEY_DRIVER_FN, parts.first)
             putString(KEY_DRIVER_MI, parts.second)
@@ -58,7 +59,7 @@ class SessionManager(context: Context) {
     ) {
         prefs.edit {
             putString(KEY_DRIVER_ID, uid)
-            putString(KEY_DRIVER_NAME, displayName)
+            putString(KEY_DRIVER_NAME, Sanitizer.sanitizeDisplayName(displayName))
             putString(KEY_DRIVER_EMAIL, email)
             putString(KEY_DRIVER_FN, fn)
             putString(KEY_DRIVER_MI, mi)
@@ -71,7 +72,11 @@ class SessionManager(context: Context) {
 
     fun getDriverId(): String? = prefs.getString(KEY_DRIVER_ID, null)
 
-    fun getDriverName(): String = prefs.getString(KEY_DRIVER_NAME, "Unknown Driver") ?: "Unknown Driver"
+    fun getDriverName(): String {
+        val raw = prefs.getString(KEY_DRIVER_NAME, null) ?: return "Unknown Driver"
+        val clean = Sanitizer.sanitizeDisplayName(raw)
+        return clean.ifBlank { raw.ifBlank { "Unknown Driver" } }
+    }
 
     fun getDriverEmail(): String? = prefs.getString(KEY_DRIVER_EMAIL, null)
 
@@ -216,4 +221,23 @@ class SessionManager(context: Context) {
      * or null if not in queue.
      */
     fun getCurrentQueueDocId(): String? = prefs.getString(KEY_CURRENT_QUEUE_DOC_ID, null)
+
+    /**
+     * Optimistic bridge: AssignmentActivity sets this when confirmShipment succeeds,
+     * so MainActivity can optimistically update the local shipment state on resume
+     * without waiting for the Firestore snapshot to catch up (avoids ~900ms gap).
+     */
+    fun savePendingConfirmedDocId(docId: String) {
+        prefs.edit { putString(KEY_PENDING_CONFIRMED_DOC_ID, docId) }
+    }
+
+    /**
+     * Reads and clears the pending-confirmation flag. Returns the docId if one was
+     * set, or null otherwise.
+     */
+    fun consumePendingConfirmedDocId(): String? {
+        val id = prefs.getString(KEY_PENDING_CONFIRMED_DOC_ID, null)
+        if (id != null) prefs.edit { remove(KEY_PENDING_CONFIRMED_DOC_ID) }
+        return id
+    }
 }

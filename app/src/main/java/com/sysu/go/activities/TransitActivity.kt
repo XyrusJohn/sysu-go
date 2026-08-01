@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
+import android.content.res.ColorStateList
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -17,9 +18,11 @@ import android.os.Bundle
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.MenuItem
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -38,6 +41,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.android.material.button.MaterialButton
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityTransitBinding
 import com.sysu.go.network.SocketManager
@@ -247,22 +251,27 @@ class TransitActivity : AppCompatActivity() {
             Hindi kami makakapag-track ng location kung di naka-enable ito.
         """.trimIndent()
 
-        AlertDialog.Builder(this)
-            .setTitle("Enable Location")
-            .setMessage(message)
-            .setCancelable(false)
-            .setPositiveButton("Open Settings") { _, _ ->
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_alert)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Enable Location"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = message
+        val dialog = AlertDialog.Builder(this).setView(dlgView).setCancelable(false).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Open Settings"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@TransitActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss()
                 openAppSettings()
             }
-            .setNegativeButton("Cancel") { _, _ ->
-                binding.tvLocationCoords.text = "Location: Not enabled"
-                Toast.makeText(
-                    this,
-                    "Location di naka-enable — di makikita ng dispatch ang location mo",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            .show()
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss()
+            binding.tvLocationCoords.text = "Location: Not enabled"
+            Toast.makeText(
+                this,
+                "Location di naka-enable — di makikita ng dispatch ang location mo",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        dialog.show()
     }
 
     private fun openAppSettings() {
@@ -281,12 +290,18 @@ class TransitActivity : AppCompatActivity() {
             when {
                 isReturningToBase -> {
                     // Confirm before ending the return trip
-                    AlertDialog.Builder(this)
-                        .setTitle("End Trip?")
-                        .setMessage("Are you sure you want to end this trip? This cannot be undone.")
-                        .setPositiveButton("End Trip") { _, _ -> performEndTrip() }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+                    val dlgEndTrip = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                    dlgEndTrip.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+                    dlgEndTrip.findViewById<TextView>(R.id.tvDialogTitle).text = "End Trip?"
+                    dlgEndTrip.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to end this trip? This cannot be undone."
+                    val dialogEndTrip = AlertDialog.Builder(this).setView(dlgEndTrip).create()
+                    dlgEndTrip.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                        text = "End Trip"
+                        backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@TransitActivity, R.color.sysu_red))
+                        setOnClickListener { dialogEndTrip.dismiss(); performEndTrip() }
+                    }
+                    dlgEndTrip.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialogEndTrip.dismiss() }
+                    dialogEndTrip.show()
                 }
                 isTripStarted -> {
                     // Always navigate back to MainActivity. The return-to-base flow is
@@ -407,12 +422,18 @@ class TransitActivity : AppCompatActivity() {
         }
 
         // Confirm before ending
-        AlertDialog.Builder(this)
-            .setTitle("End Trip?")
-            .setMessage("Are you sure you want to end this trip? This cannot be undone.")
-            .setPositiveButton("End Trip") { _, _ -> performEndTrip() }
-            .setNegativeButton("Cancel", null)
-            .show()
+        val dlgEndTrip2 = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgEndTrip2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogTitle).text = "End Trip?"
+        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to end this trip? This cannot be undone."
+        val dialogEndTrip2 = AlertDialog.Builder(this).setView(dlgEndTrip2).create()
+        dlgEndTrip2.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "End Trip"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@TransitActivity, R.color.sysu_red))
+            setOnClickListener { dialogEndTrip2.dismiss(); performEndTrip() }
+        }
+        dlgEndTrip2.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialogEndTrip2.dismiss() }
+        dialogEndTrip2.show()
     }
 
     private fun performEndTrip() {
@@ -1205,15 +1226,16 @@ class TransitActivity : AppCompatActivity() {
     }
 
     private fun showOfflineDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Walang Internet Connection")
-            .setMessage("Ikaw ay OFFLINE na sa tracker. Maaring makita ka ng dispatch bilang OFFLINE (pula) sa kanilang mapa. Babalik ka lang sa GREEN kapag may internet ka na.")
-            .setCancelable(false)
-            .setPositiveButton("OK") { dialog, _ ->
-                isOfflineDialogShowing = false
-                dialog.dismiss()
-            }
-            .show()
+        val dlgOffline = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+        dlgOffline.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_internet)
+        dlgOffline.findViewById<TextView>(R.id.tvDialogTitle).text = "Walang Internet Connection"
+        dlgOffline.findViewById<TextView>(R.id.tvDialogMessage).text = "Ikaw ay OFFLINE na sa tracker. Maaring makita ka ng dispatch bilang OFFLINE (pula) sa kanilang mapa. Babalik ka lang sa GREEN kapag may internet ka na."
+        val dialog = AlertDialog.Builder(this).setView(dlgOffline).setCancelable(false).create()
+        dlgOffline.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener {
+            isOfflineDialogShowing = false
+            dialog.dismiss()
+        }
+        dialog.show()
     }
 
     override fun onDestroy() {

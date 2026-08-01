@@ -13,14 +13,14 @@
     <string name="cta_status_queue">ON QUEUE</string>
     <string name="cta_status_assigned">ASSIGNED</string>
     <string name="cta_status_transit">ON TRANSIT</string>
-    <string name="cta_header_scan">Ready to get started?</string>
-    <string name="cta_header_queue">You\'re in the queue!</string>
-    <string name="cta_header_assigned">Meron nang Shipment!</string>
-    <string name="cta_header_transit">Trip is Live</string>
-    <string name="cta_body_scan">Mag-scan ng QR code sa booth para makapasok sa queue.</string>
-    <string name="cta_body_queue">Nakatayo ka sa queue. Hintayin ang tawag ng booth.</string>
-    <string name="cta_body_assigned">Taposin ang lahat ng detalye. Hinandang patuloy ang trip mo.</string>
-    <string name="cta_body_transit">GPS Tracking Active. Tamang-tama ang ruta mo.</string>
+    <string name="cta_header_scan">Handa ka na bang magsimula?</string>
+    <string name="cta_header_queue">Nasa pila ka na!</string>
+    <string name="cta_header_assigned">May Shipment kana!</string>
+    <string name="cta_header_transit">Bumabiyahe ka na!</string>
+    <string name="cta_body_scan">Mag-scan ng QR code sa TV para makapasok sa queue.</string>
+    <string name="cta_body_queue">Nasa pila ka na. Hintayin ang shipment assignment.</string>
+    <string name="cta_body_assigned">Kumpletuhin ang mga detalye para tuloy-tuloy ang biyahe mo.</string>
+    <string name="cta_body_transit">GPS Tracking Active.</string>
 
     <!-- Guard Verification -->
     <string name="select_guard">Select Guard</string>
@@ -149,7 +149,7 @@
     <!-- Assignment (My Assignments) -->
     <string name="assignment_header_title">MY ASSIGNMENTS</string>
     <string name="assignment_badge_all_verified">All Verified</string>
-    <string name="assignment_badge_pending">Pending Verification</string>
+    <string name="assignment_badge_pending">PENDING VERIFICATION</string>
     <string name="guard_status_verified">Verified</string>
     <string name="guard_status_pending">Pending</string>
     <string name="assignment_departed">Departed</string>
@@ -177,6 +177,8 @@
     <string name="confirm_start_trip_message">Start trip for all confirmed shipments?</string>
     <string name="btn_start_trip">Start Trip</string>
     <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="ok">OK</string>
 
     <!-- MyTripActivity (Active Delivery Execution) -->
     <string name="my_trip_title">ACTIVE TRIP</string>
@@ -210,6 +212,22 @@
     <string name="pod_delivered_label">DELIVERED</string>
     <string name="pod_delivered_with_rejection_label">DEL. W/ REJECTION</string>
     <string name="pod_pending_label">PENDING</string>
+
+    <!-- Contextual Status Messages -->
+    <string name="locked_has_active_trip_title">Active Trip In Progress</string>
+    <string name="locked_has_active_trip_msg">May isa kang active trip. Tapusin mo muna ang lahat ng PODs at i-END SHIPMENT bago mag-start ng bagong trip.</string>
+
+    <string name="locked_other_session_title">Naka-Lock ang Shipment</string>
+    <string name="locked_other_session_msg">May isa pang driver o session ang nagtatrabaho sa shipment na ito. Hintayin mo na i-release bago mo ma-process.</string>
+
+    <string name="status_confirm_complete_loading">Tapusin and pag-load bago mag-start ng trip. I-tap ang FULLY LOADED button pag naka-sakay na lahat.</string>
+    <string name="status_need_guard_verify_title">Guard Verification Needed</string>
+    <string name="status_need_guard_verify_msg">Kailangan pa ng guard verification bago ma-confirm. Verify with guard first.</string>
+
+    <string name="obd_locked_msg">Simulan ang trip para maka pag-POD.</string>
+
+    <!-- Navbar Tutorial -->
+    <string name="nav_tutorial_shown">nav_tutorial_shown</string>
 
     <!-- Return to Base Panel -->
     <string name="return_panel_all_delivered">All deliveries complete — ready to return to base.</string>

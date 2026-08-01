@@ -16,7 +16,7 @@ object Sanitizer {
 
     fun sanitizeMI(input: String?): String {
         if (input.isNullOrBlank()) return ""
-        return input.trim().uppercase().take(1) + "." // returns "P." with dot
+        return input.trim().uppercase().take(1) // returns "P" — display layers add "."
     }
 
     fun sanitizePlatePrefix(input: String?): String {
@@ -39,5 +39,22 @@ object Sanitizer {
 
     fun sanitizeName(input: String?): String {
         return sanitize(input, 50)
+    }
+
+    /**
+     * Cleans a driver's display name for UI surface use.
+     * Repairs legacy data written before [sanitizeMI] was introduced:
+     *  - Collapses 2+ consecutive dots into a single dot ("Carlos B.. Locar" → "Carlos B. Locar").
+     *  - Squashes runs of whitespace into a single space.
+     *  - Trims leading/trailing whitespace, plus a stray trailing dot.
+     * Returns the original blank string untouched (so callers' fallbacks stay intact).
+     */
+    fun sanitizeDisplayName(input: String?): String {
+        if (input.isNullOrBlank()) return input ?: ""
+        return input
+            .replace(Regex("\\.{2,}"), ".")
+            .replace(Regex(" {2,}"), " ")
+            .trim()
+            .trimEnd { it == '.' }
     }
 }

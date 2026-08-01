@@ -8,17 +8,23 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.content.res.ColorStateList
+import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.appcompat.app.AlertDialog
+import com.google.android.material.button.MaterialButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import android.content.SharedPreferences
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityProfileBinding
 import com.sysu.go.firebase.FirebaseAuthManager
@@ -34,6 +40,9 @@ class ProfileActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityProfileBinding
     private val db = FirebaseFirestore.getInstance()
+    private val prefs: SharedPreferences by lazy {
+        getSharedPreferences("go_prefs", MODE_PRIVATE)
+    }
     private val circleAnimators = mutableListOf<Animator>()
     private val circleViews = mutableListOf<View>()
     private var driverId: String? = null
@@ -196,7 +205,7 @@ class ProfileActivity : AppCompatActivity() {
         val mi = session.getDriverMI() ?: ""
         val ln = session.getDriverLN() ?: ""
         binding.tvFullName.text = if (fn.isNotEmpty() && ln.isNotEmpty()) {
-            val miPart = if (mi.isNotEmpty()) " $mi." else ""
+            val miPart = if (mi.isNotEmpty()) " ${mi.replace(".", "")}." else ""
             "$fn$miPart $ln"
         } else {
             driverName
@@ -236,6 +245,15 @@ class ProfileActivity : AppCompatActivity() {
         // Logout button
         binding.btnLogout.setOnClickListener {
             logout()
+        }
+
+        // Tutorials toggle
+        val tutorialsEnabled = prefs.getBoolean("tutorials_enabled", true)
+        binding.switchTutorials.isChecked = tutorialsEnabled
+        binding.switchTutorials.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit()
+                    .putBoolean("tutorials_enabled", isChecked)
+                    .apply()
         }
 
         // Load active shipment count + driver status
@@ -337,13 +355,24 @@ class ProfileActivity : AppCompatActivity() {
                     val company = doc.getString("truckingCompany") ?: doc.getString("company") ?: ""
                     val phone = doc.getString("phone") ?: ""
 
-                    // Update SessionManager with fresh data from Firestore
+                    // Update SessionManager with fresh data from Firestore.
+                    // Rebuild display name from FN/MI/LN parts so we don't propagate
+                    // any legacy double-dot value that might still be in `name`.
+                    val fn = session.getDriverFN()
+                    val mi = session.getDriverMI()
+                    val ln = session.getDriverLN()
+                    val cleanName = buildString {
+                        append(fn)
+                        if (mi.isNotEmpty()) append(" ${mi.replace(".", "")}.")
+                        if (ln.isNotEmpty()) append(" $ln")
+                    }.trim().ifEmpty { session.getDriverName() }
+
                     session.saveDriverSessionWithSplit(
                         uid = uid,
-                        fn = session.getDriverFN(),
-                        mi = session.getDriverMI(),
-                        ln = session.getDriverLN(),
-                        displayName = session.getDriverName(),
+                        fn = fn,
+                        mi = mi,
+                        ln = ln,
+                        displayName = cleanName,
                         email = session.getDriverEmail() ?: "",
                         phone = if (phone.isNotEmpty()) phone else session.getDriverPhone() ?: "",
                         company = company
@@ -367,20 +396,26 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun logout() {
-        AlertDialog.Builder(this)
-            .setTitle("Logout")
-            .setMessage("Are you sure you want to sign out?")
-            .setPositiveButton("Sign Out") { _, _ ->
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Logout"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to sign out?"
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Sign Out"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@ProfileActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss()
                 FirebaseAuth.getInstance().signOut()
-                SessionManager(this).clearSession()
-                FirebaseAuthManager.signOut(this)
-                val intent = Intent(this, LoginActivity::class.java)
+                SessionManager(this@ProfileActivity).clearSession()
+                FirebaseAuthManager.signOut(this@ProfileActivity)
+                val intent = Intent(this@ProfileActivity, LoginActivity::class.java)
                 intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 startActivity(intent)
                 finish()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 
     private fun loadRequirements(reqMap: Map<String, Boolean>) {

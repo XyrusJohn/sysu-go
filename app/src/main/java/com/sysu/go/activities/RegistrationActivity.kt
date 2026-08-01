@@ -5,6 +5,10 @@ import android.os.Bundle
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
+import android.content.res.ColorStateList
+import android.view.LayoutInflater
 import android.widget.Toast
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
@@ -24,6 +28,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
+import com.google.android.material.button.MaterialButton
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityRegistrationBinding
 import com.sysu.go.firebase.FirebaseAuthManager
@@ -394,7 +399,7 @@ class RegistrationActivity : AppCompatActivity() {
         val displayName = buildString {
             append(firstName)
             if (middleInitial.isNotEmpty()) {
-                append(" $middleInitial.")
+                append(" ${middleInitial.replace(".", "")}.")
             }
             append(" $lastName")
         }.trim()
@@ -470,10 +475,12 @@ class RegistrationActivity : AppCompatActivity() {
     }
 
     private fun showError(message: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Error")
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show()
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Error"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = message
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 }

@@ -1,13 +1,18 @@
 package com.sysu.go.activities
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.widget.ImageView
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.button.MaterialButton
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.camera.core.Camera
@@ -260,17 +265,25 @@ class QRScanActivity : AppCompatActivity() {
     }
 
     private fun showErrorAndReset(message: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Scan Error")
-            .setMessage(message)
-            .setPositiveButton("Try Again") { _, _ ->
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Scan Error"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = message
+        val dialog = AlertDialog.Builder(this).setView(dlgView).setCancelable(false).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Try Again"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@QRScanActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss()
                 hasScanned = false
                 binding.tvStatus.text = getString(R.string.scan_instruction)
                 binding.progressBar.visibility = android.widget.ProgressBar.GONE
             }
-            .setNegativeButton("Cancel") { _, _ -> finish() }
-            .setCancelable(false)
-            .show()
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).apply {
+            text = "Cancel"
+            setOnClickListener { dialog.dismiss(); finish() }
+        }
+        dialog.show()
     }
 
     override fun onDestroy() {

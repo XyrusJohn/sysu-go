@@ -52,7 +52,7 @@ class GuardVerificationBottomSheet : BottomSheetDialogFragment() {
         super.onViewCreated(view, savedInstanceState)
         dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
 
-        val fullName = listOfNotNull(guardFirstName, guardMI.takeIf { it.isNotBlank() }?.let { "$it." }, guardLastName)
+        val fullName = listOfNotNull(guardFirstName, guardMI.replace(".", "").trim().takeIf { it.isNotBlank() }?.let { "$it." }, guardLastName)
             .joinToString(" ")
         binding.tvGuardFullName.text = fullName.ifBlank { "—" }
 

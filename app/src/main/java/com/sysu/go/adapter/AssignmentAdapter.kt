@@ -29,7 +29,8 @@ class AssignmentAdapter(
     private val onGuardPillTap: (Assignment) -> Unit,
     private val onObdTap: (Assignment) -> Unit,
     private val onVerificationAction: (assignment: Assignment, guardVerified: Boolean) -> Unit,
-    private val onCancelLoading: (Assignment) -> Unit
+    private val onCancelLoading: (Assignment) -> Unit,
+    private val onCancelVerification: (Assignment) -> Unit
 ) : ListAdapter<Assignment, AssignmentAdapter.AssignmentViewHolder>(AssignmentDiffCallback()) {
 
     // sessionActiveDocId is refreshed before every submitList() call so bind() always has the current value
@@ -69,6 +70,14 @@ class AssignmentAdapter(
                 } else {
                     onVerificationAction(assignment, assignment.guardVerified)
                 }
+            }
+        }
+
+        // CANCEL VERIFICATION button — reverts from VERIFY_WITH_GUARD back to loading
+        holder.itemView.findViewById<View>(R.id.btnCancelVerification)?.setOnClickListener {
+            val pos = holder.bindingAdapterPosition
+            if (pos != RecyclerView.NO_POSITION) {
+                onCancelVerification(getItem(pos))
             }
         }
 
@@ -207,8 +216,8 @@ class AssignmentAdapter(
                         binding.btnTripAction.isEnabled = true
                         binding.btnTripAction.alpha = 1f
                     } else {
-                        binding.btnTripAction.text = "VERIFY WITH GUARD"
-                        binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_amber))
+                        binding.btnTripAction.text = "GUARD VERIFICATION"
+                        binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
                         binding.btnTripAction.isEnabled = true
                         binding.btnTripAction.alpha = 1f
                     }
@@ -236,10 +245,13 @@ class AssignmentAdapter(
                 }
 
                 isLocked -> {
+                    // Button is clickable so driver can tap for explanation popup.
+                    // The locked state check is forwarded to the activity-level handler
+                    // which shows a contextual dialog explaining WHY.
                     binding.btnTripAction.text = "LOCKED"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.text_muted))
-                    binding.btnTripAction.isEnabled = false
-                    binding.btnTripAction.alpha = 0.6f
+                    binding.btnTripAction.isEnabled = true  // clickable to show help dialog
+                    binding.btnTripAction.alpha = 0.7f
                 }
 
                 else -> {
@@ -251,12 +263,12 @@ class AssignmentAdapter(
                 }
             }
 
-            // ── Bottom btnShowVerification button — separate state machine ─────────
+            // ── Bottom btnShowVerification — separate state machine ─────────────
             //
             // loading        → "CANCEL LOADING" (red outline)
             // fully_loaded/loaded + !guardVerified → "GUARD VERIFICATION" (solid red)
             // guardVerified  → "SHOW VERIFICATION"  (outline red, read-only)
-            // pending        → GONE (no verification needed yet)
+            // pending        → GONE
             //
             when {
                 assignment.isLoading -> {
@@ -269,7 +281,9 @@ class AssignmentAdapter(
                     binding.btnShowVerification.alpha = 1f
                     binding.btnShowVerification.visibility = View.VISIBLE
                 }
-                !assignment.guardVerified && (assignment.isFullyLoaded || assignment.isLoaded) -> {
+                !assignment.guardVerified && assignment.isLoaded && !assignment.isFullyLoaded -> {
+                    // Guard needed + loaded but NOT fully_loaded → show here since
+                    // btnTripAction still says "START LOADING" at this stage
                     binding.btnShowVerification.text = "GUARD VERIFICATION"
                     binding.btnShowVerification.setBackgroundColor(
                         ContextCompat.getColor(ctx, R.color.sysu_red)
@@ -281,6 +295,10 @@ class AssignmentAdapter(
                     binding.btnShowVerification.alpha = 1f
                     binding.btnShowVerification.strokeWidth = 0
                     binding.btnShowVerification.visibility = View.VISIBLE
+                }
+                assignment.isFullyLoaded && !assignment.guardVerified -> {
+                    // btnTripAction already shows "GUARD VERIFICATION" here → hide duplicate
+                    binding.btnShowVerification.visibility = View.GONE
                 }
                 assignment.guardVerified -> {
                     binding.btnShowVerification.text = "SHOW VERIFICATION"
@@ -297,15 +315,29 @@ class AssignmentAdapter(
                 }
             }
 
-            // Click listener — fires for any enabled, non-locked, non-completed state
+            // ── Bottom btnCancelVerification — reverts fully_loaded → loading ───────
+            //
+            // fully_loaded + !guardVerified → "CANCEL VERIFICATION" (red outline)
+            // else                          → GONE
+            //
+            if (assignment.isFullyLoaded && !assignment.guardVerified) {
+                binding.btnCancelVerification.text = "CANCEL VERIFICATION"
+                binding.btnCancelVerification.visibility = View.VISIBLE
+                binding.btnCancelVerification.isEnabled = true
+                binding.btnCancelVerification.alpha = 1f
+            } else {
+                binding.btnCancelVerification.visibility = View.GONE
+            }
+
+            // Click listener — fires for any clickable state (including LOCKED,
+            // which triggers the activity-level dialog explaining why it's blocked)
             binding.btnTripAction.setOnClickListener {
-                val isClickable = !isLocked && !assignment.isCompleted && binding.btnTripAction.isEnabled
-                if (isClickable) {
-                    android.util.Log.d("AssignmentAdapter", "TAP: btnTripAction → calling onTripActionClick for ${assignment.docId} state=${assignment.tripStatus}")
-                    onTripActionClick(assignment)
-                } else {
-                    android.util.Log.d("AssignmentAdapter", "TAP BLOCKED: isLocked=$isLocked isCompleted=${assignment.isCompleted} enabled=${binding.btnTripAction.isEnabled}")
+                if (assignment.isCompleted) {
+                    android.util.Log.d("AssignmentAdapter", "TAP BLOCKED: isCompleted=true")
+                    return@setOnClickListener
                 }
+                android.util.Log.d("AssignmentAdapter", "TAP: btnTripAction → calling onTripActionClick for ${assignment.docId} state=${assignment.tripStatus}")
+                onTripActionClick(assignment)
             }
         }
     }

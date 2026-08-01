@@ -15,11 +15,14 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.MetricAffectingSpan
 import android.util.Patterns
 import android.widget.*
+import android.view.LayoutInflater
 import android.view.WindowManager
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
+import com.google.android.material.button.MaterialButton
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -287,12 +290,20 @@ class LoginActivity : AppCompatActivity() {
                         return@launch
                     }
 
+                    // Rebuild clean display name from parts — Firestore "name" may
+                    // still carry old double-dot MI from before the sanitizer fix.
+                    val cleanName = buildString {
+                        append(storedFN)
+                        if (storedMI.isNotEmpty()) append(" ${storedMI.replace(".", "")}.")
+                        if (storedLN.isNotEmpty()) append(" $storedLN")
+                    }.trim().ifEmpty { storedName }
+
                     SessionManager(this@LoginActivity).saveDriverSessionWithSplit(
                         uid = uid,
                         fn = storedFN,
                         mi = storedMI,
                         ln = storedLN,
-                        displayName = storedName,
+                        displayName = cleanName,
                         email = email,
                         phone = storedPhone
                     )
@@ -331,10 +342,12 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun showError(message: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Login Error")
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show()
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Login Error"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = message
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 }

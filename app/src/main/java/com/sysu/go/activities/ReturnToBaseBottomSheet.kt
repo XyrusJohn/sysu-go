@@ -100,13 +100,11 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun bindConfirmButton() {
         binding.btnConfirmReturn.setOnClickListener {
             when {
-                // ARRIVED AT WAREHOUSE — first tap: show inline confirm step
+                // ARRIVED AT BASE — first tap: save arrival state then show confirm step
                 isAlreadyReturning && !awaitingWarehouseConfirm -> {
-                    awaitingWarehouseConfirm = true
-                    bindPanelContent()
-                    bindConfirmButton() // rebind to new state
+                    performArrivedAtBase()
                 }
-                // ARRIVED AT WAREHOUSE — confirm step: complete all remaining shipments
+                // ARRIVED AT BASE — confirm step: complete all remaining shipments
                 isAlreadyReturning && awaitingWarehouseConfirm -> {
                     performConfirmArrival()
                 }
@@ -146,7 +144,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         binding.tvPanelTitle.text = "Returning to Base"
         binding.tvPanelSubtitle.text = "You are heading back to the warehouse."
         binding.tvDeliveredSummary.visibility = View.GONE
-        binding.btnConfirmReturn.text = "ARRIVED AT WAREHOUSE"
+        binding.btnConfirmReturn.text = "ARRIVED AT BASE"
         binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
             requireContext(), R.color.sysu_blue
         )
@@ -172,32 +170,91 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             dismiss(); return
         }
 
-        binding.btnConfirmReturn.isEnabled = false
-        binding.btnConfirmReturn.text = "UPDATING..."
+        showLoading("Saving return status...")
 
+        val now = Timestamp.now()
         val updates = mapOf(
             "tripStatus" to "returning_to_base",
-            "returnedToBaseAt" to Timestamp.now()
+            "returnedToBaseAt" to now
         )
         lifecycleScope.launch {
             try {
+                // Update sap_assignments
                 db.collection("sap_assignments").document(docId)
                     .update(updates)
                     .await()
+
+                // Also save return status to drivers collection for live monitoring
+                val driverId = sessionManager.getDriverId()
+                if (driverId != null) {
+                    db.collection("drivers").document(driverId)
+                        .update(mapOf(
+                            "returnStatus" to "returning_to_base",
+                            "returnedToBaseAt" to now
+                        ))
+                        .await()
+                }
+
                 Log.d(TAG, "performStartReturning: $docId → returning_to_base")
                 dismiss()
-            } catch (e: FirebaseFirestoreException) {
+            } catch (e: Exception) {
                 Log.e(TAG, "performStartReturning error: ${e.message}")
+                hideLoading()
                 Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
                 binding.btnConfirmReturn.isEnabled = true
-                binding.btnConfirmReturn.text = getString(R.string.btn_start_returning_to_base)
+                binding.btnConfirmReturn.text = "START RETURNING TO BASE"
             }
         }
     }
 
     /**
-     * ARRIVED AT WAREHOUSE confirm step — updates ALL non-completed shipments
-     * to tripStatus="completed" then navigates to AssignmentActivity.
+     * Step 2: ARRIVED AT BASE — saves arrival state to drivers collection
+     * and then reveals the inline confirmation step.
+     */
+    private fun performArrivedAtBase() {
+        showLoading("Confirming arrival...")
+
+        val now = Timestamp.now()
+        lifecycleScope.launch {
+            try {
+                // Save arrival state to drivers collection
+                val driverId = sessionManager.getDriverId()
+                if (driverId != null) {
+                    db.collection("drivers").document(driverId)
+                        .update(mapOf(
+                            "returnStatus" to "arrived_at_base",
+                            "arrivedAtBaseAt" to now
+                        ))
+                        .await()
+                }
+
+                // Also update sap_assignments with arrival timestamp
+                val docIds = getAllDocIds()
+                for (docId in docIds) {
+                    db.collection("sap_assignments").document(docId)
+                        .update(mapOf("arrivedAtBaseAt" to now))
+                        .await()
+                }
+
+                Log.d(TAG, "performArrivedAtBase: driver + ${docIds.size} shipments updated")
+
+                hideLoading()
+                awaitingWarehouseConfirm = true
+                bindPanelContent()
+                bindConfirmButton()
+            } catch (e: Exception) {
+                Log.e(TAG, "performArrivedAtBase error: ${e.message}")
+                hideLoading()
+                Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                binding.btnConfirmReturn.isEnabled = true
+                binding.btnConfirmReturn.text = "ARRIVED AT BASE"
+            }
+        }
+    }
+
+    /**
+     * Step 3: YES, CONFIRM ARRIVAL — writes tripStatus="completed" on all
+     * non-completed shipments, releases queue, and navigates to MainActivity.
      */
     private fun performConfirmArrival() {
         val docIds = getAllDocIds()
@@ -209,12 +266,12 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         // Capture queue doc ID BEFORE clearing session — needed to update Firestore queue
         val queueDocId = sessionManager.getCurrentQueueDocId()
 
-        binding.btnConfirmReturn.isEnabled = false
-        binding.btnConfirmReturn.text = "ENDING..."
+        showLoading("Completing trip...")
 
+        val now = Timestamp.now()
         val updates = mapOf(
             "tripStatus" to "completed",
-            "completedAt" to Timestamp.now()
+            "completedAt" to now
         )
         lifecycleScope.launch {
             try {
@@ -224,6 +281,17 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         .update(updates)
                         .await()
                     Log.d(TAG, "performConfirmArrival: $docId → completed")
+                }
+
+                // Update drivers collection — trip completed
+                val driverId = sessionManager.getDriverId()
+                if (driverId != null) {
+                    db.collection("drivers").document(driverId)
+                        .update(mapOf(
+                            "returnStatus" to "completed",
+                            "completedAt" to now
+                        ))
+                        .await()
                 }
 
                 // Notify backend: truck is no longer full — all shipments done
@@ -253,16 +321,26 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 }
 
                 dismiss()
-                // Navigate back to MainActivity — no need to redirect to My Queue
-                // since the driver just returned from a completed trip.
                 startActivity(Intent(requireContext(), MainActivity::class.java))
-            } catch (e: FirebaseFirestoreException) {
+            } catch (e: Exception) {
                 Log.e(TAG, "performConfirmArrival error: ${e.message}")
+                hideLoading()
                 Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "YES, CONFIRM ARRIVAL"
             }
         }
+    }
+
+    private fun showLoading(message: String) {
+        binding.llLoading.visibility = View.VISIBLE
+        binding.tvLoadingText.text = message
+        binding.btnConfirmReturn.isEnabled = false
+    }
+
+    private fun hideLoading() {
+        binding.llLoading.visibility = View.GONE
+        binding.btnConfirmReturn.isEnabled = true
     }
 
     override fun onStart() {

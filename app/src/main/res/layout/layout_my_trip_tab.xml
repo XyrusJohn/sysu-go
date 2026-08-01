@@ -136,7 +136,7 @@
                 android:id="@+id/badgeVerified"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_transit_verified_pill"
+                android:background="@drawable/bg_status_pill_green"
                 android:gravity="center"
                 android:orientation="horizontal"
                 android:paddingHorizontal="20dp"

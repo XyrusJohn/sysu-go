@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.Manifest
 import android.util.Log
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -12,8 +13,10 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.Toast
+import com.google.android.material.button.MaterialButton
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -46,7 +49,6 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.res.ColorStateList
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
@@ -128,6 +130,8 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         private const val PREFS_NAME = "go_prefs"
         private const val KEY_QR_TUTORIAL_SEEN = "qr_tutorial_seen"
+        private const val KEY_NAV_TUTORIAL_SEEN = "nav_tutorial_seen"
+        private const val KEY_TUTORIALS_ENABLED = "tutorials_enabled"
     }
 
     private val prefs: SharedPreferences by lazy {
@@ -193,26 +197,73 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupTutorial() {
-        val hasSeenTutorial = prefs.getBoolean(KEY_QR_TUTORIAL_SEEN, false)
-        if (!hasSeenTutorial) {
-            binding.qrTutorialOverlay.visibility = View.VISIBLE
-            binding.qrTutorialOverlay.alpha = 0f
-            ObjectAnimator.ofFloat(binding.qrTutorialOverlay, "alpha", 0f, 1f).apply {
+        // Always show tutorials every app load — never skip based on "seen" flags
+        if (binding.qrTutorialOverlay.visibility == View.VISIBLE ||
+            binding.navTutorialOverlay.visibility == View.VISIBLE) return
+
+        val tutorialsEnabled = prefs.getBoolean(KEY_TUTORIALS_ENABLED, true)
+        if (!tutorialsEnabled) return
+
+        showQrTutorial { showNavTutorial() }
+    }
+
+    private fun showQrTutorial(onDismiss: () -> Unit) {
+        binding.qrTutorialOverlay.visibility = View.VISIBLE
+        binding.qrTutorialOverlay.alpha = 0f
+        binding.cbQrTutorialDontShow.isChecked = false
+        ObjectAnimator.ofFloat(binding.qrTutorialOverlay, "alpha", 0f, 1f).apply {
+            duration = 300L
+            start()
+        }
+        binding.btnGotIt.setOnClickListener {
+            val dontShowAgain = binding.cbQrTutorialDontShow.isChecked
+            if (dontShowAgain) {
+                prefs.edit()
+                    .putBoolean(KEY_TUTORIALS_ENABLED, false)
+                    .apply()
+            }
+            ObjectAnimator.ofFloat(binding.qrTutorialOverlay, "alpha", 1f, 0f).apply {
                 duration = 300L
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        binding.qrTutorialOverlay.visibility = View.GONE
+                        if (!dontShowAgain) {
+                            onDismiss()
+                        }
+                        // If "Don't show again" was checked, suppress nav tutorial too
+                    }
+                })
                 start()
             }
+        }
+    }
 
-            binding.btnGotIt.setOnClickListener {
-                prefs.edit().putBoolean(KEY_QR_TUTORIAL_SEEN, true).apply()
-                ObjectAnimator.ofFloat(binding.qrTutorialOverlay, "alpha", 1f, 0f).apply {
-                    duration = 300L
-                    addListener(object : android.animation.AnimatorListenerAdapter() {
-                        override fun onAnimationEnd(animation: android.animation.Animator) {
-                            binding.qrTutorialOverlay.visibility = View.GONE
-                        }
-                    })
-                    start()
-                }
+    private fun showNavTutorial() {
+        val tutorialsEnabled = prefs.getBoolean(KEY_TUTORIALS_ENABLED, true)
+        if (!tutorialsEnabled) return
+
+        binding.navTutorialOverlay.visibility = View.VISIBLE
+        binding.navTutorialOverlay.alpha = 0f
+        binding.cbNavTutorialDontShow.isChecked = false
+        ObjectAnimator.ofFloat(binding.navTutorialOverlay, "alpha", 0f, 1f).apply {
+            duration = 300L
+            start()
+        }
+        binding.btnNavTutorialDone.setOnClickListener {
+            val dontShowAgain = binding.cbNavTutorialDontShow.isChecked
+            if (dontShowAgain) {
+                prefs.edit()
+                    .putBoolean(KEY_TUTORIALS_ENABLED, false)
+                    .apply()
+            }
+            ObjectAnimator.ofFloat(binding.navTutorialOverlay, "alpha", 1f, 0f).apply {
+                duration = 300L
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        binding.navTutorialOverlay.visibility = View.GONE
+                    }
+                })
+                start()
             }
         }
     }
@@ -475,7 +526,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateScanButtonState() {
-        // 6-state pill: NOT ON QUEUE → QUEUE → ASSIGNED → LOADING → LOADED → IN TRANSIT
         val tripStatus = currentShipments.firstOrNull()?.tripStatus
         when {
             // ── IN TRANSIT — active trip in progress, map icon shows live tracking ──
@@ -487,6 +537,8 @@ class MainActivity : AppCompatActivity() {
                 binding.tvCTABody?.text = "Your delivery is on the way. Tap to open tracking."
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("IN TRANSIT", R.color.white, R.color.frosted_green)
             }
             // ── LOADED — verified, ready to start trip ──
             tripStatus == "loaded" -> {
@@ -498,17 +550,47 @@ class MainActivity : AppCompatActivity() {
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
                 startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("LOADED (START TRIP)", R.color.white, R.color.frosted_green)
             }
             // ── LOADING — cargo is being loaded at bay ──
-            tripStatus == "loading" || tripStatus == "fully_loaded" -> {
+            tripStatus == "loading" -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
                 binding.tvStatusPill?.text = "LOADING CARGO"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = "Loading In Progress"
                 binding.tvCTABody?.text = "Your cargo is being loaded. Stay present until fully loaded."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_amber)
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_amber_solid)
                 startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_amber)
+
+                updateReadyBadge("LOADING CARGO", R.color.white, R.color.frosted_amber)
+            }
+            // ── FULLY LOADED — guard verification needed before trip ──
+            tripStatus == "fully_loaded" -> {
+                binding.tvStatusPill?.text = "GUARD VERIFICATION"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Guard Verification Required"
+                binding.tvCTABody?.text = "Loading is complete. Verify with a guard before you can start your trip."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_red)
+
+                updateReadyBadge("GUARD VERIFICATION", R.color.white, R.color.frosted_red)
+            }
+            // ── Guard verified, awaiting driver confirmation ──
+            currentShipments.any { it.guardVerified } &&
+                !currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "GUARD VERIFIED"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Guard Verified — Confirm Shipment"
+                binding.tvCTABody?.text = "Guard has signed off. Confirm your shipment to start the trip."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("GUARD VERIFIED", R.color.white, R.color.frosted_green)
             }
             // ── All shipments verified AND confirmed — START TRIP ready ──
             currentShipments.isNotEmpty() &&
@@ -521,17 +603,21 @@ class MainActivity : AppCompatActivity() {
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
                 startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("START TRIP", R.color.white, R.color.frosted_green)
             }
             hasShipment -> {
                 // ASSIGNED — shipment assigned, guard verification happens in AssignmentActivity
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_assigned)
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_blue))
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = getString(R.string.cta_header_assigned)
                 binding.tvCTABody?.text = getString(R.string.cta_body_assigned)
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_queued)
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_blue)
                 startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
+
+                updateReadyBadge("ASSIGNED", R.color.white, R.color.frosted_blue)
             }
             isInQueue -> {
                 // IN QUEUE — waiting in queue to be called by booth
@@ -543,9 +629,11 @@ class MainActivity : AppCompatActivity() {
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_queued)
                 stopStatusDot()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
+
+                updateReadyBadge("ON QUEUE", R.color.white, R.color.frosted_gold)
             }
             else -> {
-                // NOT ON QUEUE — default scan QR to join queue
+                // NOT ON QUEUE — scan QR to join queue
                 binding.btnScanQR.setImageResource(R.drawable.qr_icon)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_scan)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_red))
@@ -554,8 +642,20 @@ class MainActivity : AppCompatActivity() {
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill)
                 startStatusDotPulse()
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot)
+
+                updateReadyBadge("READY TO SCAN", R.color.white, R.color.frosted_white)
             }
         }
+    }
+
+    private fun updateReadyBadge(text: String, dotColor: Int, bgColor: Int) {
+        binding.tvReadyBadgeText?.text = text
+        binding.readyBadgeDot?.backgroundTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, dotColor)
+        )
+        binding.readyBadge?.setCardBackgroundColor(
+            ColorStateList.valueOf(ContextCompat.getColor(this, bgColor))
+        )
     }
 
     private fun startStatusDotPulse() {
@@ -783,6 +883,8 @@ class MainActivity : AppCompatActivity() {
         registerConnectionMonitor()
         startHeartbeatMonitoring()
         updateTrackingBadge(TrackingStateMonitor.getCurrentState())
+        // Re-check tutorials — user may have re-enabled them in Profile
+        setupTutorial()
     }
 
     override fun onPause() {
@@ -1021,18 +1123,26 @@ class MainActivity : AppCompatActivity() {
                     val storedMI = doc.getString("mi") ?: ""
                     val storedLN = doc.getString("ln") ?: ""
 
+                    // Rebuild clean display name from parts — Firestore "name" field
+                    // may still carry the old double-dot MI from before the sanitizer fix.
+                    val cleanName = buildString {
+                        append(storedFN)
+                        if (storedMI.isNotEmpty()) append(" ${storedMI.replace(".", "")}.")
+                        if (storedLN.isNotEmpty()) append(" $storedLN")
+                    }.trim().ifEmpty { storedName }
+
                     session.saveDriverSessionWithSplit(
                         uid = uid,
                         fn = storedFN,
                         mi = storedMI,
                         ln = storedLN,
-                        displayName = storedName,
+                        displayName = cleanName,
                         email = storedEmail,
                         phone = storedPhone,
                         company = storedCompany
                     )
 
-                    binding.tvDriverName.text = storedName
+                    binding.tvDriverName.text = cleanName
                 }
             } catch (e: Exception) {
                 // Silently fail
@@ -1277,6 +1387,23 @@ class MainActivity : AppCompatActivity() {
         // Replace currentShipments completely — removed shipments vanish immediately
         currentShipments.clear()
         currentShipments.addAll(newShipments)
+
+        // ── Optimistic bridge: CONFIRM SHIPMENT → MainActivity live update ──────────
+        // When the user confirms a shipment in AssignmentActivity, the Firestore write
+        // (driverConfirmed=true) takes ~900ms. By the time they press back and onResume
+        // fires, the cached snapshot from addSnapshotListener still shows false.
+        // This flag bridges the gap: AssignmentActivity sets it on success,
+        // and we consume it here to optimistically mark the shipment confirmed locally
+        // until the authoritative snapshot catches up.
+        SessionManager(this).consumePendingConfirmedDocId()?.let { pendingDocId ->
+            val pendingIdx = currentShipments.indexOfFirst { it.docId == pendingDocId }
+            if (pendingIdx >= 0) {
+                val optimistic = currentShipments[pendingIdx].copy(driverConfirmed = true)
+                currentShipments[pendingIdx] = optimistic
+                Log.d(TAG, "Optimistic: forced driverConfirmed=true for docId=$pendingDocId")
+            }
+        }
+        // ── End optimistic bridge ─────────────────────────────────────────────────────
 
         // Update the static cardMyQueue with first shipment's summary
         val firstShipmentId = sapSnapshots.documents.firstOrNull()?.id
@@ -1525,27 +1652,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showOfflineDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Walang Internet Connection")
-            .setMessage("Ikaw ay OFFLINE na sa tracker. Maaring makita ka ng dispatch bilang OFFLINE (pula) sa kanilang mapa. Babalik ka lang sa GREEN kapag may internet ka na.")
-            .setCancelable(false)
-            .setPositiveButton("OK") { dialog, _ ->
-                isOfflineDialogShowing = false
-                dialog.dismiss()
-            }
-            .show()
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_info, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_internet)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Walang Internet Connection"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Ikaw ay OFFLINE na sa tracker. Maaring makita ka ng dispatch bilang OFFLINE (pula) sa kanilang mapa. Babalik ka lang sa GREEN kapag may internet ka na."
+        val dialog = AlertDialog.Builder(this).setView(dlgView).setCancelable(false).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener {
+            isOfflineDialogShowing = false
+            dialog.dismiss()
+        }
+        dialog.show()
     }
 
     // ─── Start Trip (Batch execution after all shipments confirmed) ────────────
 
     /** Shows the final confirmation dialog before starting the trip. */
     private fun showStartTripDialog() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.confirm_start_trip_title)
-            .setMessage(R.string.confirm_start_trip_message)
-            .setPositiveButton(R.string.btn_start_trip) { _, _ -> performBatchStartTrip() }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_start_trip_title)
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_start_trip_message)
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = getString(R.string.btn_start_trip)
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss(); performBatchStartTrip() }
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 
     /**
@@ -1720,14 +1854,18 @@ class MainActivity : AppCompatActivity() {
                                 startActivity(intent)
                             }
                             "START_TRIP" -> {
-                                AlertDialog.Builder(this)
-                                    .setTitle(R.string.confirm_start_trip_title)
-                                    .setMessage(getString(R.string.confirm_start_trip_message))
-                                    .setPositiveButton(R.string.btn_start_trip) { _, _ ->
-                                        startSingleShipment(assignment.docId)
-                                    }
-                                    .setNegativeButton(R.string.cancel, null)
-                                    .show()
+                                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+                                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
+                                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_start_trip_title)
+                                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_start_trip_message)
+                                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+                                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+                                    text = getString(R.string.btn_start_trip)
+                                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.sysu_red))
+                                    setOnClickListener { dialog.dismiss(); startSingleShipment(assignment.docId) }
+                                }
+                                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+                                dialog.show()
                             }
                         }
                     },
@@ -1862,21 +2000,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun logout() {
-        AlertDialog.Builder(this)
-            .setTitle("Logout")
-            .setMessage("Are you sure you want to sign out?")
-            .setPositiveButton("Sign Out") { _, _ ->
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Logout"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to sign out?"
+        val dialog = AlertDialog.Builder(this).setView(dlgView).create()
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "Sign Out"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MainActivity, R.color.sysu_red))
+            setOnClickListener { dialog.dismiss()
                 // Stop foreground service so app is no longer tracked
-                stopService(Intent(this, LocationServices::class.java))
+                stopService(Intent(this@MainActivity, LocationServices::class.java))
                 FirebaseAuth.getInstance().signOut()
-                SessionManager(this).clearSession()
-                FirebaseAuthManager.signOut(this)
-                val intent = Intent(this, LoginActivity::class.java)
+                SessionManager(this@MainActivity).clearSession()
+                FirebaseAuthManager.signOut(this@MainActivity)
+                val intent = Intent(this@MainActivity, LoginActivity::class.java)
                 intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 startActivity(intent)
                 finish()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+        dialog.show()
     }
 }

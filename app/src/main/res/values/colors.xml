@@ -63,6 +63,14 @@
     <color name="badge_top_reflection">#40FFFFFF</color>
     <color name="badge_edge_luminosity">#30FFFFFF</color>
 
+    <!-- Status-specific frosted tints — 20% opacity for readyBadge -->
+    <color name="frosted_green">#334CAF50</color>
+    <color name="frosted_red">#33C8102E</color>
+    <color name="frosted_amber">#33FF9800</color>
+    <color name="frosted_blue">#332196F3</color>
+    <color name="frosted_gold">#33F5A623</color>
+    <color name="frosted_white">#33FFFFFF</color>
+
     <!-- Status-specific frosted tints — state color at 12% opacity over glass surface -->
     <color name="badge_in_transit_bg">#1A4CAF50</color>
     <color name="badge_assigned_bg">#1AFF9800</color>
