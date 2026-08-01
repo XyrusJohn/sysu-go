@@ -19,6 +19,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.sysu.go.R
 import com.sysu.go.databinding.LayoutReturnPanelBinding
 import com.sysu.go.network.SocketManager
+import com.sysu.go.services.LocationServices
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -297,9 +298,23 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 // Notify backend: truck is no longer full — all shipments done
                 SocketManager.emitDriverFull(false)
 
-                // Clear session state
-                sessionManager.clearTripSession()
+                // Strict geo-tracking stop: same pattern as TransitActivity.performEndTrip().
+                // Flip the flag BEFORE stopService so any auto-restart of the foreground
+                // service cannot re-enable GPS. Then explicitly emit offline so the
+                // sysu-app map marker drops immediately — without this, the marker would
+                // linger on the last position because no further driver_moving is fired.
                 sessionManager.setTrackingActive(false)
+                sessionManager.clearTripSession()
+                try {
+                    val uid = sessionManager.getDriverId()
+                    SocketManager.init(requireContext())
+                    if (uid != null) {
+                        SocketManager.emitOfflineStatus(uid, sessionManager.getDriverName())
+                    }
+                    requireContext().stopService(Intent(requireContext(), LocationServices::class.java))
+                } catch (e: Exception) {
+                    Log.w(TAG, "performConfirmArrival: offline emit skipped — ${e.message}")
+                }
 
                 // Clear queue doc ID from local session — releases driver from queue lookup
                 sessionManager.saveCurrentQueueDocId(null)
