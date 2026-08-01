@@ -459,11 +459,11 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                             if (clickedItem == null) return@setOnClickListener
                             val dlgView = LayoutInflater.from(ctx).inflate(R.layout.dialog_sysu_confirmation, null)
                                 dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
-                                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Start Unloading?"
-							dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Begin unloading for $obdNumber at ${clickedItem["customerName"] as? String ?: "this location"}?"
+                                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Simulan ang Pag-Unload?"
+							dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Simulan ang pag-unload para sa $obdNumber sa ${clickedItem["customerName"] as? String ?: "lokasyong ito"}?"
 							val dialog = AlertDialog.Builder(ctx).setView(dlgView).create()
 							dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-								text = "Unload"
+								text = "I-Unload"
 								backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.sysu_red))
 								setOnClickListener { dialog.dismiss()
 									onUnloadConfirm?.invoke(clickedItem, shipmentDocId)

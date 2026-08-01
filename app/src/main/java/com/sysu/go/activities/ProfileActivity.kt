@@ -13,6 +13,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
+import com.sysu.go.utils.Sanitizer
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -214,8 +215,11 @@ class ProfileActivity : AppCompatActivity() {
         // Set phone
         binding.tvPhone.text = session.getDriverPhone() ?: "Not available"
 
-        // Set company from session (instant, no waiting for Firestore)
-        binding.tvCompany.text = session.getDriverCompany().ifEmpty { "Not set" }
+        // Set company from session (instant, no waiting for Firestore).
+        // Strip any forwarder code / truck-company number and force ALL CAPS so
+        // "001-LAZADA SHIPPING" surfaces as "LAZADA SHIPPING" only.
+        val companyDisplay = Sanitizer.sanitizeCompanyName(session.getDriverCompany())
+        binding.tvCompany.text = companyDisplay.ifEmpty { "Not set" }
 
         // Requirements section — always show. Defaults to all unchecked (false).
         // Firestore callback (loadRequirements) will merge saved values on top.
@@ -378,7 +382,7 @@ class ProfileActivity : AppCompatActivity() {
                         company = company
                     )
 
-                    binding.tvCompany.text = company.ifEmpty { "Not set" }
+                    binding.tvCompany.text = Sanitizer.sanitizeCompanyName(company).ifEmpty { "Not set" }
                     if (phone.isNotEmpty()) {
                         binding.tvPhone.text = phone
                     }

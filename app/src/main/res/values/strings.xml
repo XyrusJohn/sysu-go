@@ -1,18 +1,18 @@
-﻿<resources>
+<resources>
     <string name="app_name">Sysu Go</string>
     <string name="logout">Logout</string>
-    <string name="scan_qr">Scan QR</string>
-    <string name="my_profile">My Profile</string>
-    <string name="your_queue_position">Your Queue Position</string>
-    <string name="in_queue">In Queue</string>
-    <string name="not_in_queue">Not in Queue</string>
+    <string name="scan_qr">Mag-Scan ng QR</string>
+    <string name="my_profile">Aking Profile</string>
+    <string name="your_queue_position">Iyong Pwesto sa Pila</string>
+    <string name="in_queue">Nasa Pila</string>
+    <string name="not_in_queue">Wala sa Pila</string>
     <string name="default_web_client_id">713214426806-vrnlrj925oavprtnhe92patr7jiurfid.apps.googleusercontent.com</string>
 
     <!-- Dashboard CTA -->
-    <string name="cta_status_scan">NOT ON QUEUE</string>
-    <string name="cta_status_queue">ON QUEUE</string>
-    <string name="cta_status_assigned">ASSIGNED</string>
-    <string name="cta_status_transit">ON TRANSIT</string>
+    <string name="cta_status_scan">WALA SA PILA</string>
+    <string name="cta_status_queue">NASA PILA</string>
+    <string name="cta_status_assigned">MAY SHIPMENT NA</string>
+    <string name="cta_status_transit">BUMIBIYAHE</string>
     <string name="cta_header_scan">Handa ka na bang magsimula?</string>
     <string name="cta_header_queue">Nasa pila ka na!</string>
     <string name="cta_header_assigned">May Shipment kana!</string>
@@ -20,77 +20,75 @@
     <string name="cta_body_scan">Mag-scan ng QR code sa TV para makapasok sa queue.</string>
     <string name="cta_body_queue">Nasa pila ka na. Hintayin ang shipment assignment.</string>
     <string name="cta_body_assigned">Kumpletuhin ang mga detalye para tuloy-tuloy ang biyahe mo.</string>
-    <string name="cta_body_transit">GPS Tracking Active.</string>
+    <string name="cta_body_transit">Aktibo ang GPS Tracking.</string>
 
     <!-- Guard Verification -->
-    <string name="select_guard">Select Guard</string>
+    <string name="select_guard">Pumili ng Guard</string>
 
     <!-- Login -->
     <string name="login_driver_access">DRIVER OPERATOR ACCESS</string>
-    <string name="login_main_title">Sign Into Your\nFleet</string>
+    <string name="login_main_title">Mag-Login Sa Inyong\nFleet</string>
     <string name="login_email_label">EMAIL</string>
     <string name="login_password_label">PASSWORD</string>
-    <string name="login_access_dashboard">Access Dashboard</string>
-    <string name="login_or">OR</string>
+    <string name="login_access_dashboard">Pumunta sa Dashboard</string>
+    <string name="login_or">O</string>
     <string name="login_google_sign_in">Google Sign-In</string>
-    <string name="login_dont_have_account">Don\'t have an account? Register</string>
+    <string name="login_dont_have_account">Walang account? Mag-Register</string>
 
     <!-- Registration -->
-    <string name="register_driver_title">Driver Registration</string>
-    <string name="register_fill_required">Fill in all required field</string>
-    <string name="register_driver_details">Driver Details</string>
-    <string name="register_step_1_of_2">Step 1 of 2 - Driver Information</string>
-    <string name="register_details_label">Details</string>
-    <string name="register_confirm_label">Confirm</string>
-    <string name="register_last_name_label">Last Name</string>
-    <string name="register_last_name_hint">e.g. Dela Cruz</string>
-    <string name="register_first_name_label">First Name</string>
-    <string name="register_first_name_hint">e.g. Juan</string>
+    <string name="register_driver_title">Pagrehistro ng Driver</string>
+    <string name="register_fill_required">Punan lahat ng kinakailangan</string>
+    <string name="register_driver_details">Mga Detalye ng Driver</string>
+    <string name="register_step_1_of_2">Hakbang 1 ng 2 — Impormasyon ng Driver</string>
+    <string name="register_details_label">Mga Detalye</string>
+    <string name="register_confirm_label">Kumpirmahin</string>
+    <string name="register_last_name_label">Apelyido</string>
+    <string name="register_last_name_hint">Hal. Dela Cruz</string>
+    <string name="register_first_name_label">Pangalan</string>
+    <string name="register_first_name_hint">Hal. Juan</string>
     <string name="register_mi_label">Middle Initial</string>
-    <string name="register_mi_hint">e.g. P</string>
-    <string name="register_phone_label">Phone Number</string>
-    <string name="register_phone_hint">e.g. 09123456789</string>
+    <string name="register_mi_hint">Hal. P</string>
+    <string name="register_phone_label">Numero ng Telepono</string>
+    <string name="register_phone_hint">Hal. 09123456789</string>
     <string name="register_truck_company_label">Truck Company</string>
     <string name="register_truck_company_hint">JR&amp;R DISTRIBUTORS Inc.</string>
-    <string name="register_continue">Continue</string>
-    <string name="register_confirm">Confirm</string>
-    <string name="register_google_sign_in">Sign up with Google</string>
-    <string name="register_agree_terms">By continuing, you agree to our Terms of Service and Privacy Policy</string>
-    <string name="register_send_otp">Verify Phone</string>
-    <string name="register_otp_sent">Code sent!</string>
-    <string name="register_phone_verified">Verified</string>
-
-    <!-- Truck Companies Dropdown -->
+    <string name="register_continue">Magpatuloy</string>
+    <string name="register_confirm">Kumpirmahin</string>
+    <string name="register_google_sign_in">Mag-sign up sa Google</string>
+    <string name="register_agree_terms">Sa pagpapatuloy, sumasang-ayon ka sa aming Terms of Service at Privacy Policy</string>
+    <string name="register_send_otp">Beriikahin ang Phone</string>
+    <string name="register_otp_sent">Naipadala na ang code!</string>
+    <string name="register_phone_verified">Beripikado</string>
 
     <!-- QR Scan -->
-    <string name="scan_qr_title">Scan QR Code</string>
-    <string name="scan_instruction">Point your camera at the QR code displayed on the TV screen</string>
-    <string name="token_expired">Token expired. Please scan a new QR code.</string>
-    <string name="token_invalid">Invalid QR code. Please try again.</string>
-    <string name="already_in_queue">You are already in the queue.</string>
-    <string name="scan_failed">Scan failed. Please try again.</string>
-    <string name="camera_required">Camera permission is required to scan QR codes.</string>
+    <string name="scan_qr_title">Mag-Scan ng QR Code</string>
+    <string name="scan_instruction">Itutok ang camera sa QR code na nasa TV screen</string>
+    <string name="token_expired">Nag-expire na ang token. Mag-scan ng bagong QR code.</string>
+    <string name="token_invalid">Di-wasto ang QR code. Subukan ulit.</string>
+    <string name="already_in_queue">Nakapila ka na.</string>
+    <string name="scan_failed">Pumalya ang pag-scan. Subukan ulit.</string>
+    <string name="camera_required">Kailangan ng camera permission para mag-scan ng QR code.</string>
 
     <!-- Update Info -->
-    <string name="update_info_title">Truck Information</string>
-    <string name="helper_name">Helper Name</string>
+    <string name="update_info_title">Impormasyon ng Truck</string>
+    <string name="helper_name">Pangalan ng Helper</string>
     <string name="truck_company">Trucking Company</string>
-    <string name="truck_type">Truck Type</string>
-    <string name="plate_number">Plate Number</string>
-    <string name="submit">Submit</string>
-    <string name="join_queue_success">Driver info submitted!</string>
+    <string name="truck_type">Uri ng Truck</string>
+    <string name="plate_number">Plaka</string>
+    <string name="submit">I-submit</string>
+    <string name="join_queue_success">Naipasa ang impormasyon ng driver!</string>
 
     <!-- Trip Registration -->
-    <string name="trip_registration_title">Trip Registration</string>
-    <string name="trip_complete_your_details">Complete your trip details to proceed</string>
-    <string name="trip_confirm_label">Confirm Trip Registration</string>
-    <string name="trip_register_success">Trip registered! Proceed to loading zone.</string>
-    <string name="helper_first_name">Helper First Name</string>
+    <string name="trip_registration_title">Pagrehistro ng Biyahe</string>
+    <string name="trip_complete_your_details">Kumpletuhin ang detalye ng biyahe para makapagpatuloy</string>
+    <string name="trip_confirm_label">Kumpirmahin ang Biyahe</string>
+    <string name="trip_register_success">Nakarehistro na ang biyahe! Pumunta sa loading zone.</string>
+    <string name="helper_first_name">Pangalan ng Helper</string>
     <string name="helper_middle_initial">MI</string>
-    <string name="helper_last_name">Helper Last Name</string>
-    <string name="company">Company</string>
-    <string name="plate_prefix">Plate Prefix (e.g. ABC)</string>
-    <string name="plate_suffix">Plate Suffix (e.g. 1234)</string>
+    <string name="helper_last_name">Apelyido ng Helper</string>
+    <string name="company">Kompanya</string>
+    <string name="plate_prefix">Prefix ng Plaka (Hal. ABC)</string>
+    <string name="plate_suffix">Suffix ng Plaka (Hal. 1234)</string>
 
     <!-- Truck Types -->
     <string name="truck_type_auv">AUV</string>
@@ -99,130 +97,131 @@
     <string name="truck_type_10w">10W</string>
     <string name="truck_type_20f">20F</string>
     <string name="truck_type_40f">40F</string>
+
     <string name="login_email_hint">EMAIL.EXAMPLE@GMAIL.COM</string>
     <string name="login_password_hint">**********</string>
-    <string name="login_show_password">Show Password</string>
+    <string name="login_show_password">Ipakita ang Password</string>
 
     <!-- Cancel Queue -->
     <string name="cancel_queue">Kanselahin ang Queue</string>
-    <!-- Dialog 1: Soft confirmation -->
-    <string name="cancel_queue_title_1">Leave Queue?</string>
-    <string name="cancel_queue_msg_1">You\'ll be removed from your current position. To rejoin, you\'ll need to scan a QR code again.</string>
-    <string name="cancel_queue_btn_cancel_1">Nevermind</string>
-    <string name="cancel_queue_btn_confirm_1">Leave Queue</string>
-    <!-- Dialog 2: Final warning -->
-    <string name="cancel_queue_title_2">You\'ll Go to the Back of the Queue</string>
-    <string name="cancel_queue_msg_2">Closing the queue now means you\'ll be placed last when you return. In busy hours, this could mean a long wait.</string>
-    <string name="cancel_queue_consequence">Your current position cannot be recovered once you leave.</string>
-    <string name="cancel_queue_btn_cancel_2">Keep My Spot</string>
-    <string name="cancel_queue_btn_confirm_2">Leave Anyway</string>
+    <!-- Dialog 1 -->
+    <string name="cancel_queue_title_1">Umalis sa Pila?</string>
+    <string name="cancel_queue_msg_1">Aalisin ka sa kasalukuyan mong posisyon. Para muling makapasok, kailangan mong mag-scan ulit ng QR code.</string>
+    <string name="cancel_queue_btn_cancel_1">Wag na Lang</string>
+    <string name="cancel_queue_btn_confirm_1">Umalis sa Pila</string>
+    <!-- Dialog 2 -->
+    <string name="cancel_queue_title_2">Mapupunta Ka Sa Dulo ng Pila</string>
+    <string name="cancel_queue_msg_2">Ang pag-alis ngayon ay nangangahulugang ikaw ay mailalagay sa huli pagbalik mo. Kapag maraming oras, maaaring mahaba ang hintayan.</string>
+    <string name="cancel_queue_consequence">Hindi na maibabalik ang iyong posisyon kapag umalis ka.</string>
+    <string name="cancel_queue_btn_cancel_2">Panatilihin ang Pwesto Ko</string>
+    <string name="cancel_queue_btn_confirm_2">Umalis Parin</string>
     <!-- Outcomes -->
-    <string name="cancel_queue_success">You\'ve left the queue. Scan a QR code at the booth anytime to rejoin.</string>
-    <string name="cancel_queue_error">Couldn\'t leave the queue. Please try again.</string>
+    <string name="cancel_queue_success">Umalis ka na sa pila. Mag-scan ng QR code sa booth anumang oras para muling makabalik.</string>
+    <string name="cancel_queue_error">Hindi makaalis sa pila. Subukan muli.</string>
 
     <!-- Permission Setup -->
-    <string name="perm_setup_title">Setup Required</string>
-    <string name="perm_setup_subtitle">Grant these permissions so SYSU Go can track your trip and keep you visible to dispatch â€” even with the screen off.</string>
-    <string name="perm_step_label">Step %1$d of %2$d</string>
+    <string name="perm_setup_title">Kinakailangan ang Setup</string>
+    <string name="perm_setup_subtitle">Bigyan ng pahintulot ang SYSU Go para masubaybayan ang iyong biyahe at manatiling visible sa dispatch — kahit naka-off ang screen.</string>
+    <string name="perm_step_label">Hakbang %1$d ng %2$d</string>
 
-    <string name="perm_loc_name">Location Access</string>
-    <string name="perm_loc_desc">Required for GPS tracking and real-time dispatch visibility</string>
-    <string name="perm_loc_hint_title">ðŸ“ How to enable Location</string>
-    <string name="perm_loc_hint_body">Tap the button above â†’ Select "Allow" for both Fine and Coarse location. Fine location gives street-level accuracy.</string>
+    <string name="perm_loc_name">Pag-access ng Lokasyon</string>
+    <string name="perm_loc_desc">Kailangan para sa GPS tracking at real-time dispatch visibility</string>
+    <string name="perm_loc_hint_title">Paano i-enable ang Location</string>
+    <string name="perm_loc_hint_body">I-tap ang button sa itaas. Piliin ang "Allow" para sa Fine at Coarse location. Ang Fine location ay nagbibigay ng mas exactong lokasyon.</string>
 
-    <string name="perm_notif_name">Notifications</string>
-    <string name="perm_notif_desc">Shows a persistent "tracking active" notification while the app is running</string>
-    <string name="perm_notif_hint_title">ðŸ”” How to enable Notifications</string>
-    <string name="perm_notif_hint_body">Tap the button above â†’ Select "Allow" on the prompt. Android 13+ requires this runtime permission to show notifications.</string>
+    <string name="perm_notif_name">Mga Notipikasyon</string>
+    <string name="perm_notif_desc">Nagpapakita ng "Aktibo ang tracking" na notipikasyon habang tumatakbo ang app</string>
+    <string name="perm_notif_hint_title">Paano i-enable ng Notifications</string>
+    <string name="perm_notif_hint_body">I-tap ang button sa itas. Piliin ang "Allow" sa prompt. Kailangan ng Android 13+ ito para magpakita ng notifications.</string>
 
     <string name="perm_battery_name">Background Activity</string>
-    <string name="perm_battery_desc">Required so the app keeps running when your screen is off</string>
-    <string name="perm_battery_hint_title">âš¡ How to disable Battery Optimization</string>
-    <string name="perm_battery_hint_body">Tap the button above â†’ Select "Allow" / "Don\'t optimize" on the system dialog. This prevents Android from killing the tracking service.</string>
+    <string name="perm_battery_desc">Kailangan para patuloy na tumakbo ang app kahit naka-off ang screen</string>
+    <string name="perm_battery_hint_title">Paano i-disable ang Battery Optimization</string>
+    <string name="perm_battery_hint_body">I-tap ang button sa itas. Piliin ang "Allow" / "Don't optimize" sa system dialog. Pinipigilan nito ang Android na patayin ang tracking service.</string>
 
-    <string name="perm_enable_all">Enable All Permissions</string>
-    <string name="perm_continue">Continue to Dashboard</string>
-    <string name="perm_skip">Skip for now â€” I\'ll enable later in Settings</string>
-    <string name="perm_all_done">All Set!</string>
-    <string name="perm_redirecting">Redirecting to dashboardâ€¦</string>
+    <string name="perm_enable_all">I-Enable Lahat ng Permission</string>
+    <string name="perm_continue">Magpatuloy sa Dashboard</string>
+    <string name="perm_skip">Laktawan muna — I-enable ko na lang mamaya sa Settings</string>
+    <string name="perm_all_done">Ayos Na!</string>
+    <string name="perm_redirecting">Nag-reredirect sa dashboard...</string>
 
     <!-- Assignment (My Assignments) -->
-    <string name="assignment_header_title">MY ASSIGNMENTS</string>
-    <string name="assignment_badge_all_verified">All Verified</string>
-    <string name="assignment_badge_pending">PENDING VERIFICATION</string>
-    <string name="guard_status_verified">Verified</string>
-    <string name="guard_status_pending">Pending</string>
-    <string name="assignment_departed">Departed</string>
-    <string name="assignment_completed">Completed</string>
-    <string name="assignment_empty">No assignments yet</string>
-    <string name="assignment_empty_subtitle">Your shipments will appear here once assigned</string>
+    <string name="assignment_header_title">AKING MGA SHIPMENT</string>
+    <string name="assignment_badge_all_verified">Beripikado Lahat</string>
+    <string name="assignment_badge_pending">NILIBANGANG NG BERIPIKASYON</string>
+    <string name="guard_status_verified">Beripikado</string>
+    <string name="guard_status_pending">Nakabinbin</string>
+    <string name="assignment_departed">Lumarga</string>
+    <string name="assignment_completed">Tapos Na</string>
+    <string name="assignment_empty">Wala pang shipment</string>
+    <string name="assignment_empty_subtitle">Lalabas dito ang mga shipment mo kapag na-assign na</string>
 
     <!-- Confirm Shipment (Two-Step Trip Flow) -->
-    <string name="confirm_shipment_title">Confirm Shipment</string>
-    <string name="confirm_shipment_message">Confirm shipment %1$s? Review the details before taping Start Trip in the home screen once all shipments are ready.</string>
+    <string name="confirm_shipment_title">Kumpirmahin ang Shipment</string>
+    <string name="confirm_shipment_message">Kumpirmahin ang shipment %1$s? Tingnan ang mga detalye bago tap ang Start Trip sa home screen kapag handa na lahat ang shipments.</string>
     <string name="confirm_shipment_toast">Shipment confirmed! Ready for transit.</string>
-    <string name="btn_confirm_shipment">Confirm Shipment</string>
-    <string name="assignment_badge_all_confirmed">All Ready for Transit</string>
-    <string name="assignment_badge_confirmed_pending">Awaiting Confirmation</string>
-    <string name="btn_ready">Ready âœ“</string>
+    <string name="btn_confirm_shipment">Kumpirmahin ang Shipment</string>
+    <string name="assignment_badge_all_confirmed">Handa Na Para sa Biyahe</string>
+    <string name="assignment_badge_confirmed_pending">Naghihintay ng Kompirmasyon</string>
+    <string name="btn_ready">Ready ✓</string>
 
     <!-- MainActivity CTA transit -->
-    <string name="cta_status_ready_transit">READY FOR TRANSIT</string>
-    <string name="cta_header_ready_transit">All Shipments Ready!</string>
-    <string name="cta_body_ready_transit">Tap the map icon to start your trip.</string>
-    <string name="cta_status_start_trip">START TRIP</string>
-    <string name="cta_header_start_trip">Time to Roll!</string>
-    <string name="cta_body_start_trip">All shipments verified and confirmed. Hit Start!</string>
-    <string name="confirm_start_trip_title">Start Trip</string>
-    <string name="confirm_start_trip_message">Start trip for all confirmed shipments?</string>
-    <string name="btn_start_trip">Start Trip</string>
-    <string name="cancel">Cancel</string>
-    <string name="confirm">Confirm</string>
+    <string name="cta_status_ready_transit">HANDA NA SA BIYAHE</string>
+    <string name="cta_header_ready_transit">Handa Na Lahat ng Shipment!</string>
+    <string name="cta_body_ready_transit">I-tap ang map icon para simulan ang biyahe.</string>
+    <string name="cta_status_start_trip">SIMULAN ANG BIYAHE</string>
+    <string name="cta_header_start_trip">Panahon Na Para Umarangkada!</string>
+    <string name="cta_body_start_trip">Beripikado at kompirmado na lahat ng shipments! Hit Start!</string>
+    <string name="confirm_start_trip_title">Simulan ang Biyahe</string>
+    <string name="confirm_start_trip_message">Simulan ang biyahe para sa lahat ng kompirmadong shipments?</string>
+    <string name="btn_start_trip">Simulan ang Biyahe</string>
+    <string name="cancel">Kanselahin</string>
+    <string name="confirm">Kumpirmahin</string>
     <string name="ok">OK</string>
 
     <!-- MyTripActivity (Active Delivery Execution) -->
-    <string name="my_trip_title">ACTIVE TRIP</string>
-    <string name="my_trip_tab_title">MY TRIP</string>
-    <string name="my_trip_badge_trips_ready">TRIPS READY</string>
+    <string name="my_trip_title">AKTIBONG BIYAHE</string>
+    <string name="my_trip_tab_title">AKING BIYAHE</string>
+    <string name="my_trip_badge_trips_ready">HANDA NA ANG BIYAHE</string>
     <string name="my_trip_header_obd_items">OBD ITEMS</string>
-    <string name="my_trip_all_delivered">All items delivered!</string>
-    <string name="my_trip_finish_delivery">FINISH DELIVERY</string>
-    <string name="my_trip_finish_confirm_title">Finish Delivery?</string>
-    <string name="my_trip_finish_confirm_message">All OBD items have been processed. Confirm shipment completion?</string>
-    <string name="my_trip_empty_obd">No OBD items found for this shipment.</string>
-    <string name="my_trip_no_active_trip">No active trip found.</string>
-    <string name="my_trip_loading">Loading shipment detailsâ€¦</string>
+    <string name="my_trip_all_delivered">Na-deliver na lahat!</string>
+    <string name="my_trip_finish_delivery">TAPUSIN ANG DELIVERY</string>
+    <string name="my_trip_finish_confirm_title">Tapusin ang Delivery?</string>
+    <string name="my_trip_finish_confirm_message">Lahat ng OBD items ay naproseso na. Kumpirmahin na ang shipment?</string>
+    <string name="my_trip_empty_obd">Walang OBD items para sa shipment na ito.</string>
+    <string name="my_trip_no_active_trip">Walang aktibong biyahe.</string>
+    <string name="my_trip_loading">Kinakarga ang detalye ng shipment...</string>
 
     <!-- OBD row field labels -->
     <string name="label_volume">Volume</string>
-    <string name="label_quantity">Qty</string>
+    <string name="label_quantity">Dami</string>
 
     <!-- Per-OBD POD Status -->
-    <string name="pod_status_delivered">Delivered</string>
-    <string name="pod_status_rejected">Rejected</string>
-    <string name="pod_status_delivered_rejection">Delivered w/ Rejection</string>
-    <string name="pod_confirm_take_photo">CONFIRM &amp; TAKE PHOTO</string>
-    <string name="pod_select_status_hint">Select a delivery status to continue</string>
-    <string name="pod_photo_required">A photo is required to confirm delivery.</string>
-    <string name="pod_upload_failed">Photo upload failed. Please try again.</string>
-    <string name="pod_update_failed">Failed to update status. Please try again.</string>
-    <string name="pod_status_updated">Status updated for OBD %1$s</string>
-    <string name="pod_delivery_complete">Delivery complete! Great job.</string>
-    <string name="pod_rejected_label">REJECTED</string>
-    <string name="pod_delivered_label">DELIVERED</string>
-    <string name="pod_delivered_with_rejection_label">DEL. W/ REJECTION</string>
-    <string name="pod_pending_label">PENDING</string>
+    <string name="pod_status_delivered">Na-Deliver</string>
+    <string name="pod_status_rejected">Tinanggihan</string>
+    <string name="pod_status_delivered_rejection">Na-Deliver may Tinanggihan</string>
+    <string name="pod_confirm_take_photo">KUMPIRMAHIN AT KUNAN NG LITRATO</string>
+    <string name="pod_select_status_hint">Pumili ng delivery status para magpatuloy</string>
+    <string name="pod_photo_required">Kailangan ng litrato para makumpirma ang delivery.</string>
+    <string name="pod_upload_failed">Pumnalya ang pagka-load ng litrato. Subukan ulit.</string>
+    <string name="pod_update_failed">Pumnalya ang pag-update. Subukan ulit.</string>
+    <string name="pod_status_updated">Na-update ang status para sa OBD %1$s</string>
+    <string name="pod_delivery_complete">Tapos na ang delivery! Magandang trabaho!</string>
+    <string name="pod_rejected_label">TINANGKAYAN</string>
+    <string name="pod_delivered_label">NA-DELIVER</string>
+    <string name="pod_delivered_with_rejection_label">DELIVERED MAY TINANGKAYAN</string>
+    <string name="pod_pending_label">NAKABINBIN</string>
 
     <!-- Contextual Status Messages -->
-    <string name="locked_has_active_trip_title">Active Trip In Progress</string>
-    <string name="locked_has_active_trip_msg">May isa kang active trip. Tapusin mo muna ang lahat ng PODs at i-END SHIPMENT bago mag-start ng bagong trip.</string>
+    <string name="locked_has_active_trip_title">May Aktibong Biyahe</string>
+    <string name="locked_has_active_trip_msg">May isa kang active trip. Tapusin mo lahat ng PODs at i-END SHIPMENT bago mag-start ng bagong trip.</string>
 
     <string name="locked_other_session_title">Naka-Lock ang Shipment</string>
-    <string name="locked_other_session_msg">May isa pang driver o session ang nagtatrabaho sa shipment na ito. Hintayin mo na i-release bago mo ma-process.</string>
+    <string name="locked_other_session_msg">May ibang driver o session na nagtatrabaho sa shipment na ito. Hintayin mong ma-release bago makapag-process.</string>
 
-    <string name="status_confirm_complete_loading">Tapusin and pag-load bago mag-start ng trip. I-tap ang FULLY LOADED button pag naka-sakay na lahat.</string>
-    <string name="status_need_guard_verify_title">Guard Verification Needed</string>
-    <string name="status_need_guard_verify_msg">Kailangan pa ng guard verification bago ma-confirm. Verify with guard first.</string>
+    <string name="status_confirm_complete_loading">Tapusin ang pag-load bago mag-start ng trip. I-tap ang FULLY LOADED button pagka-sampay na lahat.</string>
+    <string name="status_need_guard_verify_title">Kailangan ng Guard Verification</string>
+    <string name="status_need_guard_verify_msg">Kailangan pa ng guard verification bago ma-confirm. Mag-verify muna sa guard.</string>
 
     <string name="obd_locked_msg">Simulan ang trip para maka pag-POD.</string>
 
@@ -230,6 +229,6 @@
     <string name="nav_tutorial_shown">nav_tutorial_shown</string>
 
     <!-- Return to Base Panel -->
-    <string name="return_panel_all_delivered">All deliveries complete — ready to return to base.</string>
-    <string name="btn_start_returning_to_base">START RETURNING TO BASE</string>
+    <string name="return_panel_all_delivered">Na-deliver na lahat — handa nang bumalik sa base.</string>
+    <string name="btn_start_returning_to_base">SIMULAN ANG PAGBALIK SA BASE</string>
 </resources>

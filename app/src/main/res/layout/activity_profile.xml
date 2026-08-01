@@ -368,7 +368,10 @@
                             android:layout_marginTop="3dp"
                             android:textColor="@color/text_primary"
                             android:textSize="@dimen/text_size_label"
-                            android:fontFamily="@font/atkinson_hyperlegible_regular" />
+                            android:textAllCaps="true"
+                            android:textStyle="bold"
+                            android:fontFamily="@font/atkinson_hyperlegible_bold"
+                            android:letterSpacing="0.05" />
                     </LinearLayout>
 
                     <!-- Customer Requirements — shown below company -->

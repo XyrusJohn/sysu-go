@@ -166,7 +166,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun performStartReturning() {
         val docId = getFirstDocId()
         if (docId.isNullOrBlank()) {
-            Toast.makeText(requireContext(), "No active trip found.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Walang aktibong biyahe.", Toast.LENGTH_SHORT).show()
             dismiss(); return
         }
 
@@ -200,7 +200,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performStartReturning error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "START RETURNING TO BASE"
             }
@@ -245,7 +245,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performArrivedAtBase error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "ARRIVED AT BASE"
             }
@@ -259,7 +259,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun performConfirmArrival() {
         val docIds = getAllDocIds()
         if (docIds.isEmpty()) {
-            Toast.makeText(requireContext(), "No active trip found.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Walang aktibong biyahe.", Toast.LENGTH_SHORT).show()
             dismiss(); return
         }
 
@@ -325,7 +325,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performConfirmArrival error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "YES, CONFIRM ARRIVAL"
             }

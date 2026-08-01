@@ -62,7 +62,7 @@ class SignaturePadBottomSheet : BottomSheetDialogFragment() {
 
         binding.btnConfirm.setOnClickListener {
             if (binding.signaturePad.isEmpty()) {
-                Toast.makeText(requireContext(), "Please draw your signature", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Paki-drawing ang iyong pirma", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val base64 = binding.signaturePad.getSignatureBase64()
@@ -70,7 +70,7 @@ class SignaturePadBottomSheet : BottomSheetDialogFragment() {
                 onSignatureConfirmed?.invoke(base64)
                 dismiss()
             } else {
-                Toast.makeText(requireContext(), "Failed to capture signature. Try again.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Pumalya ang pag-save ng signature. Subukan ulit.", Toast.LENGTH_SHORT).show()
             }
         }
     }

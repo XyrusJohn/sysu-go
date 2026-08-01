@@ -175,7 +175,7 @@ class AssignmentActivity : AppCompatActivity() {
                             Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
                         } catch (e: Exception) {
                             Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                            Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -222,7 +222,7 @@ class AssignmentActivity : AppCompatActivity() {
 
             // ── Existing terminal/active states ───────────────────────────────
             assignment.isCompleted -> {
-                Toast.makeText(this, "This trip has already been completed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Tapos na ang biyahe na ito", Toast.LENGTH_SHORT).show()
             }
 
             assignment.isInTransit -> {
@@ -231,7 +231,7 @@ class AssignmentActivity : AppCompatActivity() {
 
             assignment.driverConfirmed -> {
                 android.util.Log.d(TAG, " → driverConfirmed branch: showing toast")
-                Toast.makeText(this, "Shipment is READY. Waiting to start trip.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Handa na ang shipment. Naghihintay mag-start ng biyahe.", Toast.LENGTH_SHORT).show()
             }
 
             assignment.canConfirmTrip -> {
@@ -289,7 +289,7 @@ class AssignmentActivity : AppCompatActivity() {
                             Log.d(TAG, "START_LOADING: ${assignment.docId}")
                         } catch (e: Exception) {
                             Log.e(TAG, "START_LOADING error: ${e.message}")
-                            Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -328,7 +328,7 @@ class AssignmentActivity : AppCompatActivity() {
                     Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
                 } catch (e: Exception) {
                     Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                    Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 }
             }}
         }
@@ -371,7 +371,7 @@ class AssignmentActivity : AppCompatActivity() {
                     Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading")
                 } catch (e: Exception) {
                     Log.e(TAG, "CANCEL_VERIFICATION error: ${e.message}")
-                    Toast.makeText(this@AssignmentActivity, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 }
             }}
         }
@@ -398,7 +398,7 @@ class AssignmentActivity : AppCompatActivity() {
             val repo = SecurityGuardRepository(this@AssignmentActivity)
             val guards = repo.refreshGuards().ifEmpty { repo.getCachedGuards() }
             if (guards.isEmpty()) {
-                Toast.makeText(this@AssignmentActivity, "No guards available", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@AssignmentActivity, "Walang available na guard", Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
@@ -521,7 +521,7 @@ class AssignmentActivity : AppCompatActivity() {
                     .await()
 
                 if (!docSnap.exists()) {
-                    Toast.makeText(this@AssignmentActivity, "Verification data not found", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@AssignmentActivity, "Hindi makita ang data ng beripikasyon", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
 
@@ -544,7 +544,7 @@ class AssignmentActivity : AppCompatActivity() {
                 }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
             } catch (e: Exception) {
                 Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
-                Toast.makeText(this@AssignmentActivity, "Failed to load verification details", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@AssignmentActivity, "Hindi ma-load ang detalye ng beripikasyon", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -749,7 +749,7 @@ class AssignmentActivity : AppCompatActivity() {
      */
     private fun openObdBottomSheet(assignment: Assignment) {
         if (assignment.lineItems.isEmpty()) {
-            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang available na OBD items", Toast.LENGTH_SHORT).show()
             return
         }
 

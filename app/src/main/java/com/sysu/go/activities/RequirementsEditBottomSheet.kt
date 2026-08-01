@@ -70,7 +70,7 @@ class RequirementsEditBottomSheet : BottomSheetDialogFragment() {
     private fun saveRequirements() {
         val id = driverId
         if (id == null) {
-            Toast.makeText(requireContext(), "Driver ID not found", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Hindi makita ang Driver ID", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -84,13 +84,13 @@ class RequirementsEditBottomSheet : BottomSheetDialogFragment() {
         firestore.collection("drivers").document(id)
             .update(updates)
             .addOnSuccessListener {
-                Toast.makeText(requireContext(), "Requirements saved", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Na-save ang requirements", Toast.LENGTH_SHORT).show()
                 dismiss()
             }
             .addOnFailureListener {
                 binding.btnSave.isEnabled = true
                 binding.btnSave.text = "Save"
-                Toast.makeText(requireContext(), "Failed to save", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "Hindi ma-save", Toast.LENGTH_SHORT).show()
             }
     }
 

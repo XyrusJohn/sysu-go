@@ -110,6 +110,16 @@ class LocationServices : Service() {
         lastKnownLat = lat
         lastKnownLng = lng
 
+        // STRICT GEOFENCE GUARD: re-validate tracking flag on every GPS callback.
+        // Catches the case where the trip ended (returning_to_base / completed) but
+        // the service was already in the middle of dispatching a callback.
+        // Without this check we'd get one stray emit between trip end and the
+        // removeLocationUpdates() call, polluting the sysu-app map.
+        if (!sessionManager.isTrackingActive()) {
+            Log.w(TAG, "[STRICT] handleLocation called but tracking_active=FALSE — dropping emit")
+            return
+        }
+
         val currentTime = System.currentTimeMillis()
 
         // Throttle: emit at most every 5 seconds during transit
@@ -239,8 +249,11 @@ class LocationServices : Service() {
             SocketManager.connect(this)
         }
 
-        // Strict GPS gating: only start location updates when TransitActivity has
+        // STRICT GEOFENCE: only start location updates when TransitActivity has
         // explicitly set tracking_active=true (i.e. driver clicked "Start Trip").
+        // The double-guard in handleLocation() guarantees no emit can leak past
+        // a transition that flipped tracking_active=false (returning_to_base,
+        // completed) before the system de-registers the callback.
         // When the app starts from MainActivity (no trip active), tracking is OFF —
         // the service runs as a foreground service (notification stays alive,
         // socket stays online) but does NOT emit driver_moving.
@@ -283,8 +296,8 @@ class LocationServices : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SYSU Tracking Active")
-            .setContentText("Sharing your location with dispatch")
+            .setContentTitle("Aktibo ang SYSU Tracking")
+            .setContentText("Ipinapadala ang iyong lokasyon sa dispatch")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

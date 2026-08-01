@@ -359,13 +359,13 @@ class TransitActivity : AppCompatActivity() {
 
     private fun startTrip() {
         if (currentSapDocId.isBlank()) {
-            Toast.makeText(this, "Trip data not loaded yet. Try again.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Hindi pa na-load ang data ng biyahe. Subukan ulit.", Toast.LENGTH_SHORT).show()
             Log.w(TAG, "startTrip called but currentSapDocId is blank — loadTripData may have returned zero docs")
             return
         }
 
         binding.btnStartTrip.isEnabled = false
-        binding.btnStartTrip.text = "TRIP IN PROGRESS..."
+        binding.btnStartTrip.text = "NASIMULAN ANG BIYAHE..."
 
         // Save to session SYNCHRONOUSLY before Firestore call.
         // If app is killed between here and the Firestore update completing,
@@ -410,25 +410,25 @@ class TransitActivity : AppCompatActivity() {
                 if (isFinishing) return@addOnFailureListener
                 Log.e(TAG, "Failed to start trip: ${e.message}")
                 binding.btnStartTrip.isEnabled = true
-                binding.btnStartTrip.text = "START TRIP"
-                Toast.makeText(this, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+                binding.btnStartTrip.text = getString(R.string.btn_start_trip)
+                Toast.makeText(this, "Hindi masimulan ang biyahe. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
             }
     }
 
     private fun endTrip() {
         if (currentSapDocId.isBlank()) {
-            Toast.makeText(this, "No active trip to end.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang aktibong biyahe na matatapos.", Toast.LENGTH_SHORT).show()
             return
         }
 
         // Confirm before ending
         val dlgEndTrip2 = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
         dlgEndTrip2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
-        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogTitle).text = "End Trip?"
-        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to end this trip? This cannot be undone."
+        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogTitle).text = "Tapusin ang Biyahe?"
+        dlgEndTrip2.findViewById<TextView>(R.id.tvDialogMessage).text = "Sigurado ka bang gusto mong tapusin ang biyaheng ito? Hindi na ito maaaring ibalik."
         val dialogEndTrip2 = AlertDialog.Builder(this).setView(dlgEndTrip2).create()
         dlgEndTrip2.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-            text = "End Trip"
+            text = "Tapusin ang Biyahe"
             backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@TransitActivity, R.color.sysu_red))
             setOnClickListener { dialogEndTrip2.dismiss(); performEndTrip() }
         }
@@ -438,7 +438,7 @@ class TransitActivity : AppCompatActivity() {
 
     private fun performEndTrip() {
         if (currentSapDocId.isBlank()) {
-            Toast.makeText(this, "No active trip to end.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang aktibong biyahe na matatapos.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -448,13 +448,13 @@ class TransitActivity : AppCompatActivity() {
         if (!isPodCompleteForAll) {
             binding.btnStartTrip.isEnabled = true
             binding.btnStartTrip.text = "BACK TO HOME"
-            Toast.makeText(this, "Complete all OBD items first before ending trip.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Tapusin ang lahat ng OBD items bago tapusin ang biyahe.", Toast.LENGTH_LONG).show()
             Log.w(TAG, "[performEndTrip] BLOCKED — not all PODs are complete. isPodCompleteForAll=$isPodCompleteForAll")
             return
         }
 
         binding.btnStartTrip.isEnabled = false
-        binding.btnStartTrip.text = "ENDING..."
+        binding.btnStartTrip.text = "TINATAPOS..."
 
         val updates = mapOf(
             "tripStatus" to "completed",
@@ -487,13 +487,13 @@ class TransitActivity : AppCompatActivity() {
 
                 stopLocationUpdates()
                 if (isFinishing) return@addOnSuccessListener
-                binding.btnStartTrip.text = "START TRIP"
+                binding.btnStartTrip.text = getString(R.string.btn_start_trip)
                 binding.btnStartTrip.setBackgroundTintList(
                     ContextCompat.getColorStateList(this@TransitActivity, R.color.sysu_red)
                 )
                 binding.btnStartTrip.isEnabled = true
                 updateProgressStepper()
-                Toast.makeText(this, "Trip completed!", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Tapos na ang biyahe!", Toast.LENGTH_LONG).show()
                 Log.d(TAG, "Trip ended successfully")
             }
             .addOnFailureListener { e ->
@@ -501,13 +501,13 @@ class TransitActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to end trip: ${e.message}")
                 binding.btnStartTrip.text = "BACK TO HOME"
                 binding.btnStartTrip.isEnabled = true
-                Toast.makeText(this, "Failed to end trip. Try again.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Hindi matapos ang biyahe. Subukan ulit.", Toast.LENGTH_SHORT).show()
             }
     }
 
     private fun transitionToReturningToBase() {
         if (currentSapDocId.isBlank()) {
-            Toast.makeText(this, "No active trip.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang aktibong biyahe.", Toast.LENGTH_SHORT).show()
             return
         }
         binding.btnStartTrip.isEnabled = false
@@ -525,14 +525,31 @@ class TransitActivity : AppCompatActivity() {
                 isTripStarted = false
                 isPodCompleteForAll = false  // reset for cleanliness
                 updateProgressStepper()
-                Toast.makeText(this, "Heading back to base!", Toast.LENGTH_SHORT).show()
+
+                // Driver has arrived at the warehouse — STRICT geo-tracking stop.
+                // Same pattern used by performEndTrip(): flip the tracked flag
+                // BEFORE stopService so the service cannot restart with tracking on.
+                sessionManager.setTrackingActive(false)
+                stopService(Intent(this, LocationServices::class.java))
+                TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
+
+                // Emit offline so the sysu-app map marker drops immediately
+                SocketManager.init(this)
+                val uid = FirebaseAuth.getInstance().currentUser?.uid
+                if (uid != null) {
+                    SocketManager.emitOfflineStatus(uid, sessionManager.getDriverName())
+                }
+                stopLocationUpdates()
+
+                Toast.makeText(this, "Bumabalik sa base!", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "[RETURN TO BASE] Geo tracking STOPPED — driver arrived at warehouse")
             }
             .addOnFailureListener { e ->
                 if (isFinishing) return@addOnFailureListener
                 Log.e(TAG, "Failed to transition to returning_to_base: ${e.message}")
                 binding.btnStartTrip.isEnabled = true
-                binding.btnStartTrip.text = "START RETURNING TO BASE"
-                Toast.makeText(this, "Failed. Check connection.", Toast.LENGTH_SHORT).show()
+                binding.btnStartTrip.text = getString(R.string.btn_start_returning_to_base)
+                Toast.makeText(this, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
             }
     }
 

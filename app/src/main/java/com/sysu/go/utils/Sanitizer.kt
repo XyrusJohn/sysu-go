@@ -57,4 +57,31 @@ object Sanitizer {
             .trim()
             .trimEnd { it == '.' }
     }
+
+    /**
+     * Strips forwarder codes, truck company numbers, and ID-style prefixes from a
+     * trucking company name so only the human-readable company name remains.
+     *
+     * Normalizes:
+     *   "001-LAZADA SHIPPING COMPANY" → "LAZADA SHIPPING COMPANY"
+     *   "045—ABC FORWARDERS Inc"      → "ABC FORWARDERS INC"
+     *   "JR&R DISTRIBUTORS Inc."     → "JR&R DISTRIBUTORS INC"
+     *   "12345 - ACME LOGISTICS"      → "ACME LOGISTICS"
+     *
+     * Strategy:
+     *   1. If the value starts with a digit sequence (with optional whitespace/dash),
+     *      strip that prefix.
+     *   2. Uppercase the result.
+     *   3. Trim whitespace and trailing dots/dashes.
+     */
+    fun sanitizeCompanyName(input: String?): String {
+        if (input.isNullOrBlank()) return ""
+        return input
+            .replace(Regex("""^\d+\s*[-—–]+\s*"""), "")  // strip "001-" / "045 — " prefix
+            .replace(Regex("""^\d+\s+"""), "")            // strip raw "12345 ACME"
+            .trim()
+            .trimEnd { it == '.' || it == '-' || it == '—' }
+            .uppercase()
+            .ifBlank { input.trim().uppercase() }          // fallback: still uppercase
+    }
 }

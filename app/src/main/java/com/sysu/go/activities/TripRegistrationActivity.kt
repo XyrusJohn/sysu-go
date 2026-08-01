@@ -305,7 +305,7 @@ class TripRegistrationActivity : AppCompatActivity() {
                 helperBindings.remove(helperBinding)
                 updateHelperLabels()
             } else {
-                Toast.makeText(this, "At least one helper is required", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Kailangan ng at least isang helper", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -439,7 +439,7 @@ class TripRegistrationActivity : AppCompatActivity() {
         }
 
         if (hasError) {
-            Toast.makeText(this, "Please fix errors", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Paki-ayos ang mga error", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -449,7 +449,7 @@ class TripRegistrationActivity : AppCompatActivity() {
             val idToken = FirebaseAuthManager.getIdToken()
             if (idToken == null) {
                 setLoading(false)
-                Toast.makeText(this@TripRegistrationActivity, "Auth session expired", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@TripRegistrationActivity, "Nag-expire ang auth session", Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
@@ -538,7 +538,7 @@ class TripRegistrationActivity : AppCompatActivity() {
 
                 when (result) {
                     is TripApiService.Result.Success -> {
-                        Toast.makeText(this@TripRegistrationActivity, "Trip Registered!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@TripRegistrationActivity, "Nakarehistro na ang biyahe!", Toast.LENGTH_SHORT).show()
                         navigateToHome()
                     }
                     is TripApiService.Result.Error -> {
@@ -557,7 +557,7 @@ class TripRegistrationActivity : AppCompatActivity() {
                 }
             } else {
                 setLoading(false)
-                Toast.makeText(this@TripRegistrationActivity, "Could not identify queue entry", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@TripRegistrationActivity, "Hindi makita ang queue entry", Toast.LENGTH_LONG).show()
             }
         }
     }

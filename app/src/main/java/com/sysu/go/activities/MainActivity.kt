@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.Toast
+import com.sysu.go.utils.Sanitizer
 import com.google.android.material.button.MaterialButton
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -184,7 +185,7 @@ class MainActivity : AppCompatActivity() {
         // Request notification permission (Android 13+) first, then start service in callback.
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
 
-        android.widget.Toast.makeText(this, "Welcome Driver! Tap the QR button below to scan and join the queue.", android.widget.Toast.LENGTH_LONG).show()
+        android.widget.Toast.makeText(this, "Maligayang pagdating, driver! I-tap ang QR button sa ibaba para mag-scan at makapasok sa pila.", android.widget.Toast.LENGTH_LONG).show()
 
         loadDriverInfo()
         setupUI()
@@ -862,7 +863,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openQueueDetails() {
         if (currentQueueEntries.isEmpty() && currentShipments.isEmpty()) {
-            Toast.makeText(this, "You are not in the queue yet. Scan a QR code to join.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Wala ka pa sa pila. Mag-scan ng QR code para makapasok.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1117,7 +1118,7 @@ class MainActivity : AppCompatActivity() {
                     val storedName = doc.getString("name") ?: session.getDriverName()
                     val storedEmail = session.getDriverEmail() ?: ""
                     val storedPhone = doc.getString("phone") ?: ""
-                    val storedCompany = doc.getString("truckingCompany") ?: ""
+                    val storedCompany = Sanitizer.sanitizeCompanyName(doc.getString("truckingCompany") ?: "")
 
                     val storedFN = doc.getString("fn") ?: ""
                     val storedMI = doc.getString("mi") ?: ""
@@ -1689,7 +1690,7 @@ class MainActivity : AppCompatActivity() {
     private fun performBatchStartTrip() {
         val confirmed = currentShipments.filter { it.guardVerified && it.driverConfirmed }
         if (confirmed.isEmpty()) {
-            Toast.makeText(this, "No confirmed shipments to start.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang kumpirmadong shipment na ma-i-start.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1724,7 +1725,7 @@ class MainActivity : AppCompatActivity() {
                 session.saveActiveSapDocId(null)
                 session.clearCurrentSapDocId()
                 session.setTripActive(false)
-                Toast.makeText(this, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Hindi masimulan ang biyahe. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
             }
     }
 
@@ -1922,7 +1923,7 @@ class MainActivity : AppCompatActivity() {
         db.collection("drivers").document(driverId).get()
             .addOnSuccessListener { driverDoc ->
                 val requirements = driverDoc.get("requirements") as? Map<String, Boolean> ?: emptyMap()
-                val truckCompany = driverDoc.getString("truckingCompany") ?: ""
+                val truckCompany = Sanitizer.sanitizeCompanyName(driverDoc.getString("truckingCompany") ?: "")
 
                 val withDriver = assignments.map { a ->
                     a.copy(requirements = requirements, truckCompany = truckCompany)
@@ -1962,7 +1963,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun openObdBottomSheet(lineItems: List<Map<String, Any>>, shipmentDocId: String) {
         if (lineItems.isEmpty()) {
-            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang available na OBD items", Toast.LENGTH_SHORT).show()
             return
         }
         ObdItemsBottomSheet.newInstance(
@@ -1988,14 +1989,14 @@ class MainActivity : AppCompatActivity() {
             "startedAt" to com.google.firebase.Timestamp.now()
         ))
         batch.commit().addOnSuccessListener {
-            Toast.makeText(this, "Trip started!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Nagsimula na ang biyahe!", Toast.LENGTH_SHORT).show()
             // Navigate to MyTripActivity
             val intent = Intent(this, MyTripActivity::class.java)
             intent.putExtra("shipment_doc_id", docId)
             startActivity(intent)
         }.addOnFailureListener { e ->
             Log.e(TAG, "startSingleShipment failed: ${e.message}")
-            Toast.makeText(this, "Failed to start trip.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Hindi masimulan ang biyahe.", Toast.LENGTH_SHORT).show()
         }
     }
 

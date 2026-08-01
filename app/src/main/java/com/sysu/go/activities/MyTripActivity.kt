@@ -519,7 +519,7 @@ class MyTripActivity : AppCompatActivity() {
         val bitmap: Bitmap? = decodeBase64ToBitmap(base64ImageString)
         if (bitmap == null) {
             Log.e(tag, "decodeBase64ToBitmap returned null")
-            Toast.makeText(this, "Could not load photo preview", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Hindi ma-load ang preview ng litrato", Toast.LENGTH_SHORT).show()
             return
         }
         Log.d(tag, "bitmap decoded: ${bitmap.width}x${bitmap.height}")
@@ -845,7 +845,7 @@ class MyTripActivity : AppCompatActivity() {
                 showObdStatusSheet(item, shipmentDocId)
             } catch (e: Exception) {
                 Log.e(TAG, "retakeObdPod failed: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Retake failed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MyTripActivity, "Pumalya ang retake", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1292,8 +1292,8 @@ class MyTripActivity : AppCompatActivity() {
             "START_LOADING" -> {
                 val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
                 dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
-                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Start Loading?"
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to start loading shipment ${assignment.shipmentNumber}?"
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Simulan ang Pag-Load?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Sigurado ka bang gusto mong simulan ang pag-load ng shipment ${assignment.shipmentNumber}?"
                 val dialog = AlertDialog.Builder(this).setView(dlgView).create()
                 dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
                     text = "Yes, Start Loading"
@@ -1307,7 +1307,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "START_LOADING error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -1318,7 +1318,7 @@ class MyTripActivity : AppCompatActivity() {
                 val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
                 dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
                 dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Fully Loaded?"
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Is shipment ${assignment.shipmentNumber} completely loaded and ready for guard verification?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Ang shipment ${assignment.shipmentNumber} ba ay kumpletong na-load at handa na para sa guard verification?"
                 val dialog = AlertDialog.Builder(this).setView(dlgView).create()
                 dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
                     text = "Yes, Fully Loaded"
@@ -1334,7 +1334,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -1344,8 +1344,8 @@ class MyTripActivity : AppCompatActivity() {
             "CANCEL_LOADING" -> {
                 val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
                 dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
-                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Cancel Loading?"
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Revert shipment ${assignment.shipmentNumber} back to pending? This will cancel the loading process."
+                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Kanselahin ang Loading?"
+                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Ibalik ang shipment ${assignment.shipmentNumber} sa pending? Kakanselahin nito ang proseso ng loading."
                 val dialog = AlertDialog.Builder(this).setView(dlgView).create()
                 dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
                     text = "Yes, Cancel"
@@ -1361,7 +1361,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Failed to update. Check connection.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -1410,7 +1410,7 @@ class MyTripActivity : AppCompatActivity() {
                         launchDeliveryActivity(assignment.docId)
                     } catch (e: Exception) {
                         Log.e(TAG, "RETURNING_TO_BASE transition error: ${e.message}")
-                        Toast.makeText(this@MyTripActivity, "Failed to start return. Try again.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MyTripActivity, "Hindi masimulan ang pagbalik. Subukan ulit.", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -1428,7 +1428,7 @@ class MyTripActivity : AppCompatActivity() {
                 onSuccess()
             } catch (e: Exception) {
                 Log.e(TAG, "confirmShipment error: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Failed to confirm. Try again.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MyTripActivity, "Hindi ma-kumpirma. Subukan ulit.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1450,7 +1450,7 @@ class MyTripActivity : AppCompatActivity() {
                     .await()
 
                 Log.d(TAG, "startTrip: ${assignment.docId} → in_transit")
-                Toast.makeText(this@MyTripActivity, "Trip started!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MyTripActivity, "Nagsimula na ang biyahe!", Toast.LENGTH_SHORT).show()
 
                 // Navigate directly to TransitActivity for live tracking.
                 // Driver-driven: single tap selects which shipment to start tracking.
@@ -1462,7 +1462,7 @@ class MyTripActivity : AppCompatActivity() {
                 sessionManager.saveActiveSapDocId(null)
                 sessionManager.clearCurrentSapDocId()
                 sessionManager.setTripActive(false)
-                Toast.makeText(this@MyTripActivity, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MyTripActivity, "Hindi masimulan ang biyahe. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1490,7 +1490,7 @@ class MyTripActivity : AppCompatActivity() {
         val shipment = shipmentAdapter.currentList.find { it.docId == docId }
         val isPodComplete = shipment?.lineItems?.all { (it["isPodCompleted"] as? Boolean) == true } == true
         if (!isPodComplete) {
-            Toast.makeText(this, "Complete all POD items before ending shipment.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Tapusin lahat ng POD items bago tapusin ang shipment.", Toast.LENGTH_LONG).show()
             Log.w(TAG, "[endSingleShipment] BLOCKED — PODs incomplete for $docId")
             return
         }
@@ -1520,7 +1520,7 @@ class MyTripActivity : AppCompatActivity() {
                 }
 
                 runOnUiThread {
-                    Toast.makeText(this@MyTripActivity, "Shipment completed!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MyTripActivity, "Tapos na ang shipment!", Toast.LENGTH_LONG).show()
                 }
 
                 // Clear ending state and reload so card transitions to "VIEW SUMMARY"
@@ -1531,7 +1531,7 @@ class MyTripActivity : AppCompatActivity() {
                 shipmentAdapter.setEndingDocId(null)
                 shipmentAdapter.notifyDataSetChanged()
                 runOnUiThread {
-                    Toast.makeText(this@MyTripActivity, "Failed to end trip. Try again.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MyTripActivity, "Hindi ma-tapos ang biyahe. Subukan ulit.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1609,7 +1609,7 @@ class MyTripActivity : AppCompatActivity() {
      */
     private fun openObdBottomSheet(lineItems: List<Map<String, Any>>, shipmentDocId: String) {
         if (lineItems.isEmpty()) {
-            Toast.makeText(this, "No OBD items available", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Walang available na OBD items", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -1726,7 +1726,7 @@ class MyTripActivity : AppCompatActivity() {
                     .await()
 
                 if (!docSnap.exists()) {
-                    Toast.makeText(this@MyTripActivity, "Verification data not found", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MyTripActivity, "Hindi makita ang data ng beripikasyon", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
 
@@ -1750,7 +1750,7 @@ class MyTripActivity : AppCompatActivity() {
                 }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
             } catch (e: Exception) {
                 Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Failed to load verification details", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MyTripActivity, "Hindi ma-load ang detalye ng beripikasyon", Toast.LENGTH_SHORT).show()
             }
         }
     }
