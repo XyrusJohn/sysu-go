@@ -239,6 +239,23 @@ class ReturnToBaseBottomSheet : DialogFragment() {
 
                 Log.d(TAG, "performArrivedAtBase: driver + ${docIds.size} shipments updated")
 
+                // STRICT geo-tracking stop at physical arrival — per the spec,
+                // tracking ends the moment the driver says "I'm at the warehouse",
+                // not at the final administrative CONFIRM. Same pattern as
+                // performConfirmArrival(): flip the flag BEFORE stopService so any
+                // auto-restart of the foreground service cannot re-enable GPS.
+                sessionManager.setTrackingActive(false)
+                try {
+                    val uid = sessionManager.getDriverId()
+                    SocketManager.init(requireContext())
+                    if (uid != null) {
+                        SocketManager.emitOfflineStatus(uid, sessionManager.getDriverName())
+                    }
+                    requireContext().stopService(Intent(requireContext(), LocationServices::class.java))
+                } catch (e: Exception) {
+                    Log.w(TAG, "performArrivedAtBase: offline emit skipped — ${e.message}")
+                }
+
                 hideLoading()
                 awaitingWarehouseConfirm = true
                 bindPanelContent()
