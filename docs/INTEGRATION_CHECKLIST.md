@@ -56,11 +56,12 @@ GPS tracking activates only when driver clicks Start Trip, and stops immediately
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | 4.1 | Tracking: ON = `TransitActivity.startTrip()` → `sessionManager.setTrackingActive(true)` | ✅ DONE | Line 379, immediately after `saveCurrentSapDocId()` |
-| 4.2 | Tracking: OFF = `TransitActivity.performEndTrip()` → `sessionManager.setTrackingActive(false)` + `stopService(LocationServices)` | ✅ DONE | Lines 473-486, BEFORE stopService so the auto-restart does NOT re-enable GPS |
-| 4.3 | Tracking: OFF = `TransitActivity.transitionToReturningBase()` → same stop pattern | ✅ DONE | Previously missing — now added. Fires on warehouse arrival. |
-| 4.4 | LocationServices guard: re-checks `isTrackingActive()` on EVERY callback | ✅ DONE | `handleLocation()` line 1 guard: if `!isTrackingActive()`, return silently |
-| 4.5 | LocationServices guard: `onStartCommand` only starts GPS if `tracking_active=TRUE` | ✅ DONE | Pre-existing, hardened by 4.4 |
-| 4.6 | Offline emit on trip end / return-to-base | ✅ DONE | `SocketManager.emitOfflineStatus()` → sysu-app map scar marker immediately |
+| 4.2 | Tracking: OFF = `TransitActivity.performEndTrip()` → `setTrackingActive(false)` + `stopService(LocationServices)` + `emitOfflineStatus()` | ✅ DONE | Lines 473–486. The flag flip happens BEFORE `stopService` so the service's own auto-restart by the system reads `FALSE` on its `onStartCommand` guard |
+| 4.3 | Tracking: OFF = `ReturnToBaseBottomSheet.performArrivedAtBase()` → same triple-stop pattern | ✅ DONE | First tap on **"ARRIVED AT WAREHOUSE"**. Per the spec, geo ends at physical arrival — not on the administrative CONFIRM step |
+| 4.4 | Tracking: OFF = `ReturnToBaseBottomSheet.performConfirmArrival()` → same triple-stop | ✅ DONE | Belt-and-suspenders. Catches the case where a driver somehow skips the ARRIVED tap and goes straight to CONFIRM |
+| 4.5 | LocationServices guard: re-checks `isTrackingActive()` on EVERY callback | ✅ DONE | `handleLocation()` first-line guard (line 118): if `!isTrackingActive()`, return silently — no stray emit after the trip ends |
+| 4.6 | LocationServices guard: `onStartCommand` only starts GPS if `tracking_active=TRUE` | ✅ DONE | Pre-existing. Foreground service runs as usual; GPS only kicks in when flag flips true (Start Trip click) |
+| 4.7 | Battery critical receiver → setTrackingActive(false) + emitOffline | ✅ DONE | `LocationServices.batteryReceiver` (line 81) — safety: even if app is unreachable, marker drops |
 
 ---
 
@@ -85,7 +86,8 @@ GPS tracking activates only when driver clicks Start Trip, and stops immediately
 | `res/layout/activity_profile.xml` | `tvCompany` → ALL CAPS + bold |
 | `utils/Sanitizer.kt` | New: `sanitizeCompanyName()` and `sanitizeDisplayName()` (from previous commit) |
 | `utils/SessionManager.kt` | Previously updated with `sanitizeDisplayName` |
-| `services/LocationServices.kt` | Strict guard in `handleLocation()`; Tagalog notification text |
-| `activities/TransitActivity.kt` | `transitionToReturningToBase()` stops GPS; Tagalog toasts |
+| `services/LocationServices.kt` | Strict guard in `handleLocation()`; Tagalog notification text; battery-low offline emit |
+| `activities/TransitActivity.kt` | `performEndTrip()` stops GPS; Tagalog toasts. `transitionToReturningToBase()` is dead code — kept as documentation |
+| `activities/ReturnToBaseBottomSheet.kt` | `performArrivedAtBase()` + `performConfirmArrival()` apply triple-stop pattern |
 | `activities/MainActivity.kt` | Tagalog toasts; company sanitization apply |
 | `activities/ProfileActivity.kt` | Added `Sanitizer` import; `sanitizeCompanyName` on both read paths |
