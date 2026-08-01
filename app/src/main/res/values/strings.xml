@@ -146,11 +146,11 @@
     <string name="perm_redirecting">Nag-reredirect sa dashboard...</string>
 
     <!-- Assignment (My Assignments) -->
-    <string name="assignment_header_title">AKING MGA SHIPMENT</string>
+    <string name="assignment_header_title">MY SHIPMENT</string>
     <string name="assignment_badge_all_verified">Beripikado Lahat</string>
-    <string name="assignment_badge_pending">NILIBANGANG NG BERIPIKASYON</string>
+    <string name="assignment_badge_pending">PENDING VERIFICATION</string>
     <string name="guard_status_verified">Beripikado</string>
-    <string name="guard_status_pending">Nakabinbin</string>
+    <string name="guard_status_pending">PENDING</string>
     <string name="assignment_departed">Lumarga</string>
     <string name="assignment_completed">Tapos Na</string>
     <string name="assignment_empty">Wala pang shipment</string>
