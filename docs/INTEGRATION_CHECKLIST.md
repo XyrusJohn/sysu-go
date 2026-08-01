@@ -34,6 +34,20 @@ Prevents double-dot middle initial patterns like `"Carlo B.. Locar"`.
 
 ---
 
+## 2B. 🔒 OBD/POD Lock Until Start Trip
+
+Driver cannot interact with OBD items or do POD capture until the trip has started (`tripStatus == "in_transit"`).
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 2B.1 | `MyTripTabAdapter.isObdLocked` — STRICT lock | ✅ DONE | Lock condition: `tripStatus != "in_transit" && != "completed"`. Closes the gap where `loaded` (guard-verified, pre-Start-Trip) used to allow entry |
+| 2B.2 | Toast message on locked OBD tap | ✅ DONE | `R.string.obd_locked_msg` — "Simulan ang trip para maka pag-POD" |
+| 2B.3 | `AssignmentActivity.openObdBottomSheet()` — pre-transit = read-only | ✅ DONE | Always passes `podCaptureEnabled = false` for non-in_transit; opens Detail row layout only |
+| 2B.4 | `MainActivity.openObdBottomSheet()` — read-only | ✅ DONE | Same `podCaptureEnabled = false` read-only pattern in My Queue tab |
+| 2B.5 | `QueueDetailsActivity.openObdBottomSheet()` — read-only | ✅ DONE | `podCaptureEnabled = false` outside transit context |
+
+---
+
 ## 3. 🚛 Trucking Company Display Fix
 
 Display company name without forwarder number / truck company number. ALL CAPS + bold.
@@ -73,6 +87,7 @@ GPS tracking activates only when driver clicks Start Trip, and stops immediately
 | Middle Initial fix | ✅ COMPLETE | No |
 | Trucking company display | ✅ COMPLETE | No |
 | Strict geo-tracking | ✅ COMPLETE | Yes — sysu-app Railway map depends on this |
+| OBD/POD lock until trip starts | ✅ COMPLETE | No |
 | Modular checklist | ✅ COMPLETE | This file |
 
 ---
@@ -91,3 +106,4 @@ GPS tracking activates only when driver clicks Start Trip, and stops immediately
 | `activities/ReturnToBaseBottomSheet.kt` | `performArrivedAtBase()` + `performConfirmArrival()` apply triple-stop pattern |
 | `activities/MainActivity.kt` | Tagalog toasts; company sanitization apply |
 | `activities/ProfileActivity.kt` | Added `Sanitizer` import; `sanitizeCompanyName` on both read paths |
+| `adapter/MyTripTabAdapter.kt` | Tightened OBD row lock — only `in_transit` + `completed` allow unlock (was `loaded`/`in_transit`/`completed`) |

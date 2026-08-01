@@ -361,12 +361,20 @@ class MyTripTabAdapter(
                 onTripActionClicked(assignment, action)
             }
 
-            // OBD row: unlocked only when trip is ON TRANSIT, COMPLETED, or LOADED.
-            // - CONFIRMED (pre-trip): OBD is locked — driver can't POD before trip starts.
-            // - RETURNING_TO_BASE: GPS still running, but POD work is done — lock for safety.
+            // OBD row: STRICTLY unlocked only when trip is in_transit (POD phase) or
+            // completed (post-trip view). LOCKED for everything else:
+            //   - loaded / fully_loaded / loading / driver_confirmed / assigned: pre-trip
+            //   - delivered / returning_to_base: POD work is done
+            //   - null: not even assigned yet
+            //
+            // Per the spec: drivers cannot POD or interact with OBD items until they
+            // have explicitly started the trip (i.e. tripStatus flipped to in_transit
+            // via the START TRIP button). The "loaded" state means guard has verified
+            // but the trip hasn't started — keeping OBD locked here closes the gap
+            // where a driver could open MyTripActivity and POD a shipment before
+            // pressing START TRIP.
             val isObdLocked = assignment.tripStatus != "in_transit" &&
-                assignment.tripStatus != "completed" &&
-                assignment.tripStatus != "loaded"
+                assignment.tripStatus != "completed"
             if (isObdLocked) {
                 binding.ivObdChevron.setImageResource(R.drawable.ic_lock)
                 binding.rowObd.alpha = 0.5f
