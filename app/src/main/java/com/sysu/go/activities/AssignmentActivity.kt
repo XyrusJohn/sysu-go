@@ -591,9 +591,13 @@ class AssignmentActivity : AppCompatActivity() {
      * when MainActivity CTA is tapped after ALL shipments are confirmed.
      */
     private fun confirmShipment(assignment: Assignment) {
-        // Optimistic UI update FIRST — card instantly shows "READY ✓" without
-        // waiting for Firestore network round-trip. Snapshot listener provides
-        // authoritative state later; this just bridges the latency gap.
+        // SET optimistic bridge flag FIRST so MainActivity.onResume() can update
+        // the UI immediately when we finish() back to it. The Firestore snapshot
+        // listener will overwrite this within ~900ms once the network round-trip
+        // completes, but the bridge eliminates the visible gap.
+        sessionManager.savePendingConfirmedDocId(assignment.docId)
+
+        // Optimistic local copy — only matters during the screen transition.
         val idx = assignments.indexOfFirst { it.docId == assignment.docId }
         if (idx >= 0) {
             assignments = assignments.toMutableList().apply {
@@ -603,44 +607,26 @@ class AssignmentActivity : AppCompatActivity() {
             updateAggregateBadge(assignments)
         }
 
-        lifecycleScope.launch {
-            try {
-                val updates = mapOf("driverConfirmed" to true)
-                db.collection("sap_assignments").document(assignment.docId)
-                    .update(updates)
-                    .addOnSuccessListener {
-                        Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
-                        // Set optimistic bridge flag so MainActivity can immediately
-                        // reflect the confirmed state on resume, without waiting for
-                        // the Firestore snapshot to catch up (~900ms race window).
-                        sessionManager.savePendingConfirmedDocId(assignment.docId)
-                        Toast.makeText(
-                            this@AssignmentActivity,
-                            R.string.confirm_shipment_toast,
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e(TAG, "confirmShipment failed: ${e.message}")
-                        // Revert optimistic update on failure
-                        val revertIdx = assignments.indexOfFirst { it.docId == assignment.docId }
-                        if (revertIdx >= 0) {
-                            assignments = assignments.toMutableList().apply {
-                                set(revertIdx, assignments[revertIdx].copy(driverConfirmed = false))
-                            }
-                            submitToAdapter(assignments)
-                            updateAggregateBadge(assignments)
-                        }
-                        Toast.makeText(
-                            this@AssignmentActivity,
-                            "Failed to confirm. Try again.",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-            } catch (e: Exception) {
-                Log.e(TAG, "confirmShipment error: ${e.message}")
+        Toast.makeText(
+            this@AssignmentActivity,
+            R.string.confirm_shipment_toast,
+            Toast.LENGTH_SHORT
+        ).show()
+
+        // Fire the Firestore update in the background. Don't block on callbacks —
+        // the user is going back to MainActivity. If the write fails, the snapshot
+        // listener on MainActivity will eventually reconcile.
+        db.collection("sap_assignments").document(assignment.docId)
+            .update(mapOf("driverConfirmed" to true))
+            .addOnSuccessListener {
+                Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
             }
-        }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "confirmShipment failed: ${e.message}")
+            }
+
+        // Simple, predictable navigation: go straight back to MainActivity.
+        finish()
     }
 
     private fun launchTransitActivity(sapDocId: String) {
