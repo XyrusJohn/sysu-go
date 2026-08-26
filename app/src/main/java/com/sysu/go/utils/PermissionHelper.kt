@@ -78,30 +78,104 @@ object PermissionHelper {
     }
 
     /**
-     * Returns true only when ALL three required permissions are granted.
+     * Camera permission check for QR scanning and POD capture.
+     */
+    fun hasCameraPermission(context: Context): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Returns true only when ALL required permissions for tracking and features are granted.
      */
     fun hasAllPermissions(context: Context): Boolean =
         hasLocationPermission(context) &&
         hasNotificationPermission(context) &&
-        hasBatteryOptimizationDisabled(context)
+        hasBatteryOptimizationDisabled(context) &&
+        hasCameraPermission(context)
+
+    data class MissingPermissionItem(
+        val title: String,
+        val description: String,
+        val settingLocation: String
+    )
 
     /**
-     * Returns a list of permission names that are currently missing.
-     * Used to show which specific items in the setup screen need attention.
+     * Returns a rich list of missing permission details for the driver.
      */
-    fun getMissingPermissions(context: Context): List<String> {
-        val missing = mutableListOf<String>()
-        if (!hasLocationPermission(context)) missing.add("Location")
-        if (!hasNotificationPermission(context)) missing.add("Notification")
-        if (!hasBatteryOptimizationDisabled(context)) missing.add("Battery Optimization")
+    fun getDetailedMissingPermissions(context: Context): List<MissingPermissionItem> {
+        val missing = mutableListOf<MissingPermissionItem>()
+        if (!hasLocationPermission(context)) {
+            missing.add(
+                MissingPermissionItem(
+                    title = "📍 Lokasyon / GPS (Precise Location)",
+                    description = "Kailangan naka-set sa 'Allow all the time' o 'While using the app' at naka-ON ang 'Use precise location'.",
+                    settingLocation = "Permissions > Location"
+                )
+            )
+        }
+        if (!hasBatteryOptimizationDisabled(context)) {
+            missing.add(
+                MissingPermissionItem(
+                    title = "⚡ Unrestricted Battery (No Sleep)",
+                    description = "Kailangan naka-set sa 'Unrestricted' o 'Don't optimize' para hindi mag-offline kapag naka-lock ang screen.",
+                    settingLocation = "App battery usage > Unrestricted"
+                )
+            )
+        }
+        if (!hasNotificationPermission(context)) {
+            missing.add(
+                MissingPermissionItem(
+                    title = "🔔 System Notifications",
+                    description = "Kailangan naka-ON ang notifications para manatiling aktibo ang background service.",
+                    settingLocation = "Permissions > Notifications"
+                )
+            )
+        }
+        if (!hasCameraPermission(context)) {
+            missing.add(
+                MissingPermissionItem(
+                    title = "📷 Camera Access",
+                    description = "Kailangan para makapag-scan ng QR at kumuha ng litrato ng POD delivery.",
+                    settingLocation = "Permissions > Camera"
+                )
+            )
+        }
         return missing
     }
 
     /**
+     * Returns a list of permission names that are currently missing.
+     */
+    fun getMissingPermissions(context: Context): List<String> {
+        return getDetailedMissingPermissions(context).map { it.title }
+    }
+
+    /**
+     * Opens the official Android App Info settings screen for this app.
+     */
+    fun openAppSettings(context: Context) {
+        try {
+            val intent = android.content.Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.fromParts("package", context.packageName, null)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                val fallback = android.content.Intent(Settings.ACTION_SETTINGS).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallback)
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
      * Whether we should show the permission setup screen.
-     * Show it only when the driver hasn't completed setup OR when any
-     * required permission is missing (covers re-prompting after denials).
+     * Show it only when the driver hasn't completed setup OR when core permissions are missing.
      */
     fun needsSetup(context: Context): Boolean =
-        !hasCompletedSetup(context) || !hasAllPermissions(context)
+        !hasCompletedSetup(context) || !hasLocationPermission(context) || !hasNotificationPermission(context) || !hasBatteryOptimizationDisabled(context)
 }

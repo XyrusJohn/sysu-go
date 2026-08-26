@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.content.res.ColorStateList
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
@@ -23,6 +24,7 @@ import com.sysu.go.databinding.ActivityUpdateInfoBinding
 import com.sysu.go.databinding.ItemHelperInputBinding
 import com.sysu.go.model.ScanRequest
 import com.sysu.go.network.QRApiService
+import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.Sanitizer
 import com.sysu.go.utils.SessionManager
 import kotlinx.coroutines.Dispatchers
@@ -314,5 +316,10 @@ class UpdateInfoActivity : AppCompatActivity() {
             it.etHelperLN.isEnabled = !loading
             it.btnRemoveHelper.isEnabled = !loading
         }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        KeyboardUtils.handleTouchOutsideEditText(this, ev)
+        return super.dispatchTouchEvent(ev)
     }
 }

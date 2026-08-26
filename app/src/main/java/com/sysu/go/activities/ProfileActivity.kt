@@ -13,6 +13,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.Toast
 import com.sysu.go.utils.Sanitizer
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
@@ -25,19 +27,32 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.MetadataChanges
 import android.content.SharedPreferences
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityProfileBinding
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.SocketManager
+import com.sysu.go.utils.ConnectivityMonitor
+import com.sysu.go.utils.PermissionHelper
 import com.sysu.go.utils.SessionManager
-import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import android.app.ProgressDialog
+import android.graphics.Typeface
+import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.ViewGroup
+import com.google.firebase.Timestamp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class ProfileActivity : AppCompatActivity() {
+class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityChangeListener {
 
     private lateinit var binding: ActivityProfileBinding
     private val db = FirebaseFirestore.getInstance()
@@ -47,6 +62,67 @@ class ProfileActivity : AppCompatActivity() {
     private val circleAnimators = mutableListOf<Animator>()
     private val circleViews = mutableListOf<View>()
     private var driverId: String? = null
+
+    // Status badge — uses Firestore snapshot listener on drivers/{uid}.status.
+    // Source of truth: drivers/{uid}.status field. With offline persistence enabled
+    // (GoApplication.kt), the snapshot listener reads from local cache when offline
+    // and gets live updates when online. This is the simplest and most reliable path.
+    private var driverStatusListener: ListenerRegistration? = null
+
+    // Cached value from the Firestore snapshot listener. We keep this around because
+    // connectivity changes don't affect Firestore's view of the lifecycle state
+    // ("in_transit", "returning_to_base") — only the offline/online indicator.
+    @Volatile
+    private var lastFirestoreStatus: String = "online"
+
+    // Last connectivity status we painted the badge for. We use this to skip
+    // redundant re-renders from the fallback poll, and to detect missed events.
+    @Volatile
+    private var lastPaintedConnectivity: ConnectivityMonitor.Status = ConnectivityMonitor.Status.OFFLINE
+
+    // Fallback poll — every 2s, reconcile badge with current ConnectivityMonitor
+    // state. This is a belt-and-suspenders defense: even if the listener
+    // somehow misses a transition (e.g., NetworkCallback glitch on this OEM),
+    // the badge still catches up within 2s. Lightweight — just compares a
+    // status enum and re-renders if different.
+    private val connectivityPoller = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectivityPollRunnable = object : Runnable {
+        override fun run() {
+            val current = ConnectivityMonitor.getCurrentStatus()
+            if (current != lastPaintedConnectivity) {
+                Log.w("ProfileActivity", ">>> [POLL] detected missed transition: $lastPaintedConnectivity → $current")
+                onConnectivityChanged(current)
+            }
+            connectivityPoller.postDelayed(this, 2000L)
+        }
+    }
+
+    // Server-pushed driver_status_change listener. The server's presence
+    // watcher (backend/utils/presenceWatcher.js) is now authoritative for
+    // OFFLINE detection — when it sees a stale driver, it writes "offline"
+    // to Firestore AND broadcasts driver_status_change to room driver:{uid}.
+    // We listen for that broadcast and flip the badge IMMEDIATELY, without
+    // waiting for the Firestore snapshot to land (which may take a moment
+    // due to listener dispatch + cache update).
+    private val serverStatusListener: (Any?) -> Unit = listener@{ data ->
+        try {
+            val json = data as? org.json.JSONObject ?: return@listener
+            val status = json.optString("status", "online")
+            val source = json.optString("source", "unknown")
+            Log.w("ProfileActivity", ">>> [SERVER] driver_status_change → $status (source=$source)")
+            // Server is authoritative for OFFLINE. For ONLINE / in_transit /
+            // returning_to_base, prefer the Firestore snapshot (which may
+            // include additional lifecycle fields), but the server push is
+            // fine for the badge too.
+            lastFirestoreStatus = status
+            if (ConnectivityMonitor.getCurrentStatus() != ConnectivityMonitor.Status.OFFLINE) {
+                renderStatusBadge(status)
+                lastPaintedConnectivity = ConnectivityMonitor.getCurrentStatus()
+            }
+        } catch (e: Exception) {
+            Log.w("ProfileActivity", ">>> [SERVER] driver_status_change parse error: ${e.message}")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -70,12 +146,204 @@ class ProfileActivity : AppCompatActivity() {
                     .show(supportFragmentManager, RequirementsEditBottomSheet.TAG)
             }
         }
+
+        binding.btnOpenAppInfo.setOnClickListener {
+            PermissionHelper.openAppSettings(this)
+        }
     }
 
     override fun onResume() {
         super.onResume()
         loadDriverInfo()
-        loadActiveShipments()
+        refreshPermissionStates()
+        // Subscribe to drivers/{uid}.status — Firestore snapshot listener.
+        // Reads from local cache (offline) per GoApplication persistence config.
+        setupDriverStatusListener()
+        // Subscribe to ConnectivityMonitor so the badge flips OFFLINE/ONLINE
+        // IMMEDIATELY when WiFi is toggled, without waiting for the Firestore
+        // write to round-trip through the (potentially flaky) network.
+        ConnectivityMonitor.addListener(this)
+        // Subscribe to server-pushed driver_status_change broadcasts. The
+        // server's presence watcher is authoritative for OFFLINE — when it
+        // detects a stale driver, it broadcasts driver_status_change:offline
+        // and we flip the badge without waiting for Firestore.
+        SocketManager.addEventListener("driver_status_change", serverStatusListener)
+        // Start the 2-second poll so we still catch up even if the listener
+        // somehow misses an event (defensive — covers OEM-specific quirks).
+        lastPaintedConnectivity = ConnectivityMonitor.Status.OFFLINE  // force first paint to take effect
+        connectivityPoller.post(connectivityPollRunnable)
+    }
+
+    /**
+     * Checks and updates UI reflecting live OS permission statuses:
+     * - Location (GPS)
+     * - Unrestricted Battery (Doze bypass)
+     * - System Notifications
+     * - Camera
+     */
+    private fun refreshPermissionStates() {
+        val hasLoc = PermissionHelper.hasLocationPermission(this)
+        val hasBatt = PermissionHelper.hasBatteryOptimizationDisabled(this)
+        val hasNotif = PermissionHelper.hasNotificationPermission(this)
+        val hasCam = PermissionHelper.hasCameraPermission(this)
+
+        fun updateBadge(tv: TextView, granted: Boolean) {
+            tv.text = if (granted) "Active" else "Missing / Denied"
+            tv.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (granted) R.color.transit_green else R.color.sysu_red
+                )
+            )
+        }
+
+        updateBadge(binding.tvStatusPermLocation, hasLoc)
+        updateBadge(binding.tvStatusPermBattery, hasBatt)
+        updateBadge(binding.tvStatusPermNotification, hasNotif)
+        updateBadge(binding.tvStatusPermCamera, hasCam)
+
+        val allOk = hasLoc && hasBatt && hasNotif && hasCam
+        binding.permSectionAccent.setBackgroundColor(
+            ContextCompat.getColor(this, if (allOk) R.color.transit_green else R.color.sysu_red)
+        )
+        binding.tvPermOverview.text = if (allOk) {
+            "Lahat ng Background & Tracking Permissions: MAAYOS (ACTIVE)"
+        } else {
+            "May Kulang na Permission para sa Background Tracking!"
+        }
+        binding.tvPermOverview.setTextColor(
+            ContextCompat.getColor(this, if (allOk) R.color.text_muted else R.color.sysu_red)
+        )
+
+        binding.btnOpenAppInfo.text = if (allOk) {
+            "Buksan ang App Info / Settings"
+        } else {
+            "I-Grant o Ayusin sa App Settings"
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        teardownDriverStatusListener()
+        ConnectivityMonitor.removeListener(this)
+        SocketManager.removeEventListener("driver_status_change", serverStatusListener)
+        connectivityPoller.removeCallbacks(connectivityPollRunnable)
+    }
+
+    /**
+     * React to local connectivity changes for the badge only. We do NOT write
+     * to Firestore here — DriverStatus already does that via ConnectivityMonitor's
+     * own listener. The badge just needs to render the right thing *now*, before
+     * the Firestore write completes (which can take seconds when DNS is broken).
+     *
+     * Lifecycle state (in_transit / returning_to_base) is preserved from the last
+     * Firestore snapshot so we don't clobber it with a generic ONLINE/OFFLINE.
+     */
+    override fun onConnectivityChanged(status: ConnectivityMonitor.Status) {
+        Log.w("ProfileActivity", ">>> [BADGE] connectivity → $status (lastFirestoreStatus=$lastFirestoreStatus, lastPainted=$lastPaintedConnectivity)")
+        lastPaintedConnectivity = status
+        if (status == ConnectivityMonitor.Status.OFFLINE) {
+            // Connectivity is OFFLINE — show OFFLINE badge immediately, regardless
+            // of whatever lifecycle state the Firestore cache happens to hold.
+            // This is the CRITICAL path the user hit: Firestore write is queued
+            // offline, but the badge MUST flip immediately so the user sees reality.
+            renderStatusBadge("offline")
+            Log.w("ProfileActivity", ">>> [BADGE] ✓ OFFLINE badge rendered (immediate, no Firestore wait)")
+        } else {
+            // Connectivity is back. Re-render with whatever lifecycle state we last
+            // saw from Firestore. If that state was also "offline" (because the
+            // server write hadn't flushed yet), render "online" now.
+            val effective = if (lastFirestoreStatus == "offline") "online" else lastFirestoreStatus
+            renderStatusBadge(effective)
+            Log.w("ProfileActivity", ">>> [BADGE] ✓ re-rendered with state='$effective'")
+        }
+    }
+
+    /**
+     * Subscribes to drivers/{uid}.status via Firestore snapshot listener.
+     *
+     * Persistence is enabled in GoApplication.kt, so:
+     *   - When online: snapshot listener fires whenever the server value changes
+     *   - When offline: snapshot listener serves from local cache (last known value)
+     *   - When transitioning offline → online: persisted writes flush, listener fires
+     *
+     * This is the most reliable path because Firestore SDK handles all the
+     * networking, caching, and reconnection logic. We just react to the result.
+     */
+    private fun setupDriverStatusListener() {
+        val uid = driverId ?: SessionManager(this).getDriverId() ?: return
+
+        // Tear down any previous listener to avoid leaks on rapid resume/pause.
+        teardownDriverStatusListener()
+
+        driverStatusListener = db.collection("drivers").document(uid)
+            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                if (error != null) {
+                    Log.w("ProfileActivity", "driver status snapshot error: ${error.message}")
+                    // Show online as default fallback — never blank
+                    renderStatusBadge("online")
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    Log.d("ProfileActivity", "driver doc doesn't exist yet — default to online")
+                    renderStatusBadge("online")
+                    return@addSnapshotListener
+                }
+                val status = snapshot.getString("status") ?: "online"
+                lastFirestoreStatus = status
+                // Log whether the snapshot came from server (live) or local cache (offline)
+                // so we can verify the offline-reads-from-cache path is actually working.
+                val source = if (snapshot.metadata.isFromCache) "CACHE" else "SERVER"
+                Log.d("ProfileActivity", "driver status snapshot → $status [from $source]")
+                // Only render the snapshot directly if we are currently online.
+                // If we're offline, ConnectivityMonitor.onConnectivityChanged is the
+                // authoritative source — it has already painted the OFFLINE badge.
+                if (ConnectivityMonitor.getCurrentStatus() != ConnectivityMonitor.Status.OFFLINE) {
+                    renderStatusBadge(status)
+                } else {
+                    Log.d("ProfileActivity", "snapshot ignored — device is offline, badge stays OFFLINE")
+                }
+            }
+    }
+
+    private fun teardownDriverStatusListener() {
+        driverStatusListener?.remove()
+        driverStatusListener = null
+    }
+
+    /**
+     * Maps the canonical `drivers/{uid}.status` value to a badge.
+     * Values: "online" (default), "offline", "in_transit", "returning_to_base".
+     * Anything else falls back to "online".
+     */
+    private fun renderStatusBadge(status: String) {
+        when (status) {
+            "offline" -> setBadge(
+                getString(R.string.status_badge_offline),
+                R.drawable.bg_badge_frosted_offline,
+                R.color.status_offline
+            )
+            "in_transit" -> setBadge(
+                getString(R.string.status_badge_in_transit),
+                R.drawable.bg_badge_frosted_transit,
+                R.color.status_in_transit
+            )
+            "returning_to_base" -> setBadge(
+                getString(R.string.status_badge_returning_to_base),
+                R.drawable.bg_badge_frosted_returning_to_base,
+                R.color.status_returning_to_base
+            )
+            "online" -> setBadge(
+                getString(R.string.status_badge_online),
+                R.drawable.bg_badge_frosted_online,
+                R.color.status_online
+            )
+            else -> setBadge(
+                getString(R.string.status_badge_online),
+                R.drawable.bg_badge_frosted_online,
+                R.color.status_online
+            )
+        }
     }
 
     private fun startCircleAnimation() {
@@ -260,91 +528,60 @@ class ProfileActivity : AppCompatActivity() {
                     .apply()
         }
 
-        // Load active shipment count + driver status
-        loadActiveShipments()
+        // History button — opens a dialog showing completed trips from the
+        // driver_history collection, falling back to the latest completed
+        // trip on the driver document if no history records exist.
+        val historyButton = MaterialButton(this@ProfileActivity)
+        historyButton.text = "View History"
+        historyButton.setBackgroundTintList(ContextCompat.getColorStateList(this@ProfileActivity, R.color.sysu_blue))
+        historyButton.setTextColor(ContextCompat.getColor(this@ProfileActivity, R.color.white))
+
+        val requirementsParent = binding.requirementsSection.parent as? ViewGroup
+        if (requirementsParent != null) {
+            val index = requirementsParent.indexOfChild(binding.requirementsSection)
+            requirementsParent.addView(historyButton, index)
+            historyButton.setOnClickListener { showHistoryDialog() }
+        }
+
+        // Assigned-count subtitle — one-shot fetch on screen open
+        refreshAssignedCount()
     }
 
-    private fun updateStatusBadge(status: String, backgroundRes: Int, textColorRes: Int) {
-        binding.tvStatusBadgeText.text = status
-        binding.statusBadge.setBackgroundResource(backgroundRes)
-        binding.tvStatusBadgeText.setTextColor(ContextCompat.getColor(this, textColorRes))
-    }
-
-    private fun loadActiveShipments() {
+    /**
+     * Reads the assigned-shipment count from drivers/{uid}.assignedShipments
+     * (mirrored from sap_assignments by [DriverShipmentSync]).
+     *
+     * Replaces the previous approach of querying sap_assignments directly with
+     * `whereEqualTo("driverId", queueDocIdOrUid).whereNotEqualTo("tripStatus", "completed")`.
+     * The mirrored field is one less Firestore read per screen open and is
+     * kept up-to-date in real-time by the listener in GoApplication.
+     */
+    private fun refreshAssignedCount() {
         val session = SessionManager(this)
         val uid = session.getDriverId() ?: return
 
-        // queueDocId (queue document ID) is used as driverId in sap_assignments
-        // sessionDriverId (Firebase UID) is used as driverId in the queue collection
-        val queueDocIdOrUid = session.getCurrentQueueDocId() ?: uid
-
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                // Queue check uses Firebase UID (driverId field in queue collection)
-                val queueSnap = db.collection("queue")
-                    .whereEqualTo("driverId", uid)
-                    .get()
-                    .await()
-
-                val inQueue = queueSnap.documents.any {
-                    val s = it.getString("status")
-                    s != null && s != "left"
+                val doc = db.collection("drivers").document(uid).get().await()
+                val assigned = doc.get("assignedShipments") as? List<String> ?: emptyList()
+                val count = assigned.size
+                binding.tvAssignedCount.visibility = if (count > 0) View.VISIBLE else View.GONE
+                if (count > 0) {
+                    binding.tvAssignedCount.text =
+                        if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
                 }
-
-                // sap_assignments uses queue doc ID as driverId (not Firebase UID)
-                val snaps = db.collection("sap_assignments")
-                    .whereEqualTo("driverId", queueDocIdOrUid)
-                    .get()
-                    .await()
-
-                val list = snaps.documents.mapNotNull { snap ->
-                    snap.data as? Map<String, Any?>
-                }
-
-                val count = list.size
-                val hasInTransit = list.any {
-                    val t = it["tripStatus"] as? String
-                    t == "in_transit" || t == "returning_to_base"
-                }
-                val hasAssigned = list.any {
-                    (it["guardVerified"] as? Boolean) == true &&
-                        (it["driverConfirmed"] as? Boolean) == true
-                }
-
-                when {
-                    !inQueue && count == 0 -> {
-                        updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
-                        binding.tvAssignedCount.visibility = View.GONE
-                    }
-                    hasInTransit -> {
-                        updateStatusBadge("In transit", R.drawable.bg_badge_frosted_transit, R.color.status_transit_green)
-                        binding.tvAssignedCount.visibility = View.VISIBLE
-                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
-                    }
-                    hasAssigned -> {
-                        updateStatusBadge("Assigned", R.drawable.bg_badge_frosted_assigned, R.color.status_assigned)
-                        binding.tvAssignedCount.visibility = View.VISIBLE
-                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
-                    }
-                    count > 0 -> {
-                        updateStatusBadge("In queue", R.drawable.bg_badge_frosted_queue, R.color.status_in_queue)
-                        binding.tvAssignedCount.visibility = View.VISIBLE
-                        binding.tvAssignedCount.text = if (count == 1) "Assigned: 1 shipment" else "Assigned: $count shipments"
-                    }
-                    inQueue -> {
-                        updateStatusBadge("In queue", R.drawable.bg_badge_frosted_queue, R.color.status_in_queue)
-                        binding.tvAssignedCount.visibility = View.GONE
-                    }
-                    else -> {
-                        updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
-                        binding.tvAssignedCount.visibility = View.GONE
-                    }
-                }
+                Log.d("ProfileActivity", "refreshAssignedCount: $count (from drivers.assignedShipments)")
             } catch (e: Exception) {
-                updateStatusBadge("Not in queue", R.drawable.bg_badge_frosted_not_in_queue, R.color.status_not_in_queue)
+                Log.e("ProfileActivity", "refreshAssignedCount failed", e)
                 binding.tvAssignedCount.visibility = View.GONE
             }
         }
+    }
+
+    private fun setBadge(text: String, bgRes: Int, textColorRes: Int) {
+        binding.tvStatusBadgeText.text = text
+        binding.statusBadge.setBackgroundResource(bgRes)
+        binding.tvStatusBadgeText.setTextColor(ContextCompat.getColor(this, textColorRes))
     }
 
     private fun loadDriverInfo() {
@@ -420,6 +657,244 @@ class ProfileActivity : AppCompatActivity() {
         }
         dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
         dialog.show()
+    }
+
+    private fun showHistoryDialog() {
+        val session = SessionManager(this)
+        val uid = session.getDriverId() ?: return
+        val driverName = session.getDriverName()
+
+        // Build candidate driverIds in priority order:
+        //   1. Current queue doc ID — kept while the driver is actively in queue.
+        //   2. Last known queue doc ID — survives a trip's full lifecycle, including
+        //      after ReturnToBase clears the current queue key and deletes
+        //      `queue.{docId}.driverId` server-side.
+        //   3. Firebase UID — used by a minority of older sap_assignment docs.
+        // We dedupe by set membership so we never run the same query twice.
+        val candidateIds = linkedSetOf<String>().apply {
+            session.getCurrentQueueDocId()?.takeIf { it.isNotBlank() }?.let(::add)
+            session.getLastQueueDocId()?.takeIf { it.isNotBlank() }?.let(::add)
+            uid.takeIf { it.isNotBlank() }?.let(::add)
+        }.toList()
+
+        // Show loading indicator
+        val progressDialog = ProgressDialog(this@ProfileActivity)
+        progressDialog.setMessage("Loading history...")
+        progressDialog.setCancelable(false)
+        progressDialog.show()
+
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Try each candidate driverId in order. Stop on the first non-empty result.
+                var completedSnaps: com.google.firebase.firestore.QuerySnapshot? = null
+                for (candidateId in candidateIds) {
+                    val snaps = db.collection("sap_assignments")
+                        .whereEqualTo("driverId", candidateId)
+                        .whereEqualTo("tripStatus", "completed")
+                        .get()
+                        .await()
+                    if (!snaps.isEmpty) {
+                        completedSnaps = snaps
+                        Log.d("ProfileActivity", "History query hit using driverId='$candidateId' (${snaps.size()} docs)")
+                        break
+                    }
+                }
+
+                // Final fallback: by driverName (works even if driverId was rewritten).
+                // Narrow the result set client-side to entries whose driverName matches
+                // the current session — avoids showing other drivers' trips.
+                if (completedSnaps == null || completedSnaps.isEmpty) {
+                    val byName = db.collection("sap_assignments")
+                        .whereEqualTo("driverName", driverName)
+                        .whereEqualTo("tripStatus", "completed")
+                        .get()
+                        .await()
+                    if (!byName.isEmpty) {
+                        completedSnaps = byName
+                        Log.d("ProfileActivity", "History query hit using driverName='$driverName' (${byName.size()} docs)")
+                    }
+                }
+
+                progressDialog.dismiss()
+
+                if (completedSnaps == null || completedSnaps.isEmpty) {
+                    Toast.makeText(this@ProfileActivity, "No completed trip found", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                // Sort by completedAt descending (client-side) and take the most recent 10
+                val historyList = completedSnaps.documents
+                    .sortedByDescending { snap ->
+                        val ts = snap.get("completedAt") as? Timestamp
+                        ts?.toDate()?.time ?: 0L
+                    }
+                    .take(10)
+                    .mapNotNull { snap ->
+                        val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
+                        val completedAt = (data["completedAt"] as? Timestamp)?.toDate()
+                        completedAt?.let { data to it }
+                    }
+
+                if (historyList.isEmpty()) {
+                    Toast.makeText(this@ProfileActivity, "No completed trip found", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                buildHistoryDialog(historyList.map { it.first })
+            } catch (e: Exception) {
+                progressDialog.dismiss()
+                Log.e("ProfileActivity", "Error loading history: ${e.message}")
+                Toast.makeText(this@ProfileActivity, "Failed to load history: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * Renders a scrollable dialog listing the driver's recent completed trips.
+     * Each trip is shown as a card with the completion timestamp, driver name,
+     * truck plate / company, and a per-delivery line-items breakdown.
+     */
+    private fun buildHistoryDialog(historyList: List<Map<String, Any?>>) {
+        val linearLayout = LinearLayout(this@ProfileActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 32, 32, 32)
+        }
+
+        linearLayout.addView(TextView(this@ProfileActivity).apply {
+            text = "Completed Trips"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setTypeface(Typeface.DEFAULT_BOLD)
+            setPadding(0, 0, 0, 24)
+        })
+
+        val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+        val sdfShort = SimpleDateFormat("MMM dd HH:mm", Locale.getDefault())
+
+        historyList.forEachIndexed { tripIndex, entry ->
+            val completedAt = (entry["completedAt"] as? Timestamp)?.toDate()
+            val driverName = (entry["driverName"] as? String) ?: "Unknown driver"
+            val truckPlate = entry["truckPlate"] as? String ?: ""
+            val truckCompany = entry["truckCompany"] as? String ?: ""
+            val lineItems = (entry["lineItems"] as? List<*>) ?: emptyList<Any?>()
+            // Per-shipment return outcome — written by ReturnToBaseBottomSheet.performConfirmArrival()
+            // alongside tripStatus="completed". Falls back to "—" for older docs that pre-date
+            // the per-shipment mirror (added 2026-08-10).
+            val returnStatus = entry["returnStatus"] as? String ?: ""
+            val returnedToBaseAt = (entry["returnedToBaseAt"] as? Timestamp)?.toDate()
+
+            val tripView = LinearLayout(this@ProfileActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, 0, 0, 16)
+            }
+
+            // Trip header: "Trip #N — <date>"
+            tripView.addView(TextView(this@ProfileActivity).apply {
+                text = if (completedAt != null) {
+                    "Trip #${tripIndex + 1} — ${sdf.format(completedAt)}"
+                } else {
+                    "Trip #${tripIndex + 1}"
+                }
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTypeface(Typeface.DEFAULT_BOLD)
+                setPadding(0, 0, 0, 8)
+            })
+
+            // Trip-level details
+            val tripInfo = buildString {
+                append("Driver: ").append(driverName).append("\n")
+                if (truckPlate.isNotBlank()) append("Truck: ").append(truckPlate).append("\n")
+                if (truckCompany.isNotBlank()) append("Company: ").append(truckCompany)
+            }
+            tripView.addView(TextView(this@ProfileActivity).apply {
+                text = tripInfo
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setPadding(0, 0, 0, 8)
+            })
+
+            // Return-to-base outcome — only shown when the field is populated.
+            // Skipped silently for legacy docs so we don't add noise for pre-mirror trips.
+            if (returnStatus.isNotBlank()) {
+                val returnedLabel = buildString {
+                    append("Returned to base: ")
+                    when {
+                        returnStatus == "completed" && returnedToBaseAt != null ->
+                            sdfShort.format(returnedToBaseAt)
+                        returnStatus == "completed" -> "Yes"
+                        else -> returnStatus
+                    }
+                }
+                tripView.addView(TextView(this@ProfileActivity).apply {
+                    text = returnedLabel
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTypeface(Typeface.DEFAULT, Typeface.ITALIC)
+                    setTextColor(ContextCompat.getColor(this@ProfileActivity, R.color.text_muted))
+                    setPadding(0, 0, 0, 8)
+                })
+            }
+
+            // Line items — one entry per delivery
+            if (lineItems.isNotEmpty()) {
+                lineItems.forEachIndexed { index, item ->
+                    val itemMap = item as? Map<String, *> ?: return@forEachIndexed
+                    val customer = itemMap["customerName"] as? String ?: "Unknown customer"
+                    val status = itemMap["deliveryStatus"] as? String ?: ""
+                    val obd = itemMap["obdNumber"] as? String ?: ""
+                    val isPodDone = itemMap["isPodCompleted"] as? Boolean ?: false
+                    val podAt = (itemMap["podCapturedAt"] as? Timestamp)?.toDate()
+
+                    val itemDetails = buildString {
+                        append("   • ").append(customer)
+                        if (status.isNotBlank()) append(" — ").append(status)
+                        append("\n")
+                        if (obd.isNotBlank()) append("     OBD: ").append(obd).append("\n")
+                        append("     POD: ").append(
+                            when {
+                                isPodDone && podAt != null -> "Yes (${sdfShort.format(podAt)})"
+                                isPodDone -> "Yes"
+                                else -> "No"
+                            }
+                        )
+                    }
+
+                    tripView.addView(TextView(this@ProfileActivity).apply {
+                        text = itemDetails
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                        setPadding(0, 4, 0, 4)
+                    })
+                }
+            }
+
+            // Divider between trips (skip after the last one)
+            if (tripIndex < historyList.lastIndex) {
+                tripView.addView(View(this@ProfileActivity).apply {
+                    setBackgroundColor(ContextCompat.getColor(this@ProfileActivity, R.color.divider))
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        1
+                    )
+                })
+            }
+
+            linearLayout.addView(tripView)
+        }
+
+        val closeButton = MaterialButton(this@ProfileActivity).apply {
+            text = "Close"
+            setPadding(24, 12, 24, 12)
+        }
+        val buttonLayout = LinearLayout(this@ProfileActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 24, 0, 0)
+        }
+        buttonLayout.addView(closeButton)
+        linearLayout.addView(buttonLayout)
+
+        val dialog = AlertDialog.Builder(this@ProfileActivity)
+            .setView(linearLayout)
+            .create()
+        dialog.show()
+        closeButton.setOnClickListener { dialog.dismiss() }
     }
 
     private fun loadRequirements(reqMap: Map<String, Boolean>) {

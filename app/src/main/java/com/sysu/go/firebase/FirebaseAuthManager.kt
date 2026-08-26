@@ -23,33 +23,71 @@ object FirebaseAuthManager {
 
     fun initialize(context: Context) {
         auth = FirebaseAuth.getInstance()
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(context.getString(context.applicationInfo.labelRes))
-            .requestEmail()
-            .build()
-        googleSignInClient = GoogleSignIn.getClient(context, gso)
+        try {
+            val webClientIdRes = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+            val webClientId = if (webClientIdRes != 0) context.getString(webClientIdRes) else ""
+            if (webClientId.isNotEmpty()) {
+                val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                    .requestIdToken(webClientId)
+                    .requestEmail()
+                    .build()
+                googleSignInClient = GoogleSignIn.getClient(context, gso)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to build GoogleSignInClient: ${e.message}")
+        }
     }
 
-    private fun getAuth(): FirebaseAuth = auth
-        ?: throw IllegalStateException("FirebaseAuthManager not initialized. Call initialize() first.")
+    private fun getAuth(): FirebaseAuth = auth ?: FirebaseAuth.getInstance().also {
+        auth = it
+        Log.d(TAG, "getAuth: Initialized FirebaseAuth on demand")
+    }
 
     private fun getGoogleClient(): GoogleSignInClient = googleSignInClient
         ?: throw IllegalStateException("GoogleSignInClient not initialized. Call initialize() first.")
 
     fun getCurrentUser(): FirebaseUser? = getAuth().currentUser
 
-    suspend fun getIdToken(): String? {
+    suspend fun getIdToken(forceRefresh: Boolean = false): String? {
+        val user = getCurrentUser()
+        if (user == null) {
+            Log.w(TAG, "getIdToken: No current user logged in to Firebase")
+            return null
+        }
         return try {
-            getCurrentUser()?.getIdToken(false)?.await()?.token
+            Log.d(TAG, "getIdToken: Fetching token for UID=${user.uid} (forceRefresh=$forceRefresh)...")
+            var tokenResult = user.getIdToken(forceRefresh).await()
+            var token = tokenResult.token
+
+            if (token.isNullOrEmpty() && !forceRefresh) {
+                Log.w(TAG, "getIdToken: Cached token was null or empty, forcing refresh from Google...")
+                tokenResult = user.getIdToken(true).await()
+                token = tokenResult.token
+            }
+
+            if (token != null) {
+                Log.d(TAG, "getIdToken: Successfully retrieved token (length=${token.length}, prefix=${token.take(15)}...)")
+            } else {
+                Log.e(TAG, "getIdToken: Failed to retrieve valid token (result is null)")
+            }
+            token
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting ID token", e)
-            null
+            Log.e(TAG, "getIdToken: Error getting ID token: ${e.message}, attempting force refresh...", e)
+            try {
+                val refreshedToken = user.getIdToken(true).await().token
+                Log.d(TAG, "getIdToken: Force refresh succeeded after initial failure (length=${refreshedToken?.length})")
+                refreshedToken
+            } catch (e2: Exception) {
+                Log.e(TAG, "getIdToken: Force refresh also failed: ${e2.message}", e2)
+                null
+            }
         }
     }
 
     fun isLoggedIn(): Boolean = getCurrentUser() != null
 
     fun signOut(context: Context) {
+        Log.d(TAG, "signOut called")
         getAuth().signOut()
         googleSignInClient?.signOut()
     }

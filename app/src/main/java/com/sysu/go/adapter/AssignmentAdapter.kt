@@ -193,6 +193,12 @@ class AssignmentAdapter(
                     binding.btnTripAction.isEnabled = false
                     binding.btnTripAction.alpha = 0.6f
                 }
+                assignment.isDelivered -> {
+                    binding.btnTripAction.text = "DELIVERED"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.text_muted))
+                    binding.btnTripAction.isEnabled = false
+                    binding.btnTripAction.alpha = 0.6f
+                }
 
                 assignment.isInTransit -> {
                     binding.btnTripAction.text = "END TRIP"
@@ -223,13 +229,6 @@ class AssignmentAdapter(
                     }
                 }
 
-                assignment.isLoaded -> {
-                    binding.btnTripAction.text = "CONFIRM SHIPMENT"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
-                    binding.btnTripAction.isEnabled = true
-                    binding.btnTripAction.alpha = 1f
-                }
-
                 assignment.driverConfirmed -> {
                     binding.btnTripAction.text = "READY ✓"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.transit_green))
@@ -237,9 +236,10 @@ class AssignmentAdapter(
                     binding.btnTripAction.alpha = 0.8f
                 }
 
-                assignment.canConfirmTrip -> {
-                    binding.btnTripAction.text = "CONFIRM SHIPMENT"
-                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
+                assignment.isLoaded || assignment.canConfirmTrip || (assignment.isFullyLoaded && assignment.guardVerified) -> {
+                    // Guard verified — ready for batch confirmation via floating bottom bar
+                    binding.btnTripAction.text = "AWAITING CONFIRMATION"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_amber))
                     binding.btnTripAction.isEnabled = true
                     binding.btnTripAction.alpha = 1f
                 }
@@ -254,8 +254,19 @@ class AssignmentAdapter(
                     binding.btnTripAction.alpha = 0.7f
                 }
 
+                assignment.isAssigned -> {
+                    // Newly assigned shipment (sap_assignment tripStatus = "assigned") — driver
+                    // hasn't started loading yet. Show "START LOADING" with the same red CTA as
+                    // the legacy pending/null state. Adding an explicit branch documents the
+                    // intent and makes the state machine easier to follow.
+                    binding.btnTripAction.text = "START LOADING"
+                    binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
+                    binding.btnTripAction.isEnabled = true
+                    binding.btnTripAction.alpha = 1f
+                }
+
                 else -> {
-                    // Pending — not yet loading
+                    // Pending — not yet loading (legacy fallback for null/empty tripStatus)
                     binding.btnTripAction.text = "START LOADING"
                     binding.btnTripAction.setBackgroundColor(ContextCompat.getColor(ctx, R.color.sysu_red))
                     binding.btnTripAction.isEnabled = true

@@ -502,6 +502,212 @@
             </LinearLayout>
 
             <!-- ══════════════════════════════════════════════════
+                 SECTION: App Permissions & Background Tracking
+                 ══════════════════════════════════════════════════ -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="28dp"
+                android:layout_marginBottom="12dp">
+
+                <View
+                    android:layout_width="3dp"
+                    android:layout_height="16dp"
+                    android:layout_marginEnd="10dp"
+                    android:background="@color/sysu_red" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Permissions &amp; Background Mode"
+                    android:textColor="@color/text_primary"
+                    android:textSize="@dimen/text_size_label"
+                    android:fontFamily="@font/atkinson_hyperlegible_bold"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.01" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:background="@drawable/bg_section_card"
+                android:paddingVertical="4dp"
+                android:clipToOutline="true">
+
+                <View
+                    android:id="@+id/permSectionAccent"
+                    android:layout_width="@dimen/accent_bar_width"
+                    android:layout_height="match_parent"
+                    android:background="@color/transit_green" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:paddingVertical="16dp"
+                    android:paddingHorizontal="16dp">
+
+                    <TextView
+                        android:id="@+id/tvPermOverview"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Status ng Background Tracking:"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp"
+                        android:textAllCaps="true"
+                        android:letterSpacing="0.08"
+                        android:fontFamily="@font/atkinson_hyperlegible_regular" />
+
+                    <!-- Location Item -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="10dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="GPS &amp; Live Location"
+                            android:textColor="@color/text_primary"
+                            android:textSize="@dimen/text_size_label"
+                            android:fontFamily="@font/atkinson_hyperlegible_regular" />
+
+                        <TextView
+                            android:id="@+id/tvStatusPermLocation"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Active"
+                            android:textColor="@color/text_green"
+                            android:textSize="12sp"
+                            android:fontFamily="@font/atkinson_hyperlegible_bold" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/divider_height"
+                        android:layout_marginVertical="10dp"
+                        android:background="@color/divider" />
+
+                    <!-- Background / Battery Optimization Item -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Background (No Sleep / Battery)"
+                            android:textColor="@color/text_primary"
+                            android:textSize="@dimen/text_size_label"
+                            android:fontFamily="@font/atkinson_hyperlegible_regular" />
+
+                        <TextView
+                            android:id="@+id/tvStatusPermBattery"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Active"
+                            android:textColor="@color/text_green"
+                            android:textSize="12sp"
+                            android:fontFamily="@font/atkinson_hyperlegible_bold" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/divider_height"
+                        android:layout_marginVertical="10dp"
+                        android:background="@color/divider" />
+
+                    <!-- Notifications Item -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="System Notifications"
+                            android:textColor="@color/text_primary"
+                            android:textSize="@dimen/text_size_label"
+                            android:fontFamily="@font/atkinson_hyperlegible_regular" />
+
+                        <TextView
+                            android:id="@+id/tvStatusPermNotification"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Active"
+                            android:textColor="@color/text_green"
+                            android:textSize="12sp"
+                            android:fontFamily="@font/atkinson_hyperlegible_bold" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/divider_height"
+                        android:layout_marginVertical="10dp"
+                        android:background="@color/divider" />
+
+                    <!-- Camera Item -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Camera &amp; QR / POD Scan"
+                            android:textColor="@color/text_primary"
+                            android:textSize="@dimen/text_size_label"
+                            android:fontFamily="@font/atkinson_hyperlegible_regular" />
+
+                        <TextView
+                            android:id="@+id/tvStatusPermCamera"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Active"
+                            android:textColor="@color/text_green"
+                            android:textSize="12sp"
+                            android:fontFamily="@font/atkinson_hyperlegible_bold" />
+                    </LinearLayout>
+
+                    <!-- App Info Settings Button -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnOpenAppInfo"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="14dp"
+                        android:text="I-grant o Buksan sa App Settings"
+                        android:textColor="@color/sysu_red"
+                        android:textSize="@dimen/text_size_caption"
+                        android:fontFamily="@font/atkinson_hyperlegible_bold"
+                        android:textAllCaps="false"
+                        app:cornerRadius="@dimen/corner_radius_button"
+                        app:backgroundTint="#1AC8102E"
+                        app:icon="@drawable/ic_dialog_confirm"
+                        app:iconTint="@color/sysu_red"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp" />
+
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ══════════════════════════════════════════════════
                  SECTION: Tutorials
                  ══════════════════════════════════════════════════ -->
             <LinearLayout

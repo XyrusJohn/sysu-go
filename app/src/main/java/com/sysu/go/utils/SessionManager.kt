@@ -28,6 +28,11 @@ class SessionManager(context: Context) {
          *  Used by AssignmentActivity as the first approach when querying sap_assignments
          *  (many docs use queue doc ID as driverId, not Firebase UID). */
         private const val KEY_CURRENT_QUEUE_DOC_ID = "current_queue_doc_id"
+        /** Permanent record of the most recent queue doc ID — used by History queries
+         *  AFTER the trip is completed and KEY_CURRENT_QUEUE_DOC_ID has been cleared.
+         *  sap_assignments keeps the queue doc ID as its driverId field, so this is
+         *  the only reliable lookup once the queue doc's driverId field has been deleted. */
+        private const val KEY_LAST_QUEUE_DOC_ID = "last_queue_doc_id"
         private const val KEY_PENDING_CONFIRMED_DOC_ID = "pendingConfirmedDocId"
     }
 
@@ -211,8 +216,12 @@ class SessionManager(context: Context) {
      */
     fun saveCurrentQueueDocId(queueDocId: String?) {
         prefs.edit {
-            if (queueDocId != null) putString(KEY_CURRENT_QUEUE_DOC_ID, queueDocId)
-            else remove(KEY_CURRENT_QUEUE_DOC_ID)
+            if (queueDocId != null) {
+                putString(KEY_CURRENT_QUEUE_DOC_ID, queueDocId)
+                putString(KEY_LAST_QUEUE_DOC_ID, queueDocId)
+            } else {
+                remove(KEY_CURRENT_QUEUE_DOC_ID)
+            }
         }
     }
 
@@ -221,6 +230,13 @@ class SessionManager(context: Context) {
      * or null if not in queue.
      */
     fun getCurrentQueueDocId(): String? = prefs.getString(KEY_CURRENT_QUEUE_DOC_ID, null)
+
+    /**
+     * Returns the most recent queue doc ID, even after the current entry has been
+     * cleared (e.g. after the driver returned to base). Used by History queries
+     * because sap_assignments keeps the queue doc ID as its driverId field forever.
+     */
+    fun getLastQueueDocId(): String? = prefs.getString(KEY_LAST_QUEUE_DOC_ID, null)
 
     /**
      * Optimistic bridge: AssignmentActivity sets this when confirmShipment succeeds,

@@ -108,9 +108,20 @@ class LoginActivity : AppCompatActivity() {
             signInWithGoogle()
         }
 
+        // Check if redirected because account was deleted
+        val deletedMsg = intent.getStringExtra("EXTRA_ACCOUNT_DELETED_MSG")
+        if (!deletedMsg.isNullOrBlank()) {
+            AlertDialog.Builder(this)
+                .setTitle("Account Deleted")
+                .setMessage(deletedMsg)
+                .setPositiveButton("OK", null)
+                .setCancelable(false)
+                .show()
+        }
+
         // Check if user is already authenticated but missing session
         val currentUser = FirebaseAuth.getInstance().currentUser
-        if (currentUser != null) {
+        if (currentUser != null && deletedMsg.isNullOrBlank()) {
             handleLoginSuccess(currentUser.uid, currentUser.email ?: "")
         }
     }

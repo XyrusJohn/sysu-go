@@ -12,6 +12,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
 import com.sysu.go.R
 import com.sysu.go.utils.SessionManager
+import com.sysu.go.utils.ConnectivityMonitor
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -26,6 +27,12 @@ class SplashActivity : AppCompatActivity() {
         setContentView(R.layout.activity_splash)
 
         startFerrisWheelAnimation()
+
+        // Start ConnectivityMonitor at app launch so the offline/online lifecycle
+        // detection is registered BEFORE the user navigates to any activity. Without
+        // this, drivers/{uid}.status would not be updated when the device goes offline
+        // unless the user happened to be in TransitActivity or ProfileActivity.
+        ConnectivityMonitor.start(this)
 
         // ALWAYS clear stale isTripActive flag on cold start.
         // This fixes: app was hard-killed during a trip → isTripActive=true stuck in SharedPrefs →

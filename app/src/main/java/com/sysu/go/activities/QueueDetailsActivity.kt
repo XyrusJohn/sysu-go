@@ -2,6 +2,7 @@ package com.sysu.go.activities
 
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -13,6 +14,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityQueueDetailsBinding
+import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.SessionManager
 
 class QueueDetailsActivity : AppCompatActivity() {
@@ -447,11 +449,11 @@ class QueueDetailsActivity : AppCompatActivity() {
             binding.tvQueueNumber.text = "GO"
         }
 
-        // ── CRITICAL: sap_assignments.driverId stores the QUEUE DOCUMENT ID (doc.id),
-        // NOT queue["driverId"] which is the Firebase UID. Use queueDocId here.
-        Log.d("OBD", ">>> sap query using queueDocId='$currentQueueDocId' (doc.id, not driverId='$driverId')")
+        // ── sap_assignments.driverId stores the Firebase UID (queue["driverId"]), NOT
+        // the queue document id (queueDocId). Use queueDriverId here, NOT currentQueueDocId.
+        Log.d("OBD", ">>> sap query using queueDriverId='$queueDriverId' (Firebase UID, not queueDocId='$currentQueueDocId')")
         db.collection("sap_assignments")
-            .whereEqualTo("driverId", currentQueueDocId)
+            .whereEqualTo("driverId", queueDriverId)
             .get()
             .addOnSuccessListener { assignSnaps ->
                 if (assignSnaps.isEmpty) {
@@ -551,7 +553,12 @@ class QueueDetailsActivity : AppCompatActivity() {
             tv.text = "—"
             tv.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
         }
-        binding.tvTruckType.text = "—"
+            binding.tvTruckType.text = "—"
         binding.tvHelper.text    = "—"
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        KeyboardUtils.handleTouchOutsideEditText(this, ev)
+        return super.dispatchTouchEvent(ev)
     }
 }

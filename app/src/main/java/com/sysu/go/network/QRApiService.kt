@@ -1,5 +1,6 @@
 package com.sysu.go.network
 
+import android.util.Log
 import com.google.gson.Gson
 import com.sysu.go.BuildConfig
 import com.sysu.go.model.ScanRequest
@@ -19,10 +20,14 @@ object QRApiService {
         data class Error(val code: Int, val message: String) : Result<Nothing>()
     }
 
+    private const val TAG = "QRApiService"
+
     fun verifyToken(token: String): Result<VerifyResponse> {
         return try {
             val encodedToken = URLEncoder.encode(token, "UTF-8")
-            val url = URL("$BASE_URL/verify?token=$encodedToken")
+            val urlString = "$BASE_URL/verify?token=$encodedToken"
+            Log.d(TAG, "--> GET $urlString (token: $token)")
+            val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 15000
@@ -32,24 +37,28 @@ object QRApiService {
             val inputStream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
             val body = inputStream?.bufferedReader()?.readText() ?: "{}"
             
-            android.util.Log.d("QRApiService", "Verify Response ($responseCode): $body")
+            Log.d(TAG, "<-- Verify Response ($responseCode): $body")
             
             val parsed = gson.fromJson(body, VerifyResponse::class.java)
 
             if (responseCode == 200 && parsed.success) {
+                Log.d(TAG, "verifyToken SUCCESS: token=${parsed.token}")
                 Result.Success(parsed)
             } else {
+                Log.w(TAG, "verifyToken FAILED ($responseCode): ${parsed.message}")
                 Result.Error(responseCode, parsed.message ?: "Verification failed (Code: $responseCode)")
             }
         } catch (e: Exception) {
-            android.util.Log.e("QRApiService", "Verify error: ${e.message}", e)
+            Log.e(TAG, "Verify error: ${e.message}", e)
             Result.Error(-1, "Network error: ${e.javaClass.simpleName} - ${e.message}")
         }
     }
 
     fun scanToken(request: ScanRequest): Result<ScanResponse> {
         return try {
-            val url = URL("$BASE_URL/scan")
+            val urlString = "$BASE_URL/scan"
+            Log.d(TAG, "--> POST $urlString (driverId: ${request.driverId}, plate: ${request.plateNumber}, token: ${request.token})")
+            val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.doOutput = true
@@ -58,25 +67,29 @@ object QRApiService {
             conn.connectTimeout = 15000
             conn.readTimeout = 15000
 
+            val jsonBody = gson.toJson(request)
+            Log.d(TAG, "Scan request body: $jsonBody")
             OutputStreamWriter(conn.outputStream).use { w ->
-                w.write(gson.toJson(request))
+                w.write(jsonBody)
             }
 
             val responseCode = conn.responseCode
             val inputStream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
             val body = inputStream?.bufferedReader()?.readText() ?: "{}"
             
-            android.util.Log.d("QRApiService", "Scan Response ($responseCode): $body")
+            Log.d(TAG, "<-- Scan Response ($responseCode): $body")
             
             val parsed = gson.fromJson(body, ScanResponse::class.java)
 
             if (responseCode == 200 && parsed.success) {
+                Log.d(TAG, "scanToken SUCCESS: queueId=${parsed.queueId}, queuePosition=${parsed.queuePosition}")
                 Result.Success(parsed)
             } else {
+                Log.w(TAG, "scanToken FAILED ($responseCode): ${parsed.message}")
                 Result.Error(responseCode, parsed.message ?: "Scan failed (Code: $responseCode)")
             }
         } catch (e: Exception) {
-            android.util.Log.e("QRApiService", "scanToken error: ${e.message}", e)
+            Log.e(TAG, "scanToken error: ${e.message}", e)
             Result.Error(-1, "Network error: ${e.javaClass.simpleName} - ${e.message}")
         }
     }

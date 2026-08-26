@@ -8,6 +8,12 @@
     <string name="not_in_queue">Wala sa Pila</string>
     <string name="default_web_client_id">713214426806-vrnlrj925oavprtnhe92patr7jiurfid.apps.googleusercontent.com</string>
 
+    <!-- Profile status badge — connectivity + trip lifecycle (added 2026-08-10) -->
+    <string name="status_badge_online">Online</string>
+    <string name="status_badge_offline">Offline</string>
+    <string name="status_badge_in_transit">In Transit</string>
+    <string name="status_badge_returning_to_base">Returning to Base</string>
+
     <!-- Dashboard CTA -->
     <string name="cta_status_scan">WALA SA PILA</string>
     <string name="cta_status_queue">NASA PILA</string>

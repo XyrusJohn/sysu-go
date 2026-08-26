@@ -38,6 +38,10 @@ import java.util.concurrent.Executors
 
 class QRScanActivity : AppCompatActivity() {
 
+    companion object {
+        private const val TAG = "QRScanActivity"
+    }
+
     private lateinit var binding: ActivityQrScanBinding
     private lateinit var cameraExecutor: ExecutorService
     private var hasScanned = false
@@ -201,17 +205,20 @@ class QRScanActivity : AppCompatActivity() {
                 .addOnSuccessListener { barcodes ->
                     for (barcode in barcodes) {
                         val rawValue = barcode.rawValue ?: continue
+                        android.util.Log.d(TAG, "Barcode detected: rawValue=$rawValue")
                         // Case 1: URL format https://...?token=SYS-XXXXXXXXXXXX
                         if (rawValue.startsWith(BuildConfig.FRONTEND_URL) && rawValue.contains("token=")) {
                             val uri = android.net.Uri.parse(rawValue)
                             val token = uri.getQueryParameter("token")
                             if (!token.isNullOrEmpty() && token.startsWith("SYS-")) {
+                                android.util.Log.d(TAG, "Parsed token from URL: $token")
                                 onTokenDetected(token)
                                 return@addOnSuccessListener
                             }
                         }
                         // Case 2: Raw token SYS-XXXXXXXXXXXX
                         if (rawValue.startsWith("SYS-")) {
+                            android.util.Log.d(TAG, "Parsed raw token: $rawValue")
                             onTokenDetected(rawValue)
                             return@addOnSuccessListener
                         }
@@ -226,8 +233,12 @@ class QRScanActivity : AppCompatActivity() {
     }
 
     private fun onTokenDetected(token: String) {
-        if (hasScanned) return
+        if (hasScanned) {
+            android.util.Log.d(TAG, "onTokenDetected ignored (already scanning/scanned)")
+            return
+        }
         hasScanned = true
+        android.util.Log.i(TAG, "Token detected: $token. Verifying with server...")
 
         runOnUiThread {
             binding.tvStatus.text = "Token found! Verifying…"
@@ -239,6 +250,7 @@ class QRScanActivity : AppCompatActivity() {
             when (result) {
                 is QRApiService.Result.Success -> {
                     currentToken = token
+                    android.util.Log.i(TAG, "Token verified successfully ($token). Navigating to TripRegistrationActivity...")
                     withContext(Dispatchers.Main) {
                         binding.tvStatus.text = "Token verified! Loading form…"
                         // Navigate directly to TripRegistrationActivity with the token
@@ -250,12 +262,13 @@ class QRScanActivity : AppCompatActivity() {
                     }
                 }
                 is QRApiService.Result.Error -> {
+                    android.util.Log.w(TAG, "Token verification error (code ${result.code}): ${result.message}")
                     withContext(Dispatchers.Main) {
                         binding.progressBar.visibility = android.widget.ProgressBar.GONE
                         val msg = when {
                             result.code == 410 -> getString(R.string.token_expired)
                             result.code == 404 -> getString(R.string.token_invalid)
-                            else -> getString(R.string.scan_failed)
+                            else -> getString(R.string.scan_failed) + "\n(${result.message})"
                         }
                         showErrorAndReset(msg)
                     }

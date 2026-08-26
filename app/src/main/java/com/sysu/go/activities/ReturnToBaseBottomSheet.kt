@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -21,23 +22,25 @@ import com.sysu.go.databinding.LayoutReturnPanelBinding
 import com.sysu.go.network.SocketManager
 import com.sysu.go.services.LocationServices
 import com.sysu.go.utils.SessionManager
+import com.sysu.go.utils.DriverStatus
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 /**
  * Floating bottom panel shown when a driver taps the map icon after all
- * shipments are delivered (tripStatus = "delivered" or "returning_to_base").
+ * shipments are completed. Three-step return-to-base flow:
  *
- * One trip, one panel. For multi-shipment trips, all non-completed docIds
- * are passed and updated together on each confirm.
+ *   1. START RETURNING TO BASE  → drivers.returnStatus = "returning_to_base"
+ *   2. ARRIVED AT BASE         → drivers.returnStatus = "arrived_at_base"
+ *                                  (strict geo-tracking stops here)
+ *   3. CONFIRM ARRIVAL         → tripStatus = "completed" on every doc,
+ *                                  drivers.returnStatus = "completed",
+ *                                  queue released, navigate to MainActivity
  *
- * Flow:
- *   - Delivered (all):       "START RETURNING TO BASE"
- *   - Returning (any):       "ARRIVED AT WAREHOUSE" → tap → inline confirm
- *   - All completed:         exits the panel (no panel shown)
- *
- * The inline confirm step shows "Arrived at Warehouse?" with a green
- * "YES, CONFIRM ARRIVAL" button — driver must tap twice to complete.
+ * Per-shipment `tripStatus` stays semantic (ends at "completed" once
+ * all PODs done). The driver-level return journey lives on
+ * drivers.{driverId}.returnStatus so the web app can listen to it
+ * without conflating it with shipment progress.
  */
 class ReturnToBaseBottomSheet : DialogFragment() {
 
@@ -46,22 +49,31 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private val db = FirebaseFirestore.getInstance()
     private val sessionManager by lazy { SessionManager(requireContext()) }
 
-    /** True when at least one shipment is already in returning_to_base state. */
-    private var isAlreadyReturning: Boolean = false
-
     /**
      * Comma-separated docIds of non-completed shipments.
-     * MainActivity passes all remaining shipments so they can all be updated.
+     * MainActivity passes all remaining shipments so they can all be updated
+     * on the final CONFIRM step.
      */
     private var shipmentDocIds: String = ""
 
-    /** True once "ARRIVED AT WAREHOUSE" has been tapped once — shows confirm step. */
+    /**
+     * Current driver-level return status read from drivers.returnStatus.
+     * null = returned-to-base trip not yet started
+     * "returning_to_base" = driver started the journey back
+     * "arrived_at_base" = driver physically at warehouse, awaiting confirm
+     */
+    private var currentReturnStatus: String? = null
+
+    /**
+     * True once the user has tapped "ARRIVED AT BASE" — the panel
+     * transitions to the inline confirmation step.
+     */
     private var awaitingWarehouseConfirm: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        isAlreadyReturning = arguments?.getBoolean(ARG_ALREADY_RETURNING, false) ?: false
         shipmentDocIds = arguments?.getString(ARG_SHIPMENT_DOC_IDS, "") ?: ""
+        currentReturnStatus = arguments?.getString(ARG_RETURN_STATUS, null)
         setStyle(STYLE_NORMAL, R.style.ThemeOverlay_FrostedBlueBottomSheet)
     }
 
@@ -93,7 +105,8 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun bindPanelContent() {
         when {
             awaitingWarehouseConfirm -> configureForWarehouseConfirmStep()
-            isAlreadyReturning -> configureForReturningState()
+            currentReturnStatus == "arrived_at_base" -> configureForWarehouseConfirmStep()
+            currentReturnStatus == "returning_to_base" -> configureForReturningState()
             else -> configureForDeliveredState()
         }
     }
@@ -101,15 +114,15 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun bindConfirmButton() {
         binding.btnConfirmReturn.setOnClickListener {
             when {
-                // ARRIVED AT BASE — first tap: save arrival state then show confirm step
-                isAlreadyReturning && !awaitingWarehouseConfirm -> {
+                // Step 2 first-tap: write arrived_at_base, then show confirm step
+                currentReturnStatus == "returning_to_base" && !awaitingWarehouseConfirm -> {
                     performArrivedAtBase()
                 }
-                // ARRIVED AT BASE — confirm step: complete all remaining shipments
-                isAlreadyReturning && awaitingWarehouseConfirm -> {
+                // Step 3: write tripStatus="completed" + release driver
+                currentReturnStatus == "arrived_at_base" || awaitingWarehouseConfirm -> {
                     performConfirmArrival()
                 }
-                // START RETURNING TO BASE: begin the return journey
+                // Step 1: write drivers.returnStatus = "returning_to_base"
                 else -> {
                     performStartReturning()
                 }
@@ -130,12 +143,25 @@ class ReturnToBaseBottomSheet : DialogFragment() {
 
     // ─── Panel content ───────────────────────────────────────────────────────
 
+    // ─── Warehouse Geofence Configuration ──────────────────────────────────
+    private var warehouseLat: Double = 14.671073
+    private var warehouseLng: Double = 121.014855
+    private var warehouseRadiusMeters: Double = 100.0
+    private var warehouseName: String = "SYSU Main Warehouse"
+    private var isInsideGeofence: Boolean = false
+
+    private val fusedLocationClient by lazy {
+        com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(requireContext())
+    }
+
     private fun configureForDeliveredState() {
         binding.tvPanelTitle.text = "All Deliveries Complete"
         binding.tvPanelSubtitle.text = "All shipments have been delivered. Ready to return to base?"
         binding.tvDeliveredSummary.visibility = View.VISIBLE
         binding.tvDeliveredSummary.text = getString(R.string.return_panel_all_delivered)
+        binding.llGeofenceStatus.visibility = View.GONE
         binding.btnConfirmReturn.text = "START RETURNING TO BASE"
+        binding.btnConfirmReturn.isEnabled = true
         binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
             requireContext(), R.color.sysu_blue
         )
@@ -143,61 +169,163 @@ class ReturnToBaseBottomSheet : DialogFragment() {
 
     private fun configureForReturningState() {
         binding.tvPanelTitle.text = "Returning to Base"
-        binding.tvPanelSubtitle.text = "You are heading back to the warehouse."
+        binding.tvPanelSubtitle.text = "Heading back to $warehouseName. Mag-a-unlock ang 'Arrived' button kapag nasa loob na ng ${warehouseRadiusMeters.toInt()}m radius."
         binding.tvDeliveredSummary.visibility = View.GONE
+        binding.llGeofenceStatus.visibility = View.VISIBLE
+
         binding.btnConfirmReturn.text = "ARRIVED AT BASE"
-        binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
-            requireContext(), R.color.sysu_blue
-        )
+        // Initially locked until GPS confirms driver is inside geofence
+        updateGeofenceUI(false, null)
+
+        // Fetch dynamic warehouse config and verify live GPS location
+        fetchWarehouseBaseSettingsAndCheckDistance()
     }
 
-    /** Step 2 of ARRIVED AT WAREHOUSE — inline confirmation. */
     private fun configureForWarehouseConfirmStep() {
         binding.tvPanelTitle.text = "Confirm Arrival"
-        binding.tvPanelSubtitle.text = "Tap CONFIRM to mark the trip as complete and return to queue."
+        binding.tvPanelSubtitle.text = "You're at $warehouseName. Tap CONFIRM to finalize the trip and return to queue."
         binding.tvDeliveredSummary.visibility = View.GONE
+        binding.llGeofenceStatus.visibility = View.GONE
         binding.btnConfirmReturn.text = "YES, CONFIRM ARRIVAL"
+        binding.btnConfirmReturn.isEnabled = true
         binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
             requireContext(), R.color.sysu_green
         )
     }
 
-    // ─── Actions ──────────────────────────────────────────────────────────────
+    /**
+     * Fetches warehouse_base from settings collection:
+     *   settings/warehouse_base -> lat, lng, radiusMeters, name
+     * Then immediately queries FusedLocationProviderClient to verify distance.
+     */
+    private fun fetchWarehouseBaseSettingsAndCheckDistance() {
+        lifecycleScope.launch {
+            try {
+                val doc = db.collection("settings").document("warehouse_base").get().await()
+                if (doc.exists()) {
+                    warehouseLat = doc.getDouble("lat") ?: warehouseLat
+                    warehouseLng = doc.getDouble("lng") ?: warehouseLng
+                    val radiusObj = doc.get("radiusMeters")
+                    warehouseRadiusMeters = when (radiusObj) {
+                        is Number -> radiusObj.toDouble()
+                        else -> 100.0
+                    }
+                    warehouseName = doc.getString("name") ?: warehouseName
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to fetch warehouse_base settings, using defaults: ${e.message}")
+            }
+            checkCurrentLocationGeofence()
+        }
+    }
 
-    private fun performStartReturning() {
-        val docId = getFirstDocId()
-        if (docId.isNullOrBlank()) {
-            Toast.makeText(requireContext(), "Walang aktibong biyahe.", Toast.LENGTH_SHORT).show()
-            dismiss(); return
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun checkCurrentLocationGeofence() {
+        if (!com.sysu.go.utils.PermissionHelper.hasLocationPermission(requireContext())) {
+            updateGeofenceUI(false, null, "Kailangan ng Location Permission para ma-verify ang distansya.")
+            return
         }
 
+        fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+            if (loc != null) {
+                val results = FloatArray(1)
+                android.location.Location.distanceBetween(
+                    loc.latitude, loc.longitude,
+                    warehouseLat, warehouseLng,
+                    results
+                )
+                val distanceMeters = results[0]
+                val inside = distanceMeters <= warehouseRadiusMeters
+                isInsideGeofence = inside
+                updateGeofenceUI(inside, distanceMeters)
+            } else {
+                updateGeofenceUI(false, null, "Kinukuha pa ang GPS signal...")
+            }
+        }.addOnFailureListener {
+            updateGeofenceUI(false, null, "Hindi makuha ang GPS location.")
+        }
+    }
+
+    private fun updateGeofenceUI(inside: Boolean, distanceMeters: Float?, customError: String? = null) {
+        if (_binding == null) return
+
+        isInsideGeofence = inside
+        if (customError != null) {
+            binding.tvGeofenceDistance.text = customError
+            binding.tvGeofenceBadge.text = "GPS Error"
+            binding.tvGeofenceBadge.setTextColor(ContextCompat.getColor(requireContext(), R.color.sysu_red))
+            binding.tvGeofenceBadge.setBackgroundResource(R.drawable.bg_chip_required)
+            binding.ivGeofenceIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.sysu_red))
+            binding.btnConfirmReturn.isEnabled = false
+            binding.btnConfirmReturn.alpha = 0.5f
+            return
+        }
+
+        if (inside) {
+            val distStr = if (distanceMeters != null) "${distanceMeters.toInt()}m mula sa base" else "Nasa loob ng warehouse area"
+            binding.tvGeofenceDistance.text = "✓ $distStr (Pasok sa ${warehouseRadiusMeters.toInt()}m radius)"
+            binding.tvGeofenceBadge.text = "Nasa Base Na ✓"
+            binding.tvGeofenceBadge.setTextColor(ContextCompat.getColor(requireContext(), R.color.transit_green))
+            binding.tvGeofenceBadge.setBackgroundResource(R.drawable.bg_chip_granted)
+            binding.ivGeofenceIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.transit_green))
+            binding.btnConfirmReturn.isEnabled = true
+            binding.btnConfirmReturn.alpha = 1.0f
+            binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
+                requireContext(), R.color.sysu_blue
+            )
+        } else {
+            val distText = if (distanceMeters != null) {
+                if (distanceMeters >= 1000) {
+                    String.format(java.util.Locale.US, "%.1f km layo mula sa base", distanceMeters / 1000.0)
+                } else {
+                    "${distanceMeters.toInt()}m layo mula sa base"
+                }
+            } else "Kinakalkula..."
+            binding.tvGeofenceDistance.text = "Kasalukuyang distansya: $distText (Kailangan ≤ ${warehouseRadiusMeters.toInt()}m)"
+            binding.tvGeofenceBadge.text = "Nasa Labas Pa"
+            binding.tvGeofenceBadge.setTextColor(ContextCompat.getColor(requireContext(), R.color.sysu_red))
+            binding.tvGeofenceBadge.setBackgroundResource(R.drawable.bg_chip_required)
+            binding.ivGeofenceIcon.setColorFilter(ContextCompat.getColor(requireContext(), R.color.sysu_red))
+            binding.btnConfirmReturn.isEnabled = false
+            binding.btnConfirmReturn.alpha = 0.5f
+        }
+    }
+
+    // ─── Actions ──────────────────────────────────────────────────────────────
+
+    /**
+     * Step 1: START RETURNING TO BASE
+     * Writes:
+     *   - drivers.status = "returning_to_base"
+     *   - drivers.isReturning = true
+     *   - drivers.returnStatus = "returning_to_base"
+     *   - drivers.returnedToBaseAt = now
+     */
+    private fun performStartReturning() {
         showLoading("Saving return status...")
 
         val now = Timestamp.now()
-        val updates = mapOf(
-            "tripStatus" to "returning_to_base",
-            "returnedToBaseAt" to now
-        )
         lifecycleScope.launch {
             try {
-                // Update sap_assignments
-                db.collection("sap_assignments").document(docId)
-                    .update(updates)
-                    .await()
-
-                // Also save return status to drivers collection for live monitoring
                 val driverId = sessionManager.getDriverId()
                 if (driverId != null) {
                     db.collection("drivers").document(driverId)
                         .update(mapOf(
+                            "status" to "returning_to_base",
+                            "isReturning" to true,
                             "returnStatus" to "returning_to_base",
                             "returnedToBaseAt" to now
                         ))
                         .await()
                 }
 
-                Log.d(TAG, "performStartReturning: $docId → returning_to_base")
-                dismiss()
+                Log.d(TAG, "performStartReturning: driver → returning_to_base (isReturning=true)")
+                // Mark driver-level status for the Profile badge and Socket.IO broadcast
+                DriverStatus.write(driverId, DriverStatus.State.RETURNING_TO_BASE)
+                currentReturnStatus = "returning_to_base"
+                hideLoading()
+                bindPanelContent()
+                bindConfirmButton()
             } catch (e: Exception) {
                 Log.e(TAG, "performStartReturning error: ${e.message}")
                 hideLoading()
@@ -209,16 +337,24 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     }
 
     /**
-     * Step 2: ARRIVED AT BASE — saves arrival state to drivers collection
-     * and then reveals the inline confirmation step.
+     * Step 2: ARRIVED AT BASE (Only enabled when GPS confirms within warehouse radius)
+     * Writes:
+     *   - drivers.returnStatus = "arrived_at_base"
+     *   - drivers.arrivedAtBaseAt = now
+     *   - Stops GPS tracking
      */
     private fun performArrivedAtBase() {
+        if (!isInsideGeofence) {
+            Toast.makeText(requireContext(), "Nasa labas ka pa ng warehouse base! Hindi pa pwedeng mag-arrive.", Toast.LENGTH_LONG).show()
+            return
+        }
+
         showLoading("Confirming arrival...")
 
         val now = Timestamp.now()
         lifecycleScope.launch {
             try {
-                // Save arrival state to drivers collection
+                // 1. Save arrival state to drivers collection
                 val driverId = sessionManager.getDriverId()
                 if (driverId != null) {
                     db.collection("drivers").document(driverId)
@@ -229,21 +365,10 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         .await()
                 }
 
-                // Also update sap_assignments with arrival timestamp
-                val docIds = getAllDocIds()
-                for (docId in docIds) {
-                    db.collection("sap_assignments").document(docId)
-                        .update(mapOf("arrivedAtBaseAt" to now))
-                        .await()
-                }
+                Log.d(TAG, "performArrivedAtBase: driver → arrived_at_base")
+                DriverStatus.write(driverId, DriverStatus.State.RETURNING_TO_BASE)
 
-                Log.d(TAG, "performArrivedAtBase: driver + ${docIds.size} shipments updated")
-
-                // STRICT geo-tracking stop at physical arrival — per the spec,
-                // tracking ends the moment the driver says "I'm at the warehouse",
-                // not at the final administrative CONFIRM. Same pattern as
-                // performConfirmArrival(): flip the flag BEFORE stopService so any
-                // auto-restart of the foreground service cannot re-enable GPS.
+                // 2. Stop geo tracking
                 sessionManager.setTrackingActive(false)
                 try {
                     val uid = sessionManager.getDriverId()
@@ -256,8 +381,8 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     Log.w(TAG, "performArrivedAtBase: offline emit skipped — ${e.message}")
                 }
 
+                currentReturnStatus = "arrived_at_base"
                 hideLoading()
-                awaitingWarehouseConfirm = true
                 bindPanelContent()
                 bindConfirmButton()
             } catch (e: Exception) {
@@ -271,8 +396,11 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     }
 
     /**
-     * Step 3: YES, CONFIRM ARRIVAL — writes tripStatus="completed" on all
-     * non-completed shipments, releases queue, and navigates to MainActivity.
+     * Step 3: YES, CONFIRM ARRIVAL — writes tripStatus="completed" + completedAt
+     * on all non-completed shipments, releases the queue, sets
+     * drivers.returnStatus = "completed", and navigates back to MainActivity.
+     * Shipments at this point may already be "completed" from the END SHIPMENT
+     * step — this just stamps the final completedAt timestamp and clears state.
      */
     private fun performConfirmArrival() {
         val docIds = getAllDocIds()
@@ -287,9 +415,16 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         showLoading("Completing trip...")
 
         val now = Timestamp.now()
+        // Mirror the driver-level return journey into each sap_assignment so the
+        // per-shipment document carries its own return outcome. This makes
+        // sap_assignments.{docId} the single source of truth for a shipment's
+        // full lifecycle (loading → in_transit → completed → returned_to_base)
+        // — no need to chase drivers.returnStatus when querying past trips.
         val updates = mapOf(
             "tripStatus" to "completed",
-            "completedAt" to now
+            "completedAt" to now,
+            "returnStatus" to "completed",
+            "returnedToBaseAt" to now
         )
         lifecycleScope.launch {
             try {
@@ -301,51 +436,97 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     Log.d(TAG, "performConfirmArrival: $docId → completed")
                 }
 
-                // Update drivers collection — trip completed
+                // Update drivers collection — trip completed and update session history
                 val driverId = sessionManager.getDriverId()
                 if (driverId != null) {
-                    db.collection("drivers").document(driverId)
-                        .update(mapOf(
+                    val driverRef = db.collection("drivers").document(driverId)
+                    // Read current driver data
+                    val driverDoc = driverRef.get().await()
+                    if (driverDoc.exists()) {
+                        val data = driverDoc.data!!
+                        val arrivedAtBaseAt = data["arrivedAtBaseAt"] as? Timestamp
+                        // We will set returnedToBaseAt to now (the time of confirming return)
+                        val returnedToBaseAtNow = now
+                        val completedAtNow = now
+                        val fn = data["fn"] as? String
+                        val mi = data["mi"] as? String
+                        val ln = data["ln"] as? String
+                        val name = data["name"] as? String
+                        val phone = data["phone"] as? String
+                        val truckingCompany = data["truckingCompany"] as? String
+                        val requirements = data["requirements"] as? List<String> ?: emptyList()
+
+                        // Create session object for history
+                        val session = hashMapOf(
+                            "arrivedAtBaseAt" to arrivedAtBaseAt,
+                            "returnedToBaseAt" to returnedToBaseAtNow,
+                            "completedAt" to completedAtNow,
+                            "fn" to fn,
+                            "mi" to mi,
+                            "ln" to ln,
+                            "name" to name,
+                            "phone" to phone,
+                            "truckingCompany" to truckingCompany,
+                            "requirements" to requirements
+                        )
+
+                        // Get current session history or initialize empty list
+                        val sessionHistory = data["sessionHistory"] as? List<*> ?: mutableListOf<Any>()
+                        val mutableHistory = sessionHistory.toMutableList()
+                        mutableHistory.add(session)
+                        // Keep only the last 50 sessions (newest at the end)
+                        if (mutableHistory.size > 50) {
+                            mutableHistory.removeAt(0) // Remove oldest
+                        }
+
+                        // Update driver document
+                        driverRef.update(mapOf(
+                            "status" to "online",
+                            "isReturning" to false,
                             "returnStatus" to "completed",
-                            "completedAt" to now
-                        ))
-                        .await()
+                            "returnedToBaseAt" to returnedToBaseAtNow,
+                            "completedAt" to completedAtNow,
+                            "sessionHistory" to mutableHistory
+                        )).await()
+
+                        // Reset driver-level status back to "online" — trip cycle complete
+                        DriverStatus.write(driverId, DriverStatus.State.ONLINE)
+                    }
                 }
 
-                // Notify backend: truck is no longer full — all shipments done
-                SocketManager.emitDriverFull(false)
-
-                // Strict geo-tracking stop: same pattern as TransitActivity.performEndTrip().
-                // Flip the flag BEFORE stopService so any auto-restart of the foreground
-                // service cannot re-enable GPS. Then explicitly emit offline so the
-                // sysu-app map marker drops immediately — without this, the marker would
-                // linger on the last position because no further driver_moving is fired.
+                // Strict presence & map marker drop:
+                // 1. Emit explicit 'completed' status so sysu-app Overview Map removes the truck marker immediately.
+                // 2. Clear tracking state so LocationServices GPS updates stop.
                 sessionManager.setTrackingActive(false)
                 sessionManager.clearTripSession()
                 try {
-                    val uid = sessionManager.getDriverId()
+                    val uid = sessionManager.getDriverId() ?: FirebaseAuth.getInstance().currentUser?.uid
+                    val driverName = sessionManager.getDriverName() ?: "Driver"
                     SocketManager.init(requireContext())
                     if (uid != null) {
-                        SocketManager.emitOfflineStatus(uid, sessionManager.getDriverName())
+                        SocketManager.emitCompletedStatus(uid, driverName)
+                        SocketManager.emitStatusUpdate("completed", driverName)
                     }
                     requireContext().stopService(Intent(requireContext(), LocationServices::class.java))
                 } catch (e: Exception) {
-                    Log.w(TAG, "performConfirmArrival: offline emit skipped — ${e.message}")
+                    Log.w(TAG, "performConfirmArrival: completed/offline emit skipped — ${e.message}")
                 }
 
                 // Clear queue doc ID from local session — releases driver from queue lookup
                 sessionManager.saveCurrentQueueDocId(null)
 
-                // Update Firestore queue document to release this driver
+                // Update Firestore queue document to complete this trip cycle
                 if (!queueDocId.isNullOrBlank()) {
                     try {
                         db.collection("queue").document(queueDocId)
                             .update(mapOf(
-                                "driverId" to FieldValue.delete(),
-                                "status" to "available"
+                                "status" to "completed",
+                                "overallTripStatus" to "completed",
+                                "completedAt" to FieldValue.serverTimestamp(),
+                                "isAssigned" to false
                             ))
                             .await()
-                        Log.d(TAG, "performConfirmArrival: queue $queueDocId released")
+                        Log.d(TAG, "performConfirmArrival: queue $queueDocId marked completed")
                     } catch (e: FirebaseFirestoreException) {
                         // Queue doc may already be cleaned up — log and continue
                         Log.w(TAG, "performConfirmArrival: queue doc update failed: ${e.message}")
@@ -390,31 +571,22 @@ class ReturnToBaseBottomSheet : DialogFragment() {
 
     companion object {
         private const val TAG = "ReturnToBaseBottomSheet"
-        private const val ARG_ALREADY_RETURNING = "already_returning"
         private const val ARG_SHIPMENT_DOC_IDS = "shipment_doc_ids"
+        private const val ARG_RETURN_STATUS = "return_status"
 
         /**
-         * Factory: all shipments delivered — show "START RETURNING TO BASE".
          * @param shipmentDocIds comma-separated docIds of all non-completed shipments
+         * @param currentReturnStatus current drivers.returnStatus value
+         *        (null | "returning_to_base" | "arrived_at_base")
          */
-        fun newInstance(shipmentDocIds: String = ""): ReturnToBaseBottomSheet {
+        fun newInstance(
+            shipmentDocIds: String = "",
+            currentReturnStatus: String? = null
+        ): ReturnToBaseBottomSheet {
             return ReturnToBaseBottomSheet().apply {
                 arguments = Bundle().apply {
-                    putBoolean(ARG_ALREADY_RETURNING, false)
                     putString(ARG_SHIPMENT_DOC_IDS, shipmentDocIds)
-                }
-            }
-        }
-
-        /**
-         * Factory: shipment(s) already in returning_to_base — show "ARRIVED AT WAREHOUSE".
-         * @param shipmentDocIds comma-separated docIds of all non-completed shipments
-         */
-        fun newInstanceReturning(shipmentDocIds: String = ""): ReturnToBaseBottomSheet {
-            return ReturnToBaseBottomSheet().apply {
-                arguments = Bundle().apply {
-                    putBoolean(ARG_ALREADY_RETURNING, true)
-                    putString(ARG_SHIPMENT_DOC_IDS, shipmentDocIds)
+                    putString(ARG_RETURN_STATUS, currentReturnStatus)
                 }
             }
         }

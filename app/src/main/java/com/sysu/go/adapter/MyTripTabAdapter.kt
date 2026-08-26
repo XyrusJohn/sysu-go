@@ -215,21 +215,7 @@ class MyTripTabAdapter(
 
                     binding.btnShowVerification.visibility = View.GONE
                 }
-                "returning_to_base" -> {
-                    binding.tvTripStatusBadge.text = "RETURNING TO BASE"
-                    binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_blue)
-                    binding.tvTripStatusBadge.setTextColor(
-                        ContextCompat.getColor(ctx, R.color.white)
-                    )
-
-                    binding.btnTripAction.text = "ARRIVED AT WAREHOUSE"
-                    binding.btnTripAction.isEnabled = true
-                    binding.btnTripAction.alpha = 1.0f
-                    binding.btnTripAction.backgroundTintList = ContextCompat.getColorStateList(ctx, R.color.sysu_blue)
-
-                    binding.btnShowVerification.visibility = View.GONE
-                }
-                            "loading" -> {
+                                "loading" -> {
                 binding.tvTripStatusBadge.text = "LOADING..."
                 binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_amber)
                 binding.tvTripStatusBadge.setTextColor(
@@ -302,7 +288,9 @@ class MyTripTabAdapter(
                 }
             }
                 else -> {
-                    // pending / confirmed
+                    // pending / confirmed (legacy fallback — also handles the explicit
+                    // tripStatus="assigned" from the new sap_assignment schema since it
+                    // shares the same UI as the legacy null/pending state).
                     if (assignment.guardVerified && assignment.driverConfirmed) {
                         binding.tvTripStatusBadge.text = "CONFIRMED"
                         binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_amber)
@@ -310,6 +298,8 @@ class MyTripTabAdapter(
                             ContextCompat.getColor(ctx, R.color.white)
                         )
                     } else {
+                        // "ASSIGNED" badge now displays the explicit string instead of "PENDING"
+                        // when the new schema is in use.
                         binding.tvTripStatusBadge.text = assignment.tripStatus?.uppercase() ?: "PENDING"
                         binding.tvTripStatusBadge.setBackgroundResource(R.drawable.bg_status_pill_gray)
                         binding.tvTripStatusBadge.setTextColor(
@@ -342,13 +332,11 @@ class MyTripTabAdapter(
                     "END TRIP", "ENDING..." -> "END_TRIP"
                     "END SHIPMENT" -> "END_SHIPMENT"
                     "START TRIP" -> "START_TRIP"
-                    "START RETURNING TO BASE" -> "RETURNING_TO_BASE"
                     "START LOADING" -> "START_LOADING"
                     "FULLY LOADED" -> "FULLY_LOADED"
                     "VERIFY WITH GUARD" -> "VERIFY_GUARD"
                     "VIEW SUMMARY" -> "VIEW_SUMMARY"
                     "OPEN ACTIVE TRIP 🔒", "OPEN ACTIVE TRIP" -> "OPEN_ACTIVE_TRIP"
-                    "ARRIVED AT WAREHOUSE" -> "RETURNING_TO_BASE"
                     else -> "OPEN_ACTIVE_TRIP"
                 }
                 // Route locked taps to contextual help: when another trip is in
@@ -364,7 +352,7 @@ class MyTripTabAdapter(
             // OBD row: STRICTLY unlocked only when trip is in_transit (POD phase) or
             // completed (post-trip view). LOCKED for everything else:
             //   - loaded / fully_loaded / loading / driver_confirmed / assigned: pre-trip
-            //   - delivered / returning_to_base: POD work is done
+            //   - delivered: POD work is done
             //   - null: not even assigned yet
             //
             // Per the spec: drivers cannot POD or interact with OBD items until they

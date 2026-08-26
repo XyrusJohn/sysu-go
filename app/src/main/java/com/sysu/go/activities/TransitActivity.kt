@@ -71,7 +71,6 @@ class TransitActivity : AppCompatActivity() {
     private var currentHelper: String? = null
     private var currentTruckType: String? = null
     private var isTripEnded: Boolean = false   // true when tripStatus=completed
-    private var isReturningToBase: Boolean = false
     private var isPodCompleteForAll: Boolean = false
     private var isTripStarted = false
     private var isSessionRestored = false      // true when opened via session restore (cold-start mid-trip)
@@ -114,7 +113,7 @@ class TransitActivity : AppCompatActivity() {
         // We use savedDocId as the SOLE restore criterion. If a doc ID exists in SharedPrefs,
         // we restore regardless of isTripActive state. loadTripData() will verify the actual
         // tripStatus from Firestore and set button state from source-of-truth.
-        val savedDocId = sessionManager.getCurrentSapDocId()
+        val savedDocId = intent?.getStringExtra("shipment_doc_id") ?: sessionManager.getCurrentSapDocId()
         Log.d(TAG, "[STATE RESTORE] docId=$savedDocId")
         if (savedDocId != null) {
             currentSapDocId = savedDocId
@@ -136,8 +135,7 @@ class TransitActivity : AppCompatActivity() {
                 Log.d(TAG, "[RESTORE] Re-emitting last location: [$lastLat, $lastLng]")
                 SocketManager.emitDriverMoving(lastLat, lastLng, currentSapDocId, "online")
                 // NOTE: DO NOT unconditionally write tripStatus = "in_transit" here.
-                // If the session was restored from returning_to_base, this would overwrite
-                // the correct tripStatus. Let loadTripData() read source-of-truth instead.
+                // Let loadTripData() read tripStatus source-of-truth from Firestore instead.
             }
             socketConnectListener?.let { SocketManager.addOnConnectListener(it) }
 
@@ -176,6 +174,22 @@ class TransitActivity : AppCompatActivity() {
         TrackingStateMonitor.addListener(trackingStateListener)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newDocId = intent.getStringExtra("shipment_doc_id")
+        if (!newDocId.isNullOrBlank()) {
+            currentSapDocId = newDocId
+            sessionManager.saveCurrentSapDocId(newDocId)
+            sessionManager.setTrackingActive(true)
+            isTripStarted = true
+            loadTripData()
+            if (isLocationPermissionGranted()) {
+                startLocationUpdates()
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         registerConnectionMonitor()
@@ -186,7 +200,7 @@ class TransitActivity : AppCompatActivity() {
         }
         // Refresh ALL state when returning from MyTripActivity.
         // The driver may have completed all PODs, or tripStatus may have changed
-        // (e.g. returning_to_base from dispatch web), while we were in the background.
+        // (e.g. completed from dispatch web), while we were in the background.
         // This ensures button shows correct state without requiring activity recreate.
         if (currentSapDocId.isNotBlank()) {
             activityScope.launch {
@@ -203,10 +217,9 @@ class TransitActivity : AppCompatActivity() {
                         } ?: false
                         // Sync all derived flags with the tripStatus from Firestore
                         isTripEnded = tripStatus == "completed"
-                        isReturningToBase = tripStatus == "returning_to_base"
                         isTripStarted = tripStatus == "in_transit"
                         Log.d(TAG, "[onResume refresh] tripStatus=$tripStatus isPodCompleteForAll=$isPodCompleteForAll " +
-                            "isReturningToBase=$isReturningToBase isTripEnded=$isTripEnded")
+                            "isTripEnded=$isTripEnded")
                         updateProgressStepper()
                     }
                 } catch (e: Exception) {
@@ -288,21 +301,6 @@ class TransitActivity : AppCompatActivity() {
 
         binding.btnStartTrip.setOnClickListener {
             when {
-                isReturningToBase -> {
-                    // Confirm before ending the return trip
-                    val dlgEndTrip = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
-                    dlgEndTrip.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_destructive)
-                    dlgEndTrip.findViewById<TextView>(R.id.tvDialogTitle).text = "End Trip?"
-                    dlgEndTrip.findViewById<TextView>(R.id.tvDialogMessage).text = "Are you sure you want to end this trip? This cannot be undone."
-                    val dialogEndTrip = AlertDialog.Builder(this).setView(dlgEndTrip).create()
-                    dlgEndTrip.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-                        text = "End Trip"
-                        backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@TransitActivity, R.color.sysu_red))
-                        setOnClickListener { dialogEndTrip.dismiss(); performEndTrip() }
-                    }
-                    dlgEndTrip.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialogEndTrip.dismiss() }
-                    dialogEndTrip.show()
-                }
                 isTripStarted -> {
                     // Always navigate back to MainActivity. The return-to-base flow is
                     // triggered from MainActivity's map icon AFTER all shipments have been
@@ -388,12 +386,37 @@ class TransitActivity : AppCompatActivity() {
             "startedAt" to Timestamp.now()
         )
 
+        // Update primary shipment document
         db.collection("sap_assignments").document(currentSapDocId)
             .update(updates)
             .addOnSuccessListener {
                 if (isFinishing) return@addOnSuccessListener
                 isTripStarted = true
                 Log.d(TAG, "Trip started successfully — location tracking via LocationServices (tracking_active=TRUE)")
+
+                // Cascade: Also update any other assigned/loaded shipments for this driver to 'in_transit'
+                val driverUid = sessionManager.getDriverId() ?: FirebaseAuth.getInstance().currentUser?.uid
+                if (!driverUid.isNullOrBlank()) {
+                    db.collection("sap_assignments")
+                        .whereEqualTo("driverId", driverUid)
+                        .whereIn("tripStatus", listOf("assigned", "loading", "loaded", "fully_loaded"))
+                        .get()
+                        .addOnSuccessListener { querySnap ->
+                            for (doc in querySnap.documents) {
+                                if (doc.id != currentSapDocId) {
+                                    doc.reference.update(mapOf("tripStatus" to "in_transit", "startedAt" to Timestamp.now()))
+                                }
+                            }
+                        }
+
+                    // Update queue doc overallTripStatus to 'in_transit'
+                    val queueId = sessionManager.getCurrentQueueDocId()
+                    if (!queueId.isNullOrBlank()) {
+                        db.collection("queue").document(queueId)
+                            .update(mapOf("overallTripStatus" to "in_transit", "status" to "in_transit"))
+                    }
+                }
+
                 // Check permission before starting LocationServices — if denied, prompt user to open settings
                 if (isFinishing) return@addOnSuccessListener
                 if (isLocationPermissionGranted()) {
@@ -464,8 +487,17 @@ class TransitActivity : AppCompatActivity() {
             .update(updates)
             .addOnSuccessListener {
                 if (isFinishing) return@addOnSuccessListener
-                isTripStarted = false
-                isTripEnded = true
+                val queueId = sessionManager.getCurrentQueueDocId()
+                if (!queueId.isNullOrBlank()) {
+                    db.collection("queue").document(queueId)
+                        .update(mapOf(
+                            "status" to "completed",
+                            "overallTripStatus" to "completed",
+                            "completedAt" to Timestamp.now(),
+                            "isAssigned" to false
+                        ))
+                }
+
                 sessionManager.clearTripSession()
                 // Prevent LocationServices from emitting further driver_moving.
                 // Set flag BEFORE stopService so if service is auto-restarted by
@@ -482,7 +514,7 @@ class TransitActivity : AppCompatActivity() {
                 val driverName = sessionManager.getDriverName()
                 val uid = FirebaseAuth.getInstance().currentUser?.uid
                 if (uid != null) {
-                    SocketManager.emitOfflineStatus(uid, driverName)
+                    SocketManager.emitCompletedStatus(uid, driverName)
                 }
 
                 stopLocationUpdates()
@@ -506,51 +538,10 @@ class TransitActivity : AppCompatActivity() {
     }
 
     private fun transitionToReturningToBase() {
-        if (currentSapDocId.isBlank()) {
-            Toast.makeText(this, "Walang aktibong biyahe.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        binding.btnStartTrip.isEnabled = false
-        binding.btnStartTrip.text = "UPDATING..."
-
-        val updates = mapOf(
-            "tripStatus" to "returning_to_base",
-            "returnedToBaseAt" to Timestamp.now()
-        )
-        db.collection("sap_assignments").document(currentSapDocId)
-            .update(updates)
-            .addOnSuccessListener {
-                if (isFinishing) return@addOnSuccessListener
-                isReturningToBase = true
-                isTripStarted = false
-                isPodCompleteForAll = false  // reset for cleanliness
-                updateProgressStepper()
-
-                // Driver has arrived at the warehouse — STRICT geo-tracking stop.
-                // Same pattern used by performEndTrip(): flip the tracked flag
-                // BEFORE stopService so the service cannot restart with tracking on.
-                sessionManager.setTrackingActive(false)
-                stopService(Intent(this, LocationServices::class.java))
-                TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
-
-                // Emit offline so the sysu-app map marker drops immediately
-                SocketManager.init(this)
-                val uid = FirebaseAuth.getInstance().currentUser?.uid
-                if (uid != null) {
-                    SocketManager.emitOfflineStatus(uid, sessionManager.getDriverName())
-                }
-                stopLocationUpdates()
-
-                Toast.makeText(this, "Bumabalik sa base!", Toast.LENGTH_SHORT).show()
-                Log.d(TAG, "[RETURN TO BASE] Geo tracking STOPPED — driver arrived at warehouse")
-            }
-            .addOnFailureListener { e ->
-                if (isFinishing) return@addOnFailureListener
-                Log.e(TAG, "Failed to transition to returning_to_base: ${e.message}")
-                binding.btnStartTrip.isEnabled = true
-                binding.btnStartTrip.text = getString(R.string.btn_start_returning_to_base)
-                Toast.makeText(this, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
-            }
+        // Simpler flow: go straight to completed instead of using an
+        // intermediate "returning_to_base" state. performEndTrip() handles
+        // the Firestore write, GPS stop, offline emit, and session cleanup.
+        performEndTrip()
     }
 
     private fun loadTripData() {
@@ -597,9 +588,8 @@ class TransitActivity : AppCompatActivity() {
                                 // Sync all state flags from Firestore source-of-truth
                                 val tripStatus = doc.getString("tripStatus")
                                 isTripStarted = tripStatus == "in_transit"
-                                isReturningToBase = tripStatus == "returning_to_base"
                                 isTripEnded = tripStatus == "completed"
-                                Log.d(TAG, "[LOAD] State synced: isTripStarted=$isTripStarted isReturningToBase=$isReturningToBase isTripEnded=$isTripEnded")
+                                Log.d(TAG, "[LOAD] State synced: isTripStarted=$isTripStarted isTripEnded=$isTripEnded")
                                 // If shipment is completed, redirect to AssignmentActivity (My Queue).
                                 // Driver should not be shown TransitActivity's completed state —
                                 // they need to pick the next shipment from the queue.
@@ -634,7 +624,6 @@ class TransitActivity : AppCompatActivity() {
                                 isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                                 val tripStatus = doc.getString("tripStatus")
                                 isTripStarted = tripStatus == "in_transit"
-                                isReturningToBase = tripStatus == "returning_to_base"
                                 isTripEnded = tripStatus == "completed"
                                 // Same redirect check: if completed, send to AssignmentActivity instead
                                 if (isTripEnded) {
@@ -664,11 +653,9 @@ class TransitActivity : AppCompatActivity() {
 
     private fun loadTripDataFromQueue(driverId: String) {
         // Clear any stale completed-session from previous trip so we start fresh.
-        // isReturningToBase is also reset — will be re-set below from Firestore if needed.
         sessionManager.clearCurrentSapDocId()
         isTripStarted = false
         isTripEnded = false
-        isReturningToBase = false
 
         db.collection("queue")
             .whereEqualTo("driverId", driverId)
@@ -718,10 +705,9 @@ class TransitActivity : AppCompatActivity() {
                                     val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
                                     isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
                                     val fbTripStatus = sapDoc.getString("tripStatus")
-                                    isReturningToBase = fbTripStatus == "returning_to_base"
                                     isTripStarted = fbTripStatus == "in_transit"
                                     isTripEnded = fbTripStatus == "completed"
-                                    Log.d(TAG, "[FALLBACK] Doc ${sapDoc.id} tripStatus=$fbTripStatus isReturningToBase=$isReturningToBase")
+                                    Log.d(TAG, "[FALLBACK] Doc ${sapDoc.id} tripStatus=$fbTripStatus")
                                     updateProgressStepper()
                                     populateShipmentUI(sapDoc, currentHelper, currentTruckType)
                                     return@addOnSuccessListener
@@ -733,7 +719,6 @@ class TransitActivity : AppCompatActivity() {
                         // Compute isPodCompleteForAll
                         val lineItemsAll = sapDoc.get("lineItems") as? List<Map<String, Any?>>
                         isPodCompleteForAll = lineItemsAll?.all { (it["isPodCompleted"] as? Boolean) == true } ?: false
-                        isReturningToBase = false          // query already filtered tripStatus=in_transit
                         isTripStarted = true
                         Log.d(TAG, "Found sap doc id=${sapDoc.id} tripStatus=in_transit isPodCompleteForAll=$isPodCompleteForAll")
                         updateProgressStepper()
@@ -796,10 +781,6 @@ class TransitActivity : AppCompatActivity() {
         if (tripStatus == "completed") {
             isTripStarted = false
             isTripEnded = true
-        } else if (tripStatus == "returning_to_base") {
-            isReturningToBase = true
-            isTripStarted = false
-            isTripEnded = false
         }
 
         Log.d(TAG, "Shipment UI populated: Shipment=$shipmentNumber Plate=$plateNumber Truck=$resolvedTruckType Helper=$resolvedHelper")
@@ -1064,18 +1045,6 @@ class TransitActivity : AppCompatActivity() {
             return
         }
 
-        // Returning to base — show Verified done, Transit done, Done active
-        if (isReturningToBase) {
-            setStepState(R.id.dotQueue, null, R.id.checkQueue, R.id.labelQueue, StepState.DONE)
-            setStepState(R.id.dotLoading, null, R.id.checkLoading, R.id.labelLoading, StepState.DONE)
-            setStepState(R.id.dotTransit, null, R.id.checkTransit, R.id.labelTransit, StepState.DONE)
-            binding.tvSubStatus.text = "ARRIVED AT WAREHOUSE"
-            binding.btnStartTrip.text = "ARRIVED AT WAREHOUSE"
-            binding.btnStartTrip.setBackgroundColor(ContextCompat.getColor(this@TransitActivity, R.color.sysu_blue))
-            binding.btnStartTrip.isEnabled = true
-            return
-        }
-
         // In transit — Verified done, Transit active (in progress), Done pending.
         // Always show "Trip in progress" with BACK TO HOME during active transit.
         // The return-to-base flow is triggered separately from MainActivity's center
@@ -1297,3 +1266,5 @@ class TransitActivity : AppCompatActivity() {
         super.onDestroy()
     }
 }
+
+

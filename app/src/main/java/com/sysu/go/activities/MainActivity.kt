@@ -41,6 +41,7 @@ import com.sysu.go.utils.NetworkUtils // Import NetworkUtils
 import com.sysu.go.utils.PermissionHelper
 import com.sysu.go.utils.SessionManager
 import com.sysu.go.utils.TrackingStateMonitor
+import com.sysu.go.utils.DriverStatus
 import com.sysu.go.model.Assignment
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -68,6 +69,17 @@ class MainActivity : AppCompatActivity() {
     private var queueListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var positionListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var assignmentListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var driverListener: com.google.firebase.firestore.ListenerRegistration? = null
+
+    /**
+     * Latest driver-level returnStatus read from drivers/{driverId}.returnStatus.
+     * null = no return journey yet
+     * "returning_to_base" = driver started the journey back
+     * "arrived_at_base" = driver is physically at warehouse, awaiting final confirm
+     * "completed" = return journey fully done
+     * Used to restore the ReturnToBaseBottomSheet at the correct step on app re-open.
+     */
+    private var currentDriverReturnStatus: String? = null
     private var pulseAnimator1: ObjectAnimator? = null
     private var pulseAnimator2: ObjectAnimator? = null
     private val pulseHandler = Handler(Looper.getMainLooper())
@@ -192,6 +204,7 @@ class MainActivity : AppCompatActivity() {
         setupBottomNav()
         setupTutorial()
         listenToQueueStatus()
+        listenToDriverReturnStatus()
         startCircleAnimation()
         startPulseAnimation()
         TrackingStateMonitor.addListener(trackingStateListener)
@@ -528,72 +541,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateScanButtonState() {
         val tripStatus = currentShipments.firstOrNull()?.tripStatus
+        Log.d(TAG, "[updateScanButtonState] tripStatus=$tripStatus hasShipment=$hasShipment isInQueue=$isInQueue currentShipments.size=${currentShipments.size}")
         when {
-            // ── IN TRANSIT — active trip in progress, map icon shows live tracking ──
-            tripStatus == "in_transit" -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
-                binding.tvStatusPill?.text = "IN TRANSIT"
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Trip In Progress"
-                binding.tvCTABody?.text = "Your delivery is on the way. Tap to open tracking."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
-
-                updateReadyBadge("IN TRANSIT", R.color.white, R.color.frosted_green)
-            }
-            // ── LOADED — verified, ready to start trip ──
-            tripStatus == "loaded" -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
-                binding.tvStatusPill?.text = "LOADED (START TRIP)"
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Cargo Verified & Loaded"
-                binding.tvCTABody?.text = "Guard has confirmed. Ready to start your trip."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
-                startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
-
-                updateReadyBadge("LOADED (START TRIP)", R.color.white, R.color.frosted_green)
-            }
-            // ── LOADING — cargo is being loaded at bay ──
-            tripStatus == "loading" -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
-                binding.tvStatusPill?.text = "LOADING CARGO"
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Loading In Progress"
-                binding.tvCTABody?.text = "Your cargo is being loaded. Stay present until fully loaded."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_amber_solid)
-                startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_amber)
-
-                updateReadyBadge("LOADING CARGO", R.color.white, R.color.frosted_amber)
-            }
-            // ── FULLY LOADED — guard verification needed before trip ──
-            tripStatus == "fully_loaded" -> {
-                binding.tvStatusPill?.text = "GUARD VERIFICATION"
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Guard Verification Required"
-                binding.tvCTABody?.text = "Loading is complete. Verify with a guard before you can start your trip."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
-                startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_red)
-
-                updateReadyBadge("GUARD VERIFICATION", R.color.white, R.color.frosted_red)
-            }
-            // ── Guard verified, awaiting driver confirmation ──
-            currentShipments.any { it.guardVerified } &&
-                !currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
-                binding.tvStatusPill?.text = "GUARD VERIFIED"
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Guard Verified — Confirm Shipment"
-                binding.tvCTABody?.text = "Guard has signed off. Confirm your shipment to start the trip."
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
-                startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
-
-                updateReadyBadge("GUARD VERIFIED", R.color.white, R.color.frosted_green)
-            }
-            // ── All shipments verified AND confirmed — START TRIP ready ──
+            // ── SCENARIO 1: All shipments verified AND confirmed by driver → START TRIP ready ──
             currentShipments.isNotEmpty() &&
                 currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
@@ -606,6 +556,70 @@ class MainActivity : AppCompatActivity() {
                 binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
 
                 updateReadyBadge("START TRIP", R.color.white, R.color.frosted_green)
+            }
+            // ── SCENARIO 2: At least one is verified but NOT all are confirmed yet → GUARD VERIFIED / CONFIRM NEEDED ──
+            currentShipments.isNotEmpty() && currentShipments.any { it.guardVerified } &&
+                !currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "GUARD VERIFIED"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Guard Verified — Confirm Shipment"
+                binding.tvCTABody?.text = "Guard has signed off. Confirm your shipment to start the trip."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("GUARD VERIFIED", R.color.white, R.color.frosted_green)
+            }
+            // ── SCENARIO 3: Active in_transit trip in progress ──
+            currentShipments.any { it.tripStatus == "in_transit" } -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "IN TRANSIT"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Trip In Progress"
+                binding.tvCTABody?.text = "Your delivery is on the way. Tap to open tracking."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+
+                updateReadyBadge("IN TRANSIT", R.color.white, R.color.frosted_green)
+            }
+            // ── SCENARIO 4: Any shipment is fully loaded awaiting guard ──
+            currentShipments.any { it.tripStatus == "fully_loaded" } -> {
+                binding.tvStatusPill?.text = "GUARD VERIFICATION"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Guard Verification Required"
+                binding.tvCTABody?.text = "Loading is complete. Verify with a guard before you can start your trip."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_red)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_red)
+
+                updateReadyBadge("GUARD VERIFICATION", R.color.white, R.color.frosted_red)
+            }
+            // ── SCENARIO 5: Any shipment is actively loading ──
+            currentShipments.any { it.tripStatus == "loading" } -> {
+                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.tvStatusPill?.text = "LOADING CARGO"
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = "Loading In Progress"
+                binding.tvCTABody?.text = "Your cargo is being loaded. Stay present until fully loaded."
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_amber_solid)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_amber)
+
+                updateReadyBadge("LOADING CARGO", R.color.white, R.color.frosted_amber)
+            }
+            // ── SCENARIO 6: Assigned (pre-loading) ──
+            currentShipments.any { it.tripStatus == "assigned" } -> {
+                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
+                binding.tvStatusPill?.text = getString(R.string.cta_status_assigned)
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
+                binding.tvCTAHeader?.text = getString(R.string.cta_header_assigned)
+                binding.tvCTABody?.text = getString(R.string.cta_body_assigned)
+                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_blue)
+                startStatusDotPulse()
+                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_gold)
+
+                updateReadyBadge("ASSIGNED", R.color.white, R.color.frosted_blue)
             }
             hasShipment -> {
                 // ASSIGNED — shipment assigned, guard verification happens in AssignmentActivity
@@ -880,6 +894,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         listenToQueueStatus()
+        listenToDriverReturnStatus()
         updateScanButtonState()
         registerConnectionMonitor()
         startHeartbeatMonitoring()
@@ -906,40 +921,31 @@ class MainActivity : AppCompatActivity() {
                 || (sessionMgr.getActiveSapDocId() != null && sessionMgr.isTripActive())
 
             // ═══ RETURN PANEL takes priority over all other routes ═══
-            // Checked BEFORE hasActiveTrip because returning_to_base / completed
-            // shipments are no longer "in_transit" and would miss the gate.
+            // Checked BEFORE hasActiveTrip because completed shipments are no
+            // longer "in_transit" and would miss the gate.
 
-            // ── Route 0: all shipments completed → ARRIVED AT WAREHOUSE (finalize) ──
-            // Driver has already END SHIPMENT/END TRIP on every shipment.
-            // Show the return panel to clear the session and release the driver.
+            // ── Route 0: all shipments END SHIPMENT'd → return panel ─────────
+            // Drives scenarios:
+            //   a) fresh: all completed, drivers.returnStatus = null          → START RETURNING TO BASE
+            //   b) mid-journey: drivers.returnStatus = "returning_to_base"   → ARRIVED AT BASE
+            //   c) at warehouse: drivers.returnStatus = "arrived_at_base"    → YES, CONFIRM ARRIVAL
+            // currentDriverReturnStatus is kept in sync by listenToDriverReturnStatus()
+            // so re-opening the panel after process death lands on the right step.
             if (currentShipments.isNotEmpty() &&
                 currentShipments.all { it.isCompleted }) {
                 val docIds = currentShipments.joinToString(",") { it.docId }
-                ReturnToBaseBottomSheet.newInstanceReturning(docIds)
+                ReturnToBaseBottomSheet.newInstance(docIds, currentDriverReturnStatus)
                     .show(supportFragmentManager, "ReturnToBaseBottomSheet")
                 return@setOnClickListener
             }
 
-            // ── Route 1: returning_to_base → ARRIVED AT WAREHOUSE ──
-            val returningShipments = currentShipments.filter {
-                it.tripStatus == "returning_to_base"
-            }
-            if (returningShipments.isNotEmpty()) {
-                val docIds = returningShipments.joinToString(",") { it.docId }
-                ReturnToBaseBottomSheet.newInstanceReturning(docIds)
-                    .show(supportFragmentManager, "ReturnToBaseBottomSheet")
-                return@setOnClickListener
-            }
-
-            // ── Route 2 REMOVED ──
-            // Previously: all PODs complete → START RETURNING TO BASE
-            // This used to fire the floating panel as soon as every shipment had
-            // its POD items captured, even before the user pressed END SHIPMENT.
-            // Per the agreed flow, the map icon must only enable return-to-base
-            // AFTER all shipments have been END SHIPMENT'd (Route 0 above).
-            // Mid-delivery (all PODs done but not all END'd), the map icon falls
-            // through to TransitActivity, where the in-screen
-            // "START RETURNING TO BASE" button handles the transition per spec.
+            // ── Route 1: mid-delivery — some shipments END SHIPMENT'd, others still in_transit ──
+            // Driver is between shipments (some PODs done, some still on the road).
+            // Per the spec, the multi-step return flow must only surface AFTER all
+            // shipments have an explicit END SHIPMENT stamp, so we DO NOT branch here:
+            // mid-journey, the map icon falls through to TransitActivity where the
+            // in-screen actions handle the next shipment. This is the same gating
+            // used by Route 0 above — it does NOT depend on session/trip lifecycle state.
 
             if (hasActiveTrip) {
                 val activeDocId = sessionMgr.getActiveSapDocId()
@@ -1191,30 +1197,38 @@ class MainActivity : AppCompatActivity() {
                     val sessionDriverId = session.getDriverId() ?: ""
                     if (status == "assigned") {
                         // Driver has been assigned a shipment — check sap_assignments for details
-                        listenToAssignment(queueId, truckType, sessionDriverId)
+                        listenToAssignment(truckType, sessionDriverId)
                         updateQueueUI(null, status, truckType, null)
                         updateScanButtonState()
                     } else if (status == "in_transit") {
                         // Driver is in transit — keep listening for updates
                         assignmentListener?.remove()
-                        listenToAssignment(queueId, truckType, sessionDriverId)
+                        listenToAssignment(truckType, sessionDriverId)
                         updateQueueUI(null, status, truckType, null)
                         updateScanButtonState()
                     } else if (status == "loading") {
                         // Check guardVerified from sap_assignments and ALWAYS call listenToAssignment
                         // to show the shipment assignment regardless of guard verified state.
+                        //
+                        // Query uses sessionDriverId (Firebase UID) — sap_assignments.driverId stores
+                        // the UID, NOT the queue doc ID. Filtering for "not completed/delivered"
+                        // is done client-side to avoid FAILED_PRECONDITION (no composite index needed).
                         db.collection("sap_assignments")
-                            .whereEqualTo("driverId", queueId)
+                            .whereEqualTo("driverId", sessionDriverId)
                             .addSnapshotListener { assignSnap, assignError ->
                                 if (assignError != null) {
                                     Log.e(TAG, "guardVerified query error: ${assignError.message}")
                                     return@addSnapshotListener
                                 }
-                                val guardVerified = assignSnap?.documents?.firstOrNull()
+                                val activeShipments = assignSnap?.documents?.filter {
+                                    val s = it.getString("tripStatus")
+                                    s != "completed" && s != "delivered"
+                                } ?: emptyList()
+                                val guardVerified = activeShipments.firstOrNull()
                                     ?.getBoolean("guardVerified") ?: false
                                 isGuardVerified = guardVerified
                                 // Always call listenToAssignment for status=loading to show shipment + badge
-                                listenToAssignment(queueId, truckType, sessionDriverId)
+                                listenToAssignment(truckType, sessionDriverId)
                                 updateScanButtonState()
                                 // Also update badge/queue card immediately even before shipment loads
                                 updateQueueUI(null, status, truckType, null)
@@ -1238,6 +1252,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     updateScanButtonState()
                 } else {
+                    Log.d(TAG, "[listenToQueueStatus] queue query EMPTY — driverId=$driverId")
                     isInQueue = false
                     hasShipment = false
                     currentQueueDocId = null
@@ -1247,9 +1262,13 @@ class MainActivity : AppCompatActivity() {
                     binding.rvShipmentCards.visibility = View.GONE
                     positionListener?.remove()
 
-                    // Even with no queue doc, check for assigned shipments in sap_assignments
+                    // Even with no queue doc, check for assigned shipments in sap_assignments.
+                    // If the sap_assignments snapshot fires with results, the listener will call
+                    // syncQueueTabsFromSapSnapshots() which overwrites the UI below with "ASSIGNED".
                     listenToAssignmentViaSessionDriverId(driverId, "")
 
+                    // Set placeholder "NOT IN QUEUE" — will be overwritten if a sap_assignment
+                    // doc arrives via the listener above.
                     binding.tvStatusBadgeText.text = "Ready to Scan"
                     binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
                     binding.tvScanHint.text = "Show QR code at booth to check in"
@@ -1273,58 +1292,121 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun listenToAssignment(queueId: String, truckType: String, sessionDriverId: String) {
-        Log.d(TAG, ">> listenToAssignment() called — queueId=$queueId sessionDriverId=$sessionDriverId")
+    private fun listenToAssignment(truckType: String, sessionDriverId: String) {
+        Log.d(TAG, ">> listenToAssignment() called — sessionDriverId=$sessionDriverId")
         assignmentListener?.remove()
 
-        /**
-         * Attempts to load ALL sap_assignments for this driver and populate
-         * currentQueueEntries with one tab per shipment.
-         *
-         * Approach 1: query by queueId — matches older docs where driverId == queueDocId
-         * Approach 2: query by sessionDriverId — matches newer docs where driverId == Firebase UID
-         *
-         * Both approaches are listeners so new shipments are picked up automatically.
-         * Syncs currentQueueEntries from ALL found sap_assignment docs, then calls updateQueueTabs().
-         */
         assignmentListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", queueId)
-            .addSnapshotListener { allQueueSnapshots, qErr ->
-                if (qErr != null) {
-                    Log.e(TAG, ">> Approach1 error: ${qErr.message} — trying sessionDriverId fallback")
-                    listenToAssignmentViaSessionDriverId(sessionDriverId, truckType)
+            .whereEqualTo("driverId", sessionDriverId)
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    Log.e(TAG, ">> listenToAssignment error: ${err.message}")
                     return@addSnapshotListener
                 }
-
-                if (allQueueSnapshots != null && !allQueueSnapshots.isEmpty) {
-                    // Approach 1 matched — found sap_assignment(s) using queueId as driverId
-                    syncQueueTabsFromSapSnapshots(allQueueSnapshots, sessionDriverId, truckType)
+                val size = snap?.size() ?: 0
+                Log.d(TAG, ">> listenToAssignment snap fired — $size sap_assignment(s) for driverId=$sessionDriverId")
+                if (snap != null && !snap.isEmpty) {
+                    val active = snap.documents.filter { doc ->
+                        val s = doc.getString("tripStatus")
+                        s != "completed" && s != "delivered"
+                    }
+                    syncQueueTabsFromSapSnapshots(active, sessionDriverId, truckType)
                 } else {
-                    // Approach 1 empty — fall through to Approach 2
-                    Log.d(TAG, ">> Approach1 empty — trying Approach2 (sessionDriverId listener)")
-                    listenToAssignmentViaSessionDriverId(sessionDriverId, truckType)
+                    // Check if current queue doc has assignedShipments array
+                    val queueId = currentQueueDocId
+                    if (!queueId.isNullOrBlank()) {
+                        db.collection("queue").document(queueId).get().addOnSuccessListener { qSnap ->
+                            val assignedArray = qSnap.get("assignedShipments") as? List<Map<String, Any?>>
+                            if (!assignedArray.isNullOrEmpty()) {
+                                Log.d(TAG, ">> Found ${assignedArray.size} shipments in queue.assignedShipments")
+                            }
+                        }
+                    }
                 }
             }
     }
 
     /**
-     * Approach 2: Listen to ALL sap_assignments where driverId == Firebase UID.
-     * Catches all new-style docs and handles multiple shipments at once.
+     * Legacy entry point retained for callers that pass a queueId (e.g. line 1277 below).
+     * Forwards to listenToAssignment using the sessionDriverId — both args are the Firebase
+     * UID now that sap_assignments.driverId always stores the UID, not the queue doc id.
      */
     private fun listenToAssignmentViaSessionDriverId(sessionDriverId: String, truckType: String) {
-        // Remove old approach-2 listener if any, then listen fresh
-        assignmentListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", sessionDriverId)
+        Log.d(TAG, "[listenToAssignmentViaSessionDriverId] sessionDriverId='$sessionDriverId' — forwarding to listenToAssignment")
+        listenToAssignment(truckType, sessionDriverId)
+    }
+
+    /**
+     * Subscribes to drivers/{driverId}.returnStatus so we know whether the driver
+     * is mid-return-to-base / at warehouse / completed. ReturnToBaseBottomSheet
+     * uses this on re-open (process death, back nav) to land at the right step.
+     *
+     * Values:
+     *   null / missing field      → no return journey yet (panel → "START RETURNING TO BASE")
+     *   "returning_to_base"       → panel → "ARRIVED AT BASE"
+     *   "arrived_at_base"         → panel → "YES, CONFIRM ARRIVAL"
+     *   "completed"               → return journey done (panel can be left closed)
+     */
+    private fun listenToDriverReturnStatus() {
+        val session = SessionManager(this)
+        val driverId = session.getDriverId() ?: return
+
+        driverListener?.remove()
+        driverListener = db.collection("drivers").document(driverId)
             .addSnapshotListener { snap, err ->
                 if (err != null) {
-                    Log.e(TAG, ">> Approach2 error: ${err.message}")
+                    Log.w(TAG, "listenToDriverReturnStatus: ${err.message}")
                     return@addSnapshotListener
                 }
-                Log.d(TAG, ">> Approach2 syncing — ${snap?.size() ?: 0} sap_assignment(s) found for sessionDriverId=$sessionDriverId")
-                if (snap != null && !snap.isEmpty) {
-                    syncQueueTabsFromSapSnapshots(snap, sessionDriverId, truckType)
+                
+                // Realtime check: If driver profile document was deleted in Firestore
+                if (snap != null && !snap.exists()) {
+                    Log.w(TAG, "Driver document was deleted from Firestore! Triggering emergency logout...")
+                    handleAccountDeletedLogout()
+                    return@addSnapshotListener
+                }
+
+                val newStatus = snap?.getString("returnStatus")
+                if (newStatus != currentDriverReturnStatus) {
+                    Log.d(TAG, "drivers.returnStatus changed: $currentDriverReturnStatus → $newStatus")
+                    currentDriverReturnStatus = newStatus
                 }
             }
+
+        // Also listen to real-time socket account_deleted event
+        SocketManager.addEventListener("account_deleted") { data ->
+            try {
+                val json = data as? org.json.JSONObject
+                val deletedUid = json?.optString("uid")
+                if (deletedUid == driverId) {
+                    Log.w(TAG, "Socket account_deleted received for this driver. Logging out...")
+                    runOnUiThread { handleAccountDeletedLogout() }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error handling account_deleted socket event: ${e.message}")
+            }
+        }
+    }
+
+    private fun handleAccountDeletedLogout() {
+        if (isFinishing || isDestroyed) return
+        try {
+            // Disconnect socket & location services
+            SocketManager.disconnect()
+            val session = SessionManager(this)
+            session.clearTripSession()
+            session.saveDriverSession("", "", "")
+            FirebaseAuth.getInstance().signOut()
+
+            val intent = Intent(this, LoginActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                putExtra("EXTRA_ACCOUNT_DELETED_MSG", "Your account has been deleted by an administrator.")
+            }
+            startActivity(intent)
+            finish()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during handleAccountDeletedLogout: ${e.message}")
+        }
     }
 
     /**
@@ -1338,19 +1420,19 @@ class MainActivity : AppCompatActivity() {
      * - Calls updateQueueTabs() which handles: 1 shipment → cardMyQueue, 2+ → vertical cards
      */
     private fun syncQueueTabsFromSapSnapshots(
-        sapSnapshots: com.google.firebase.firestore.QuerySnapshot,
+        sapDocs: List<com.google.firebase.firestore.DocumentSnapshot>,
         sessionDriverId: String,
         truckType: String
     ) {
         if (isFinishing) return
 
         // hasShipment flag reflects whether any shipments exist at all
-        hasShipment = sapSnapshots.size() > 0
+        hasShipment = sapDocs.isNotEmpty()
 
         // Build replacement list with Assignment objects (includes shipment details)
         val newShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
-        for (doc in sapSnapshots.documents) {
+        for (doc in sapDocs) {
             val docId = doc.id  // document ID IS the shipment number (e.g. "0010128715")
             val tripStatus = doc.getString("tripStatus")
             val guardVerified = doc.getBoolean("guardVerified") ?: false
@@ -1407,7 +1489,7 @@ class MainActivity : AppCompatActivity() {
         // ── End optimistic bridge ─────────────────────────────────────────────────────
 
         // Update the static cardMyQueue with first shipment's summary
-        val firstShipmentId = sapSnapshots.documents.firstOrNull()?.id
+        val firstShipmentId = sapDocs.firstOrNull()?.id
         updateQueueUI(null, "loading", truckType, firstShipmentId)
         updateScanButtonState()
 
@@ -1716,6 +1798,8 @@ class MainActivity : AppCompatActivity() {
         batch.commit()
             .addOnSuccessListener {
                 Log.d(TAG, "Batch startTrip: ${confirmed.size} shipment(s) → in_transit")
+                // Mark driver-level status for the Profile badge (fire-and-forget)
+                DriverStatus.write(session.getDriverId(), DriverStatus.State.IN_TRANSIT)
                 // Navigate to MyTripActivity for the first (primary) shipment
                 val intent = Intent(this, MyTripActivity::class.java)
                 startActivity(intent)
@@ -1745,6 +1829,7 @@ class MainActivity : AppCompatActivity() {
         queueListener?.remove()
         positionListener?.remove()
         assignmentListener?.remove()
+        driverListener?.remove()
         stopCircleAnimations()
         bounceArrowAnimator?.cancel()
         bounceArrowAnimator = null
@@ -1990,6 +2075,8 @@ class MainActivity : AppCompatActivity() {
         ))
         batch.commit().addOnSuccessListener {
             Toast.makeText(this, "Nagsimula na ang biyahe!", Toast.LENGTH_SHORT).show()
+            // Mark driver-level status for the Profile badge (fire-and-forget)
+            DriverStatus.write(SessionManager(this).getDriverId(), DriverStatus.State.IN_TRANSIT)
             // Navigate to MyTripActivity
             val intent = Intent(this, MyTripActivity::class.java)
             intent.putExtra("shipment_doc_id", docId)

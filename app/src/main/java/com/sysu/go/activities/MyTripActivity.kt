@@ -40,6 +40,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.auth.FirebaseAuth
 import com.sysu.go.R
 import com.sysu.go.activities.ObdItemsBottomSheet
 import com.sysu.go.activities.GuardVerificationBottomSheet
@@ -50,7 +51,7 @@ import com.sysu.go.model.Assignment
 import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.ImageStorageHelper
 import com.sysu.go.utils.SessionManager
-import com.sysu.go.services.getLastKnownLocationPair as getLocationPair
+
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.io.File
@@ -236,7 +237,7 @@ class MyTripActivity : AppCompatActivity() {
      *
      * If getLastLocation() returns null (no active LocationServices fix in flight),
      * registers a brief single-update callback that resolves within ~2s of a GPS lock.
-     * Falls back to the LocationServices cache (getLocationPair()) if all else fails.
+     * Falls back to the LocationServices cache (null) if all else fails.
      */
     private fun requestFreshLocationAndProceed() {
         val capturedAtMillis = pendingCapturedAtMillis
@@ -263,10 +264,8 @@ class MyTripActivity : AppCompatActivity() {
             }
         }.addOnFailureListener {
             Log.e(TAG, "getLastLocation failed: ${it.message}")
-            // Fall back to LocationServices cache
-            val cachePair = getLocationPair()
             proceedToCamera(
-                cachePair?.first, cachePair?.second,
+                null, null,
                 capturedAtMillis, item, shipmentDocId
             )
         }
@@ -278,7 +277,7 @@ class MyTripActivity : AppCompatActivity() {
      * On timeout or failure: falls back to LocationServices cache → proceedToCamera.
      *
      * This bridges the gap when the driver is NOT in transit mode
-     * (i.e., LocationServices never ran, so getLocationPair() returned null).
+     * (i.e., LocationServices never ran, so null returned null).
      */
     @SuppressLint("MissingPermission")
     private fun requestOneShotLocation(
@@ -809,12 +808,46 @@ class MyTripActivity : AppCompatActivity() {
 
     /**
      * Handles RETAKE tap on a COMPLETE OBD row.
-     * 1. Clear podImageUrl + isPodCompleted + deliveryStatus in Firestore
-     * 2. Set unloadStatus=UNLOADING (driver sees "UNLOADING..." immediately on refresh)
-     * 3. Fire showObdStatusSheet (same camera flow as first capture)
+     * Shows a strict confirmation dialog before wiping the current POD image.
+     * 1. Alert the driver that existing photo will be cleared.
+     * 2. If confirmed: clear podImageUrl + isPodCompleted + deliveryStatus in Firestore
+     * 3. Set unloadStatus=UNLOADING and fire showObdStatusSheet (camera flow)
      */
     private fun retakeObdPod(item: Map<String, Any?>, shipmentDocId: String) {
         val obdNumber = item["obdNumber"] as? String ?: return
+
+        // ── Confirmation window before triggering retake ──
+        val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
+        dlgView.findViewById<ImageView>(R.id.ivDialogIcon).apply {
+            setImageResource(R.drawable.ic_dialog_destructive)
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+        }
+        dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Ulitin ang Litrato?"
+        dlgView.findViewById<TextView>(R.id.tvDialogMessage).text =
+            "Mawawala ang kasalukuyang na-capture na litrato para sa OBD #$obdNumber kapag nagpatuloy ka.\n\nSigurado ka bang nais mong mag-retake?"
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dlgView)
+            .setCancelable(false)
+            .create()
+
+        dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+            text = "I-retake ang Litrato"
+            backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@MyTripActivity, R.color.sysu_red))
+            setOnClickListener {
+                dialog.dismiss()
+                performRetake(item, shipmentDocId, obdNumber)
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun performRetake(item: Map<String, Any?>, shipmentDocId: String, obdNumber: String) {
         // ── Crash-proof checkpoint: written BEFORE the Firestore transaction ──
         saveUnloadCheckpoint(shipmentDocId, obdNumber, "UNLOADING")
         lifecycleScope.launch {
@@ -1013,43 +1046,27 @@ class MyTripActivity : AppCompatActivity() {
         val sessionDriverId = sessionManager.getDriverId() ?: return
         val intentDocId = intent.getStringExtra("shipment_doc_id")
 
-        val queueDocId = sessionManager.getCurrentQueueDocId()
-        if (!queueDocId.isNullOrBlank()) {
-            assignmentsListener = db.collection("sap_assignments")
-                .whereEqualTo("driverId", queueDocId)
-                .addSnapshotListener { snaps, err ->
-                    if (err != null || snaps == null) {
-                        loadAssignmentsFallback(sessionDriverId, intentDocId)
-                        return@addSnapshotListener
-                    }
-                    if (isFinishing) return@addSnapshotListener
-                    val list = snaps.documents.mapNotNull { snap ->
-                        // Reuse buildAssignmentFromMap — .data is a Map
-                        @Suppress("UNCHECKED_CAST")
-                        val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
-                        buildAssignmentFromMap(data + ("docId" to snap.id))
-                    }
-                    fetchDriverData(sessionDriverId, list) { enriched ->
-                        enrichWithQueueData(enriched) { final ->
-                            handleAssignmentList(final, intentDocId)
-                        }
-                    }
-                }
-        } else {
-            loadAssignmentsFallback(sessionDriverId, intentDocId)
-        }
-    }
-
-    private fun loadAssignmentsFallback(sessionDriverId: String, intentDocId: String?) {
+        // Single-approach pattern: sap_assignments.driverId always stores the Firebase UID
+        // (not the queue doc id). Trip-status filtering is client-side to avoid
+        // FAILED_PRECONDITION (single whereNotEqualTo alone is indexable, but paired with
+        // other fields it can still fail — keep it off the query).
         assignmentsListener = db.collection("sap_assignments")
             .whereEqualTo("driverId", sessionDriverId)
             .addSnapshotListener { snaps, err ->
                 if (err != null || snaps == null) {
-                    Log.e(TAG, "loadAssignments fallback error: ${err?.message}")
+                    Log.e(TAG, "loadAssignments error: ${err?.message}")
                     return@addSnapshotListener
                 }
                 if (isFinishing) return@addSnapshotListener
-                val list = snaps.documents.mapNotNull { snap ->
+
+                // Filter out terminal trip states; completed/delivered docs still exist
+                // for history but shouldn't render as active cards.
+                val active = snaps.documents.filter { doc ->
+                    val s = doc.getString("tripStatus")
+                    s != "completed" && s != "delivered"
+                }
+
+                val list = active.mapNotNull { snap ->
                     @Suppress("UNCHECKED_CAST")
                     val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
                     buildAssignmentFromMap(data + ("docId" to snap.id))
@@ -1060,7 +1077,6 @@ class MyTripActivity : AppCompatActivity() {
                     }
                 }
             }
-
     }
 
     /**
@@ -1357,6 +1373,11 @@ class MyTripActivity : AppCompatActivity() {
                                 .await()
                             val driverId = sessionManager.getDriverId() ?: ""
                             if (driverId.isNotBlank()) SocketManager.emitDriverFull(false)
+                val uid = FirebaseAuth.getInstance().currentUser?.uid
+                val driverName = sessionManager.getDriverName() ?: "Driver"
+                if (uid != null) {
+                    SocketManager.emitCompletedStatus(uid, driverName)
+                }
                             Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
                             loadAssignments()
                         } catch (e: Exception) {
@@ -1386,34 +1407,17 @@ class MyTripActivity : AppCompatActivity() {
                 // (TransitActivity handles viewing completed trip details in read mode.)
                 loadAssignments()
             }
-            "RETURNING_TO_BASE" -> {
-                // All PODs done — initiate return-to-base flow.
-                // Mark shipment as returning_to_base in Firestore, then open TransitActivity
-                // so the driver can tap "ARRIVED AT WAREHOUSE" → END TRIP.
-                lifecycleScope.launch {
-                    try {
-                        // Set active trip session — required for TransitActivity routing
-                        sessionManager.saveCurrentSapDocId(assignment.docId)
-                        sessionManager.saveActiveSapDocId(assignment.docId)
-                        sessionManager.setTripActive(true)
-
-                        val updates = mapOf(
-                            "tripStatus" to "returning_to_base",
-                            "returnedToBaseAt" to Timestamp.now()
-                        )
-                        db.collection("sap_assignments").document(assignment.docId)
-                            .update(updates)
-                            .await()
-
-                        // Open TransitActivity — it will sync returning_to_base state
-                        // and show "ARRIVED AT WAREHOUSE" button
-                        launchDeliveryActivity(assignment.docId)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "RETURNING_TO_BASE transition error: ${e.message}")
-                        Toast.makeText(this@MyTripActivity, "Hindi masimulan ang pagbalik. Subukan ulit.", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
+            // RETURNING_TO_BASE is intentionally NOT handled here:
+            // with the per-shipment refactor, multi-shipment drivers END each shipment
+            // individually (END SHIPMENT routes tripStatus → "completed"). Once ALL
+            // shipments hit "completed", the map icon in MainActivity Route 0 opens
+            // ReturnToBaseBottomSheet, which manages the multi-step driver-level
+            // return journey entirely on drivers.{driverId}.returnStatus:
+            //   1. START RETURNING TO BASE → "returning_to_base"
+            //   2. ARRIVED AT BASE         → "arrived_at_base" (geo tracking stops here)
+            //   3. YES, CONFIRM ARRIVAL    → "completed" + queue released
+            // The old per-shipment RETURNING_TO_BASE action was dead code after that
+            // refactor and would have caused duplicate tripStatus writes.
         }
     }
 
@@ -1440,6 +1444,7 @@ class MyTripActivity : AppCompatActivity() {
                 sessionManager.saveActiveSapDocId(assignment.docId)
                 sessionManager.saveCurrentSapDocId(assignment.docId)
                 sessionManager.setTripActive(true)
+                sessionManager.setTrackingActive(true)
 
                 val updates = mapOf(
                     "tripStatus" to "in_transit",
@@ -1511,16 +1516,51 @@ class MyTripActivity : AppCompatActivity() {
 
                 Log.d(TAG, "endSingleShipment: $docId → completed")
 
-                // Notify backend: truck is no longer full — driver is done
-                SocketManager.emitDriverFull(false)
+                // Update queue doc array entry if available
+                val queueId = sessionManager.getCurrentQueueDocId()
+                if (!queueId.isNullOrBlank()) {
+                    db.collection("queue").document(queueId).get().addOnSuccessListener { qSnap ->
+                        val list = qSnap.get("assignedShipments") as? List<Map<String, Any?>>
+                        if (!list.isNullOrEmpty()) {
+                            val updatedList = list.map { item ->
+                                if (item["dispatchKey"] == docId || item["obdNumber"] == docId) {
+                                    item.toMutableMap().apply { this["tripStatus"] = "completed" }
+                                } else item
+                            }
+                            val allDone = updatedList.all { (it["tripStatus"] as? String) == "completed" }
+                            db.collection("queue").document(queueId).update(mapOf(
+                                "assignedShipments" to updatedList,
+                                "overallTripStatus" to if (allDone) "completed" else "in_transit"
+                            ))
+                        }
+                    }
+                }
 
                 // If this was the active session shipment, clear session
                 if (sessionManager.getActiveSapDocId() == docId) {
                     sessionManager.clearTripSession()
                 }
 
-                runOnUiThread {
-                    Toast.makeText(this@MyTripActivity, "Tapos na ang shipment!", Toast.LENGTH_LONG).show()
+                // Check remaining active shipments in current adapter list
+                val remainingActive = shipmentAdapter.currentList.filter { 
+                    it.docId != docId && it.tripStatus != "completed" && it.tripStatus != "delivered" 
+                }
+
+                if (remainingActive.isEmpty()) {
+                    // ALL shipments are completed — now emit completed status
+                    SocketManager.emitDriverFull(false)
+                    val uid = FirebaseAuth.getInstance().currentUser?.uid
+                    val driverName = sessionManager.getDriverName() ?: "Driver"
+                    if (uid != null) {
+                        SocketManager.emitCompletedStatus(uid, driverName)
+                    }
+                    runOnUiThread {
+                        Toast.makeText(this@MyTripActivity, "Lahat ng karga ay nai-deliver na! Maaari nang bumalik sa planta.", Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    runOnUiThread {
+                        Toast.makeText(this@MyTripActivity, "Nai-deliver ang shipment! May ${remainingActive.size} pang natitira.", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 // Clear ending state and reload so card transitions to "VIEW SUMMARY"
@@ -2125,3 +2165,5 @@ class MyTripActivity : AppCompatActivity() {
     private val isActivityFinished: Boolean
         get() = isFinishing || isDestroyed
 }
+
+

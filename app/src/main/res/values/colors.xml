@@ -83,5 +83,9 @@
     <color name="status_assigned">#E65100</color>
     <color name="status_in_queue">#0D47A1</color>
     <color name="status_not_in_queue">#757575</color>
+    <!-- New (2026-08-10): connectivity-aware badge states -->
+    <color name="status_online">#2E7D32</color>
+    <color name="status_offline">#C62828</color>
+    <color name="status_returning_to_base">#0D47A1</color>
 
 </resources>

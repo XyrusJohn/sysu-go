@@ -2,6 +2,8 @@ package com.sysu.go.network
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.sysu.go.BuildConfig
@@ -11,67 +13,48 @@ import io.socket.client.Socket
 import org.json.JSONObject
 import java.net.URISyntaxException
 
-object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added interface
+object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     private const val TAG = "SocketManager"
     private const val SOCKET_URL_GO = BuildConfig.SOCKET_URL
-    private const val SOCKET_URL_APP = "https://sysu-app-production.up.railway.app"
     private const val PREFS_NAME = "driver_session"
     private const val KEY_DRIVER_NAME = "driver_name"
     private const val KEY_LAST_EMIT_LAT = "last_emit_lat"
     private const val KEY_LAST_EMIT_LNG = "last_emit_lng"
 
     private var mSocketGo: Socket? = null
-    private var mSocketApp: Socket? = null
     private var prefs: SharedPreferences? = null
 
     private val connectListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
     @Volatile
-    private var listenersNotified = false  // one-shot: fire only on first socket connect
+    private var listenersNotified = false
     @Volatile
-    private var offlineEmitted = false  // guard: emit offline at most once per disconnect cycle
+    private var offlineEmitted = false
 
-    // ─── Generic event listener system ─────────────────────────────────────────
-
-    /** Maps event name → list of listeners invoked on that event */
     private val eventListeners = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<(data: Any?) -> Unit>>()
-
-    /** Tracks which events are registered on each socket to avoid double-registration */
     private val registeredEvents = java.util.concurrent.ConcurrentHashMap<Socket, MutableSet<String>>()
 
-    /**
-     * Registers a listener for the named Socket.IO event on both sockets.
-     * When the socket reconnects, the listener is automatically re-registered.
-     * Listeners are deduplicated per event per socket.
-     */
     fun addEventListener(event: String, listener: (data: Any?) -> Unit) {
         val listeners = eventListeners.getOrPut(event) {
             java.util.concurrent.CopyOnWriteArrayList()
         }
         listeners.add(listener)
-
-        // Register on sockets that are already connected
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
+        mSocketGo?.let { socket ->
             registerEventListenerOnSocket(event, listener, socket)
         }
     }
 
     fun removeEventListener(event: String) {
         eventListeners.remove(event)
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
+        mSocketGo?.let { socket ->
             unregisterEventListenerOnSocket(event, null, socket)
         }
     }
 
-    /**
-     * Removes a previously registered listener. Safe to call even if the
-     * socket has since disconnected — the event key is cleaned up on unregister.
-     */
     fun removeEventListener(event: String, listener: (data: Any?) -> Unit) {
         eventListeners[event]?.remove(listener)
         if (eventListeners[event]?.isEmpty() == true) {
             eventListeners.remove(event)
-            // Unregister the socket listener so Socket.IO stops dispatching this event
-            listOf(mSocketGo, mSocketApp).forEach { socket ->
+            mSocketGo?.let { socket ->
                 unregisterEventListenerOnSocket(event, listener, socket)
             }
         }
@@ -85,7 +68,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
                 Log.e(TAG, "Event listener for '$event' threw: ${e.message}")
             }
         }
-        // Store wrapped listener so we can unregister the exact same reference
         socket.on(event, wrappedListener)
         registered.add(event)
         Log.d(TAG, "Registered socket listener for event='$event' on ${socket.id()}")
@@ -93,20 +75,13 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
 
     private fun unregisterEventListenerOnSocket(event: String, listener: ((data: Any?) -> Unit)?, socket: Socket?) {
         socket ?: return
-        // Socket.IO's off() needs the exact same function reference that was passed to on()
-        // Since we wrapped it, we need to emit a no-op registration to remove all listeners for this event
-        // Socket.IO 3.x supports socket.off(event) which removes ALL listeners for that event
         try {
-            socket.emit(event) // no-op emit — won't send since emit bypasses event system on server
+            socket.emit(event)
         } catch (_: Exception) { }
         socket.off(event)
         registeredEvents[socket]?.remove(event)
     }
 
-    /**
-     * Registers all currently known event listeners on a newly-connected socket.
-     * Called after each socket connect so reconnection automatically restores listeners.
-     */
     private fun registerAllListenersOnSocket(socket: Socket) {
         val registered = registeredEvents.getOrPut(socket) { mutableSetOf() }
         eventListeners.forEach { (event, listeners) ->
@@ -114,15 +89,12 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
                 listeners.forEach { listener ->
                     registerEventListenerOnSocket(event, listener, socket)
                 }
-            } else {
-                // Event already registered — skip (handles duplicate connect events)
             }
         }
     }
 
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        // Start ConnectivityMonitor and add this SocketManager as a listener
         ConnectivityMonitor.start(context.applicationContext)
         ConnectivityMonitor.addListener(this)
         Log.d(TAG, "SocketManager initialized and registered as ConnectivityMonitor listener.")
@@ -130,10 +102,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
 
     fun addOnConnectListener(listener: () -> Unit) {
         connectListeners.add(listener)
-        // If the socket is already connected by the time this listener is registered
-        // (can happen on rapid connect in RESTORE path where socket starts async
-        // connect in onCreate but listener is added after), fire immediately.
-        if (mSocketGo?.connected() == true || mSocketApp?.connected() == true) {
+        if (mSocketGo?.connected() == true) {
             try { listener() } catch (e: Exception) { Log.e(TAG, "Connect listener threw: ${e.message}") }
         }
     }
@@ -143,8 +112,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
     }
 
     private fun notifyConnectListeners() {
-        // Always notify — both fresh connect and reconnect. Listeners perform idempotent
-        // operations (emitDriverMoving to restore session, Firestore idempotent update).
         listenersNotified = true
         connectListeners.forEach { listener ->
             try { listener() } catch (e: Exception) { Log.e(TAG, "Connect listener threw: ${e.message}") }
@@ -155,30 +122,16 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         Log.i(TAG, ">>> connect() called — resetting offlineEmitted=false, listenersNotified=false")
         offlineEmitted = false
         listenersNotified = false
-        Log.i(TAG, ">>> Attempting connectGo()...")
-        connectGo()
-        Log.i(TAG, ">>> After connectGo(), mSocketGo.connected()=${mSocketGo?.connected()}")
-        Log.i(TAG, ">>> Attempting connectApp()...")
-        connectApp()
-        Log.i(TAG, ">>> After connectApp(), mSocketApp.connected()=${mSocketApp?.connected()}")
-    }
-
-    private fun connectGo() {
-        Log.i(TAG, ">>> connectGo() called. current mSocketGo=connected:${mSocketGo?.connected()}")
         if (mSocketGo?.connected() == true) {
-            Log.i(TAG, ">>> connectGo(): Already connected, skipping")
+            Log.i(TAG, ">>> connect(): Already connected, skipping")
             return
         }
         connectTo(SOCKET_URL_GO) { socket -> mSocketGo = socket }
     }
 
-    private fun connectApp() {
-        Log.i(TAG, ">>> connectApp() called. current mSocketApp=connected:${mSocketApp?.connected()}")
-        if (mSocketApp?.connected() == true) {
-            Log.i(TAG, ">>> connectApp(): Already connected, skipping")
-            return
-        }
-        connectTo(SOCKET_URL_APP) { socket -> mSocketApp = socket }
+    fun connect(context: Context) {
+        init(context)
+        connect()
     }
 
     private fun connectTo(url: String, onSocket: (Socket) -> Unit) {
@@ -205,24 +158,21 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
 
                 socket.on(Socket.EVENT_CONNECT) {
                     Log.i(TAG, ">>> EVENT_CONNECT! $url → socket.id=${socket.id()}")
-                    // Re-register all event listeners on this newly-connected socket
                     registerAllListenersOnSocket(socket)
                     offlineEmitted = false
                     emitStatusUpdateOnSocket(socket, "online", getDriverName())
+                    emitStatusChangeOnSocket(socket, getDriverName())
+                    startHeartbeat()
                     notifyConnectListeners()
                     Log.i(TAG, ">>> update_status ONLINE emitted for $url")
                 }
 
                 socket.on(Socket.EVENT_DISCONNECT) {
                     Log.w(TAG, ">>> EVENT_DISCONNECT! $url → socket.id=${socket.id()}")
-                    Log.w(TAG, ">>> Current offlineEmitted=$offlineEmitted")
+                    stopHeartbeat()
                     if (!offlineEmitted) {
                         offlineEmitted = true
-                        val liveSocket = if (socket === mSocketGo) mSocketApp else mSocketGo
-                        Log.w(TAG, ">>> Emitting OFFLINE via remaining live socket ${liveSocket?.id()}")
-                        emitStatusUpdateOnSocket(liveSocket, "offline", getDriverName())
-                    } else {
-                        Log.w(TAG, ">>> offlineEmitted already true, skipping offline emit")
+                        emitStatusUpdateOnSocket(socket, "offline", getDriverName())
                     }
                 }
 
@@ -250,11 +200,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
-    fun connect(context: Context) {
-        init(context)
-        connect()
-    }
-
     fun getDriverName(): String {
         return prefs?.getString(KEY_DRIVER_NAME, null)
             ?: FirebaseAuth.getInstance().currentUser?.displayName
@@ -263,7 +208,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
 
     fun emitStatusUpdate(status: String, name: String, lat: Double? = null, lng: Double? = null) {
         emitStatusUpdateOnSocket(mSocketGo, status, name, lat, lng)
-        emitStatusUpdateOnSocket(mSocketApp, status, name, lat, lng)
     }
 
     private fun emitStatusUpdateOnSocket(socket: Socket?, status: String, name: String, explicitLat: Double? = null, explicitLng: Double? = null) {
@@ -274,11 +218,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
                 put("driverId", uid)
                 put("status", status)
                 put("name", name)
-                // For "online" signals, include last known GPS so sysu-app can place
-                // the GREEN marker with a position immediately — no movement needed.
-                // Reads from SharedPreferences which are updated before every driver_moving emit.
-                // For "offline" signals, omit lat/lng here — the backend's disconnect handler
-                // will emit vendor_status_update with the freshest stored coords from onlineDriver.
                 if (status == "online") {
                     val srcLat = explicitLat ?: prefs?.getFloat(KEY_LAST_EMIT_LAT, 0f)?.toDouble()?.takeIf { it != 0.0 }
                     val srcLng = explicitLng ?: prefs?.getFloat(KEY_LAST_EMIT_LNG, 0f)?.toDouble()?.takeIf { it != 0.0 }
@@ -308,7 +247,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
 
         emitDriverMovingOnSocket(mSocketGo, json, lat, lng, sapDocId)
-        emitDriverMovingOnSocket(mSocketApp, json, lat, lng, sapDocId)
     }
 
     private fun emitDriverMovingOnSocket(socket: Socket?, json: JSONObject, lat: Double, lng: Double, sapDocId: String?) {
@@ -340,11 +278,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
 
         emitDriverStoppedOnSocket(mSocketGo, json)
-        emitDriverStoppedOnSocket(mSocketApp, json)
-        // Also emit update_status:stopped so sysu-app (which listens for update_status
-        // for online/offline) gets a consistent machine-readable status field as well.
         emitStatusUpdateOnSocket(mSocketGo, "stopped", name, lat, lng)
-        emitStatusUpdateOnSocket(mSocketApp, "stopped", name, lat, lng)
     }
 
     private fun emitDriverStoppedOnSocket(socket: Socket?, json: JSONObject) {
@@ -361,6 +295,25 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
+    fun emitCompletedStatus(driverId: String?, driverName: String) {
+        if (driverId == null) return
+        val json = JSONObject().apply {
+            put("driverId", driverId)
+            put("status", "completed")
+            put("name", driverName)
+        }
+        mSocketGo?.let { socket ->
+            if (socket.connected()) {
+                try {
+                    socket.emit("update_status", json)
+                    Log.d(TAG, "Emitted completed_status for $driverName")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to emit completed_status: ${e.message}")
+                }
+            }
+        }
+    }
+
     fun emitOfflineStatus(driverId: String?, driverName: String) {
         if (driverId == null) return
         val uid = driverId
@@ -369,8 +322,8 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
             put("status", "offline")
             put("name", driverName)
         }
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
-            if (socket?.connected() == true) {
+        mSocketGo?.let { socket ->
+            if (socket.connected()) {
                 try {
                     socket.emit("update_status", json)
                     Log.d(TAG, "Emitted offline_status: $driverName")
@@ -381,14 +334,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
-    /**
-     * Emits pod_updated to the sysu-go backend after a POD photo is successfully saved.
-     * The backend should emit 'pod_updated' on the driver's socket (room) so the app's
-     * pod_updated listener fires → bottom sheet refreshes automatically.
-     *
-     * Payload: { shipmentDocId: string }
-     * Backend: on 'pod_updated' from driver → emit to driver room with updated lineItems
-     */
     fun emitPodUpdated(shipmentDocId: String) {
         if (mSocketGo?.connected() != true) {
             Log.w(TAG, "emitPodUpdated: sysu-go socket not connected, skipping emit")
@@ -406,11 +351,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
-    /**
-     * Emits a generic event to the sysu-go backend socket (mSocketGo).
-     * Used for request/response patterns where the server replies on a given event.
-     * Example: emit("get_driver_assignments", { driverId }) → server emits "driver_assignments" response.
-     */
     fun emitGo(event: String, json: JSONObject) {
         if (mSocketGo?.connected() != true) {
             Log.w(TAG, "emitGo($event): go-socket not connected, skipping emit")
@@ -424,20 +364,53 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         }
     }
 
-    /**
-     * Emits driver_is_full event so the backend updates drivers/{driverId}.isFull
-     * without requiring Firestore writes from the client.
-     *
-     * @param isFull  true when truck is FULLY LOADED, false when trip completes / arrives at warehouse
-     */
+    fun emitStatusChange(uid: String, status: String): Boolean {
+        if (mSocketGo?.connected() != true) {
+            Log.w(TAG, "emitStatusChange($status): go-socket not connected, skipping emit")
+            return false
+        }
+        return try {
+            val json = JSONObject().apply {
+                put("driverId", uid)
+                put("status", status)
+                put("name", getDriverName())
+                put("timestamp", System.currentTimeMillis())
+            }
+            mSocketGo?.emit("driver_status_change", json)
+            Log.d(TAG, "Emitted driver_status_change: $status for $uid")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to emit driver_status_change: ${e.message}")
+            false
+        }
+    }
+
+    private fun emitStatusChangeOnSocket(socket: Socket?, name: String) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        if (socket?.connected() != true) return
+        try {
+            val currentStatus = com.sysu.go.utils.DriverStatus.getLastOnlineState()
+            val json = JSONObject().apply {
+                put("driverId", uid)
+                put("status", currentStatus)
+                put("name", name)
+                put("timestamp", System.currentTimeMillis())
+            }
+            socket.emit("driver_status_change", json)
+            Log.d(TAG, "Emitted driver_status_change on reconnect: $currentStatus for $uid")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to emit driver_status_change on reconnect: ${e.message}")
+        }
+    }
+
     fun emitDriverFull(isFull: Boolean) {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
         val json = JSONObject().apply {
             put("driverId", uid)
             put("isFull", isFull)
         }
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
-            if (socket?.connected() == true) {
+        mSocketGo?.let { socket ->
+            if (socket.connected()) {
                 try {
                     socket.emit("driver_is_full", json)
                     Log.d(TAG, "Emitted driver_is_full: isFull=$isFull for driver=$uid")
@@ -449,37 +422,28 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
     }
 
     fun disconnect() {
-        // Remove this SocketManager as a listener from ConnectivityMonitor
         ConnectivityMonitor.removeListener(this)
         Log.d(TAG, "SocketManager unregistered from ConnectivityMonitor listener.")
 
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
-            socket?.let {
-                // Emit offline status before disconnecting for graceful shutdown (e.g., user logout)
-                emitStatusUpdateOnSocket(it, "offline", getDriverName())
-                it.disconnect()
-            }
+        mSocketGo?.let { socket ->
+            emitStatusUpdateOnSocket(socket, "offline", getDriverName())
+            socket.disconnect()
         }
         mSocketGo = null
-        mSocketApp = null
         offlineEmitted = false
         listenersNotified = false
         registeredEvents.clear()
     }
 
-    // Force disconnect sockets without emitting "offline" status when network is lost.
     private fun forceDisconnectSockets() {
         Log.w(TAG, "Forcing Socket.IO disconnect due to network loss.")
-        listOf(mSocketGo, mSocketApp).forEach { socket ->
-            socket?.let {
-                if (it.connected()) {
-                    it.disconnect()
-                    Log.d(TAG, "Forced disconnect for socket: ${it.id()}")
-                }
+        mSocketGo?.let { socket ->
+            if (socket.connected()) {
+                socket.disconnect()
+                Log.d(TAG, "Forced disconnect for socket: ${socket.id()}")
             }
         }
         mSocketGo = null
-        mSocketApp = null
         offlineEmitted = false
         listenersNotified = false
         registeredEvents.clear()
@@ -489,21 +453,51 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener { // Added
         when (status) {
             ConnectivityMonitor.Status.OFFLINE -> {
                 Log.w(TAG, ">>> NETWORK OFFLINE event received")
-                Log.w(TAG, ">>> Current socket state: mSocketGo=${mSocketGo?.connected()}, mSocketApp=${mSocketApp?.connected()}")
-                Log.w(TAG, ">>> Will force-disconnect and wait for ONELINE event")
+                stopHeartbeat()
                 forceDisconnectSockets()
             }
-            else -> { // Any online status
-                Log.i(TAG, ">>> NETWORK ONLINE (${status.name}) event received — initiating aggressive reconnect")
-                Log.i(TAG, ">>> Current socket state before reconnect: mSocketGo=${mSocketGo?.connected()}, mSocketApp=${mSocketApp?.connected()}")
-                Log.i(TAG, ">>> offlineEmitted flag: $offlineEmitted")
-                Log.i(TAG, ">>> Calling connect()...")
+            else -> {
+                Log.i(TAG, ">>> NETWORK ONLINE (${status.name}) event received — initiating reconnect")
                 offlineEmitted = false
                 connect()
-                Log.i(TAG, ">>> connect() returned. mSocketGo=${mSocketGo?.connected()}, mSocketApp=${mSocketApp?.connected()}")
             }
         }
     }
 
-    fun isConnected(): Boolean = mSocketGo?.connected() == true || mSocketApp?.connected() == true
+    fun isConnected(): Boolean = mSocketGo?.connected() == true
+
+    private const val HEARTBEAT_INTERVAL_MS = 15_000L
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private var heartbeatRunning = false
+
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            val sock = mSocketGo
+            if (sock?.connected() != true) {
+                Log.d(TAG, "[Heartbeat] skipping — socket not connected")
+            } else {
+                try {
+                    sock.emit("heartbeat")
+                    Log.d(TAG, "[Heartbeat] ping sent")
+                } catch (e: Exception) {
+                    Log.w(TAG, "[Heartbeat] emit failed: ${e.message}")
+                }
+            }
+            heartbeatHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+        }
+    }
+
+    private fun startHeartbeat() {
+        if (heartbeatRunning) return
+        heartbeatRunning = true
+        heartbeatHandler.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
+        Log.d(TAG, "[Heartbeat] ✓ started (every ${HEARTBEAT_INTERVAL_MS / 1000}s)")
+    }
+
+    private fun stopHeartbeat() {
+        if (!heartbeatRunning) return
+        heartbeatRunning = false
+        heartbeatHandler.removeCallbacks(heartbeatRunnable)
+        Log.d(TAG, "[Heartbeat] stopped")
+    }
 }

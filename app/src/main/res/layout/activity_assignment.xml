@@ -171,7 +171,7 @@
         </LinearLayout>
     </FrameLayout>
 
-    <!-- ASSIGNMENTS RecyclerView — full height below banner -->
+    <!-- ASSIGNMENTS RecyclerView — full height below banner and above floating bar -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvAssignments"
         android:layout_width="match_parent"
@@ -180,9 +180,73 @@
         android:clipToPadding="false"
         android:overScrollMode="always"
         android:paddingTop="12dp"
-        android:paddingBottom="24dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+        android:paddingBottom="16dp"
+        app:layout_constraintBottom_toTopOf="@id/bottomBatchBar"
         app:layout_constraintTop_toBottomOf="@id/redBanner" />
+
+    <!-- FLOATING BOTTOM BAR for Batch Confirmation -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/bottomBatchBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/white"
+        app:cardElevation="12dp"
+        app:cardCornerRadius="0dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="20dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/tvBatchStatus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="@font/atkinson_hyperlegible_bold"
+                    android:text="0/0 Confirmed"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvBatchSubtext"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/atkinson_hyperlegible_regular"
+                    android:text="Tap to select / confirm all"
+                    android:textColor="@color/text_muted"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnBatchConfirm"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:fontFamily="@font/atkinson_hyperlegible_bold"
+                android:text="Kumpirmahin ang mga Shipment"
+                android:textAllCaps="false"
+                android:textColor="@color/white"
+                android:textSize="@dimen/text_size_button"
+                app:backgroundTint="@color/sysu_red"
+                app:cornerRadius="@dimen/corner_radius_button" />
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
 
     <!-- Empty state — shown when list is empty -->
     <LinearLayout

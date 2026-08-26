@@ -130,6 +130,12 @@ class AssignmentActivity : AppCompatActivity() {
 
     private fun setupUI() {
         binding.btnBack.setOnClickListener { finish() }
+        binding.btnBatchConfirm.setOnClickListener {
+            openBatchConfirmationSheet()
+        }
+        binding.bottomBatchBar.setOnClickListener {
+            openBatchConfirmationSheet()
+        }
     }
 
     /**
@@ -184,19 +190,8 @@ class AssignmentActivity : AppCompatActivity() {
             }
 
             assignment.isFullyLoaded && assignment.guardVerified -> {
-                // Guard already verified — ship is loaded, but driver hasn't confirmed yet
-                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
-                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
-                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
-                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
-                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-                    text = getString(R.string.btn_confirm_shipment)
-                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
-                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
-                }
-                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
-                dialog.show()
+                // Guard already verified — open central batch confirmation sheet
+                openBatchConfirmationSheet()
             }
 
             assignment.isFullyLoaded -> {
@@ -204,20 +199,9 @@ class AssignmentActivity : AppCompatActivity() {
                 openGuardVerification(assignment)
             }
 
-            assignment.isLoaded -> {
-                // Guard verified, auto-promoted to loaded — driver needs to confirm
-                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
-                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
-                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
-                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
-                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-                    text = getString(R.string.btn_confirm_shipment)
-                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
-                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
-                }
-                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
-                dialog.show()
+            assignment.isLoaded || assignment.canConfirmTrip -> {
+                // Guard verified — open central batch confirmation sheet
+                openBatchConfirmationSheet()
             }
 
             // ── Existing terminal/active states ───────────────────────────────
@@ -232,22 +216,6 @@ class AssignmentActivity : AppCompatActivity() {
             assignment.driverConfirmed -> {
                 android.util.Log.d(TAG, " → driverConfirmed branch: showing toast")
                 Toast.makeText(this, "Handa na ang shipment. Naghihintay mag-start ng biyahe.", Toast.LENGTH_SHORT).show()
-            }
-
-            assignment.canConfirmTrip -> {
-                android.util.Log.d(TAG, " → canConfirmTrip branch: showing dialog")
-                val dlgView = LayoutInflater.from(this).inflate(R.layout.dialog_sysu_confirmation, null)
-                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_confirm)
-                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = getString(R.string.confirm_shipment_title)
-                dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = getString(R.string.confirm_shipment_message, assignment.shipmentNumber)
-                val dialog = AlertDialog.Builder(this).setView(dlgView).create()
-                dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-                    text = getString(R.string.btn_confirm_shipment)
-                    backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this@AssignmentActivity, R.color.sysu_red))
-                    setOnClickListener { dialog.dismiss(); confirmShipment(assignment) }
-                }
-                dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
-                dialog.show()
             }
 
             assignment.isLocked(inTransitDocId) -> {
@@ -365,10 +333,16 @@ class AssignmentActivity : AppCompatActivity() {
                     db.collection("sap_assignments").document(assignment.docId)
                         .update(mapOf(
                             "tripStatus" to "loading",
-                            "fullyLoadedAt" to FieldValue.delete()
+                            "fullyLoadedAt" to FieldValue.delete(),
+                            "guardVerified" to false,
+                            "guardFirstName" to "",
+                            "guardLastName" to "",
+                            "guardMI" to "",
+                            "guardSignatureBase64" to "",
+                            "guardVerifiedAt" to FieldValue.delete()
                         ))
                         .await()
-                    Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading")
+                    Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading (guard data reset)")
                 } catch (e: Exception) {
                     Log.e(TAG, "CANCEL_VERIFICATION error: ${e.message}")
                     Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
@@ -442,7 +416,8 @@ class AssignmentActivity : AppCompatActivity() {
     ) {
         lifecycleScope.launch {
             try {
-                val updates = mapOf(
+                val promoteToLoaded = assignment.tripStatus == "fully_loaded"
+                val updates = mutableMapOf<String, Any>(
                     "guardVerified" to true,
                     "guardFirstName" to guard.firstName,
                     "guardLastName" to guard.lastName,
@@ -450,6 +425,10 @@ class AssignmentActivity : AppCompatActivity() {
                     "guardSignatureBase64" to signatureBase64,
                     "guardVerifiedAt" to Timestamp.now()
                 )
+                if (promoteToLoaded) {
+                    updates["tripStatus"] = "loaded"
+                }
+
                 db.collection("sap_assignments").document(assignment.docId)
                     .update(updates)
                     .addOnSuccessListener {
@@ -457,31 +436,13 @@ class AssignmentActivity : AppCompatActivity() {
                         // Optimistically update local list so the card instantly shows the new state
                         val idx = assignments.indexOfFirst { it.docId == assignment.docId }
                         if (idx >= 0) {
-                            val currentTripStatus = assignments[idx].tripStatus
-                            if (currentTripStatus == "fully_loaded") {
-                                // Guard verified a fully-loaded shipment → auto-promote to "loaded"
-                                assignments = assignments.toMutableList().apply {
-                                    set(idx, assignments[idx].copy(
-                                        tripStatus = "loaded",
-                                        guardVerified = true,
-                                        guardFirstName = guard.firstName,
-                                        guardLastName = guard.lastName
-                                    ))
-                                }
-                                // Write "loaded" to Firestore alongside guard verification
-                                db.collection("sap_assignments").document(assignment.docId)
-                                    .update("tripStatus", "loaded")
-                                    .addOnFailureListener { e ->
-                                        Log.e(TAG, "Auto-set loaded failed: ${e.message}")
-                                    }
-                            } else {
-                                assignments = assignments.toMutableList().apply {
-                                    set(idx, assignments[idx].copy(
-                                        guardVerified = true,
-                                        guardFirstName = guard.firstName,
-                                        guardLastName = guard.lastName
-                                    ))
-                                }
+                            assignments = assignments.toMutableList().apply {
+                                set(idx, assignments[idx].copy(
+                                    tripStatus = if (promoteToLoaded) "loaded" else assignments[idx].tripStatus,
+                                    guardVerified = true,
+                                    guardFirstName = guard.firstName,
+                                    guardLastName = guard.lastName
+                                ))
                             }
                             submitToAdapter(assignments)
                             updateAggregateBadge(assignments)
@@ -629,6 +590,118 @@ class AssignmentActivity : AppCompatActivity() {
         finish()
     }
 
+    /**
+     * Opens the interactive bottom sheet for batch shipment confirmation.
+     * Shows a Select All toggle and individual checkboxes for each shipment.
+     */
+    private fun openBatchConfirmationSheet() {
+        if (assignments.isEmpty()) {
+            Toast.makeText(this, "Walang shipments na ikukumpirma.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        ConfirmShipmentsBottomSheet.newInstance(assignments).apply {
+            onConfirmationsSaved = { selectedDocIds, allConfirmed ->
+                saveBatchConfirmations(selectedDocIds, allConfirmed)
+            }
+        }.show(supportFragmentManager, ConfirmShipmentsBottomSheet.TAG)
+    }
+
+    /**
+     * Updates Firestore sap_assignments documents with driverConfirmed status
+     * based on driver's selection in the bottom sheet.
+     * If all are confirmed, finishes activity to take driver to MainActivity.
+     */
+    private fun saveBatchConfirmations(selectedDocIds: Set<String>, allConfirmed: Boolean) {
+        if (selectedDocIds.isEmpty()) return
+
+        // Set optimistic bridge for the first selected doc
+        selectedDocIds.firstOrNull()?.let { sessionManager.savePendingConfirmedDocId(it) }
+
+        // Optimistic local UI update
+        val updated = assignments.map { assignment ->
+            if (selectedDocIds.contains(assignment.docId)) {
+                assignment.copy(driverConfirmed = true)
+            } else {
+                assignment
+            }
+        }
+        assignments = updated
+        submitToAdapter(updated)
+        updateAggregateBadge(updated)
+
+        // Write batch to Firestore
+        val batch = db.batch()
+        selectedDocIds.forEach { docId ->
+            val ref = db.collection("sap_assignments").document(docId)
+            batch.update(ref, mapOf("driverConfirmed" to true))
+        }
+
+        batch.commit()
+            .addOnSuccessListener {
+                Log.d(TAG, "Batch confirmed ${selectedDocIds.size} shipments successfully")
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Batch confirm failed: ${e.message}")
+            }
+
+        if (allConfirmed) {
+            Toast.makeText(
+                this,
+                "Lahat ng shipments ay kumpirmado na! Handa na mag-Start Trip.",
+                Toast.LENGTH_LONG
+            ).show()
+            finish()
+        } else {
+            Toast.makeText(
+                this,
+                "Na-kumpirma ang ${selectedDocIds.size} sa ${assignments.size} shipments.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun updateBatchBarUI(list: List<Assignment>) {
+        if (list.isEmpty()) {
+            binding.bottomBatchBar.visibility = View.GONE
+            return
+        }
+
+        // Only show the batch confirmation floating bar when ALL shipments are:
+        // 1. Fully loaded & Guard verified (guardVerified == true)
+        // 2. Not in progress / completed / returning
+        val allGuardVerified = list.all { it.guardVerified }
+        if (!allGuardVerified) {
+            // Loading / Fully Loaded / Guard Verification is still pending on at least one shipment
+            binding.bottomBatchBar.visibility = View.GONE
+            return
+        }
+
+        // Show floating bottom batch confirmation bar
+        binding.bottomBatchBar.visibility = View.VISIBLE
+
+        val confirmedCount = list.count { it.driverConfirmed }
+        val totalCount = list.size
+        val allConfirmed = totalCount > 0 && confirmedCount == totalCount
+
+        binding.tvBatchStatus.text = "$confirmedCount/$totalCount Kumpirmado"
+
+        if (allConfirmed) {
+            binding.tvBatchSubtext.text = "Lahat ay kumpirmado na ✓"
+            binding.btnBatchConfirm.text = "Kumpleto Na (Bumalik sa Dashboard)"
+            binding.btnBatchConfirm.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.transit_green)
+            )
+        } else {
+            val remaining = totalCount - confirmedCount
+            binding.tvBatchSubtext.text = "Kailangan kumpirmahin lahat bago mag-Start Trip"
+            binding.btnBatchConfirm.text = "Kumpirmahin ang mga Shipment ($confirmedCount/$totalCount)"
+            binding.btnBatchConfirm.backgroundTintList = ColorStateList.valueOf(
+                ContextCompat.getColor(this, R.color.sysu_red)
+            )
+        }
+    }
+
     private fun launchTransitActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
         val intent = Intent(this, TransitActivity::class.java)
@@ -637,57 +710,34 @@ class AssignmentActivity : AppCompatActivity() {
 
     /**
      * Loads ALL sap_assignments documents for this driver.
-     * TWO-APPROACH pattern:
-     *   1. Try queue doc ID (stored when driver joined queue) — catches docs that store queue doc ID as driverId
-     *   2. Fallback to Firebase UID — catches docs that store Firebase UID as driverId
-     * Uses addSnapshotListener so badge and card states update live.
+     *
+     * Single-approach pattern: sap_assignments.driverId always stores the Firebase UID
+     * (NOT the queue doc id). The legacy "try queueDocId first, fallback to UID" was
+     * retired when the data schema was migrated. Trip-status filtering is done
+     * client-side to avoid FAILED_PRECONDITION (two whereNotEqualTo on the same field
+     * is not indexable in Firestore — keep it off the query).
      */
     private fun loadAssignments() {
         assignmentsListener?.remove()
         val sessionDriverId = sessionManager.getDriverId() ?: return
 
-        // ── APPROACH 1: Primary — try queue doc ID first ──
-        val queueDocId = sessionManager.getCurrentQueueDocId()
-        if (!queueDocId.isNullOrBlank()) {
-            assignmentsListener = db.collection("sap_assignments")
-                .whereEqualTo("driverId", queueDocId)
-                .addSnapshotListener { snaps, err ->
-                    if (err != null || snaps == null) {
-                        Log.e(TAG, "loadAssignments (queue approach) error: ${err?.message}")
-                        // Fall through to approach 2
-                        loadAssignmentsFallback(sessionDriverId)
-                        return@addSnapshotListener
-                    }
-                    if (isFinishing) return@addSnapshotListener
-
-                    val list = snaps.documents.mapNotNull { snap -> buildAssignment(snap) }
-                    assignments = list
-                    submitToAdapter(list)
-                    updateAggregateBadge(list)
-                }
-        } else {
-            // No queue doc ID stored — skip to Firebase UID directly
-            loadAssignmentsFallback(sessionDriverId)
-        }
-    }
-
-    /**
-     * APPROACH 2: Fallback — query by Firebase UID.
-     * Called when approach 1 returned no results.
-     */
-    private fun loadAssignmentsFallback(sessionDriverId: String) {
         assignmentsListener = db.collection("sap_assignments")
             .whereEqualTo("driverId", sessionDriverId)
             .addSnapshotListener { snaps, err ->
                 if (err != null || snaps == null) {
-                    Log.e(TAG, "loadAssignments (uid fallback) error: ${err?.message}")
+                    Log.e(TAG, "loadAssignments error: ${err?.message}")
                     return@addSnapshotListener
                 }
                 if (isFinishing) return@addSnapshotListener
 
-                val list = snaps.documents.mapNotNull { snap ->
-                    buildAssignment(snap)
+                // Client-side filter: exclude terminal trip states so they don't show
+                // as active cards. (Completed/delivered docs still exist for history.)
+                val active = snaps.documents.filter { doc ->
+                    val s = doc.getString("tripStatus")
+                    s != "completed" && s != "delivered"
                 }
+
+                val list = active.mapNotNull { snap -> buildAssignment(snap) }
                 assignments = list
                 submitToAdapter(list)
                 updateAggregateBadge(list)
@@ -897,6 +947,7 @@ class AssignmentActivity : AppCompatActivity() {
      * - Red banner pill (badgeDot / tvBadgeText)
      */
     private fun updateAggregateBadge(list: List<Assignment>) {
+        updateBatchBarUI(list)
         if (list.isEmpty()) {
             binding.aggregateBadgeContainer.visibility = View.GONE
             binding.badgeVerified.visibility = View.GONE

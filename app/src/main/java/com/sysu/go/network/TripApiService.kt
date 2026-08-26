@@ -1,5 +1,6 @@
 package com.sysu.go.network
 
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import com.sysu.go.BuildConfig
@@ -40,37 +41,48 @@ object TripApiService {
         val tripId: String?
     )
 
-    fun registerTrip(request: TripRegisterRequest, idToken: String): Result<TripRegisterResponse> {
+    private const val TAG = "TripApiService"
+
+    fun registerTrip(request: TripRegisterRequest, idToken: String? = null): Result<TripRegisterResponse> {
         return try {
-            val url = URL("$BASE_URL/register")
+            val urlString = "$BASE_URL/register"
+            val tokenSnippet = if (!idToken.isNullOrEmpty() && idToken.length > 20) "${idToken.take(10)}...${idToken.takeLast(6)}" else (idToken ?: "none")
+            Log.d(TAG, "--> POST $urlString (queueId: ${request.queueId}, token: $tokenSnippet)")
+            val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
             conn.setRequestProperty("Accept", "application/json")
-            conn.setRequestProperty("Authorization", "Bearer $idToken")
+            if (!idToken.isNullOrBlank()) {
+                conn.setRequestProperty("Authorization", "Bearer $idToken")
+            }
             conn.connectTimeout = 15000
             conn.readTimeout = 15000
 
+            val jsonBody = gson.toJson(request)
+            Log.d(TAG, "registerTrip request body: $jsonBody")
             OutputStreamWriter(conn.outputStream).use { w ->
-                w.write(gson.toJson(request))
+                w.write(jsonBody)
             }
 
             val responseCode = conn.responseCode
             val inputStream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
             val body = inputStream?.bufferedReader()?.readText() ?: "{}"
 
-            android.util.Log.d("TripApiService", "Register Response ($responseCode): $body")
+            Log.d(TAG, "<-- Register Response ($responseCode): $body")
 
             val parsed = gson.fromJson(body, TripRegisterResponse::class.java)
 
             if (responseCode == 200 && parsed.success) {
+                Log.d(TAG, "registerTrip SUCCESS: tripId=${parsed.tripId}")
                 Result.Success(parsed)
             } else {
+                Log.w(TAG, "registerTrip FAILED ($responseCode): ${parsed.message}")
                 Result.Error(responseCode, parsed.message ?: "Trip registration failed (Code: $responseCode)")
             }
         } catch (e: Exception) {
-            android.util.Log.e("TripApiService", "registerTrip error: ${e.message}", e)
+            Log.e(TAG, "registerTrip error: ${e.message}", e)
             Result.Error(-1, "Network error: ${e.javaClass.simpleName} - ${e.message}")
         }
     }

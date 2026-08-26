@@ -10,7 +10,8 @@ package com.sysu.go.model
  * @param queueId  Firestore document ID of the linked queue entry
  * @param driverId  Firebase UID (from queue.driverId or session)
  * @param status  Queue status: waiting / called / assigned / loading / in_transit
- * @param tripStatus  Trip status from sap_assignments: null / in_transit / completed
+ * @param tripStatus  Trip status from sap_assignments: assigned / loading / fully_loaded / loaded / in_transit / delivered / completed
+ *                      ("assigned" is the explicit pre-loading state — replaces the older null/pending convention)
  * @param plateNumber  Resolved plate number (queue or sap field)
  * @param truckType  From queue.truckType
  * @param helper  From queue.helper / queue.helperName
@@ -94,6 +95,11 @@ data class Assignment(
 
     /** True if guard has verified the loaded cargo — ready to start the trip */
     val isLoaded: Boolean get() = tripStatus == "loaded"
+
+    /** True if this shipment has been assigned to the driver but loading hasn't started yet.
+     *  Replaces the older null/pending convention — new docs write the explicit "assigned"
+     *  string so the driver UI knows it's queued but not yet loading. */
+    val isAssigned: Boolean get() = tripStatus == "assigned"
 
     /**
      * Returns true only when ALL line items have isPodCompleted == true.

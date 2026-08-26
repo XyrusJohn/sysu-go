@@ -4,7 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.text.InputFilter
 import android.content.res.ColorStateList
+import android.util.Log
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.ImageView
@@ -25,6 +27,7 @@ import com.sysu.go.databinding.ItemHelperInputBinding
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.QRApiService
 import com.sysu.go.network.TripApiService
+import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.Sanitizer
 import com.sysu.go.utils.SessionManager
 import com.google.firebase.firestore.FirebaseFirestore
@@ -34,6 +37,10 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 class TripRegistrationActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "TripRegistrationActivity"
+    }
 
     private lateinit var binding: ActivityTripRegistrationBinding
     private var queueId: String? = null
@@ -446,18 +453,29 @@ class TripRegistrationActivity : AppCompatActivity() {
         setLoading(true)
 
         lifecycleScope.launch {
-            val idToken = FirebaseAuthManager.getIdToken()
+            Log.d(TAG, "[SUBMIT] Starting registration flow")
+
+            // Attempt to get a fresh Firebase ID token if user is signed in
+            var idToken = FirebaseAuthManager.getIdToken(forceRefresh = false)
             if (idToken == null) {
-                setLoading(false)
-                Toast.makeText(this@TripRegistrationActivity, "Nag-expire ang auth session", Toast.LENGTH_SHORT).show()
-                return@launch
+                Log.d(TAG, "[SUBMIT] Initial token was null, attempting force refresh...")
+                idToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
+            }
+            if (idToken != null) {
+                Log.d(TAG, "[SUBMIT] Auth token ready (length=${idToken.length})")
+            } else {
+                Log.w(TAG, "[SUBMIT] Proceeding without Firebase ID token (using session/driverId auth)")
             }
 
             val session = SessionManager(this@TripRegistrationActivity)
-            val driverId = session.getDriverId() ?: return@launch
+            val driverId = session.getDriverId() ?: run {
+                Log.e(TAG, "[SUBMIT] driverId is null — session not set up properly")
+                return@launch
+            }
             val driverPhone = session.getDriverPhone()
             val driverName = session.getDriverName()
             val (driverFN, driverMI, driverLN) = session.getDriverNameParts()
+            Log.d(TAG, "[SUBMIT] driverId=$driverId, driverName=$driverName, queueId=$queueId, currentToken=$currentToken")
 
             // Prepare helper names for the backend
             val firstHelper = helpersList.first()
@@ -477,10 +495,12 @@ class TripRegistrationActivity : AppCompatActivity() {
                 append(" ${firstHelper.third}")
                 if (otherHelpers.isNotEmpty()) append(otherHelpers)
             }
+            Log.d(TAG, "[SUBMIT] helperNameJoined=$helperNameJoined")
 
             // PHASE 1: Join Queue if we only have a token
             if (queueId == null && currentToken != null) {
                 val fullPlate = "$platePrefix-$plateSuffix"
+                Log.d(TAG, "[PHASE 1] Joining queue with token=$currentToken, plate=$fullPlate")
                 val scanRequest = com.sysu.go.model.ScanRequest(
                     token = currentToken!!,
                     driverId = driverId,
@@ -502,20 +522,33 @@ class TripRegistrationActivity : AppCompatActivity() {
                 when (scanResult) {
                     is QRApiService.Result.Success -> {
                         queueId = scanResult.data.queueId
+                        Log.d(TAG, "[PHASE 1] Queue joined successfully: queueId=$queueId")
+                        // Save queue doc id to session
+                        if (queueId != null) {
+                            session.saveCurrentQueueDocId(queueId)
+                        }
+                        saveRequirementsToProfile()
+                        setLoading(false)
+                        Toast.makeText(this@TripRegistrationActivity, "Nakasali na sa pila!", Toast.LENGTH_SHORT).show()
+                        navigateToHome()
+                        return@launch
                     }
                     is QRApiService.Result.Error -> {
+                        Log.w(TAG, "[PHASE 1] scanToken error (code ${scanResult.code}): ${scanResult.message}")
                         if (scanResult.code != 400) {
                             setLoading(false)
                             Toast.makeText(this@TripRegistrationActivity, "Queue Error: ${scanResult.message}", Toast.LENGTH_LONG).show()
                             return@launch
                         }
-                        // If 400 (already in queue), we'll try to identify by driverId later or proceed if possible
+                        // 400 = already in queue — proceed to update via Phase 2
+                        Log.d(TAG, "[PHASE 1] 400 received (already in queue), continuing to Phase 2")
                     }
                 }
             }
 
-            // PHASE 2: Register Trip / Update Details
+            // PHASE 2: Register Trip / Update Existing Details
             if (queueId != null) {
+                Log.d(TAG, "[PHASE 2] Updating trip details for queueId=$queueId")
                 // Flush any pending requirements save before registering
                 saveRequirementsToProfile()
 
@@ -531,18 +564,37 @@ class TripRegistrationActivity : AppCompatActivity() {
                     driverPhone = driverPhone
                 )
 
-                val result = withContext(Dispatchers.IO) {
+                var result = withContext(Dispatchers.IO) {
                     TripApiService.registerTrip(request, idToken)
                 }
+
+                // Auto-retry once with a fresh token if 401 Unauthorized
+                if (result is TripApiService.Result.Error && result.code == 401) {
+                    Log.w(TAG, "[PHASE 2] Got 401 — refreshing token and retrying registerTrip...")
+                    val freshToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
+                    if (freshToken != null) {
+                        Log.d(TAG, "[PHASE 2] Fresh token acquired, retrying...")
+                        result = withContext(Dispatchers.IO) {
+                            TripApiService.registerTrip(request, freshToken)
+                        }
+                    } else {
+                        Log.w(TAG, "[PHASE 2] No Firebase token available for retry; proceeding with saved queue entry")
+                    }
+                }
+
                 setLoading(false)
 
                 when (result) {
                     is TripApiService.Result.Success -> {
-                        Toast.makeText(this@TripRegistrationActivity, "Nakarehistro na ang biyahe!", Toast.LENGTH_SHORT).show()
+                        Log.i(TAG, "[PHASE 2] Trip details registered successfully: tripId=${result.data.tripId}")
+                        Toast.makeText(this@TripRegistrationActivity, "Na-update ang biyahe!", Toast.LENGTH_SHORT).show()
                         navigateToHome()
                     }
                     is TripApiService.Result.Error -> {
-                        if (result.code == 500 || result.code == 409) {
+                        Log.w(TAG, "[PHASE 2] registerTrip response (code ${result.code}): ${result.message}")
+                        if (result.code == 500 || result.code == 409 || result.code == 401) {
+                            // Queue entry is already saved in Phase 1 / Firestore, navigate smoothly
+                            Toast.makeText(this@TripRegistrationActivity, "Nakasali na sa pila!", Toast.LENGTH_SHORT).show()
                             navigateToHome()
                         } else {
                             val dlgView2 = LayoutInflater.from(this@TripRegistrationActivity).inflate(R.layout.dialog_sysu_info, null)
@@ -557,9 +609,15 @@ class TripRegistrationActivity : AppCompatActivity() {
                 }
             } else {
                 setLoading(false)
+                Log.e(TAG, "[SUBMIT] queueId is null after Phase 1 — cannot proceed to registration")
                 Toast.makeText(this@TripRegistrationActivity, "Hindi makita ang queue entry", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        KeyboardUtils.handleTouchOutsideEditText(this, ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun navigateToHome() {

@@ -88,7 +88,72 @@ GPS tracking activates only when driver clicks Start Trip, and stops immediately
 | Trucking company display | ✅ COMPLETE | No |
 | Strict geo-tracking | ✅ COMPLETE | Yes — sysu-app Railway map depends on this |
 | OBD/POD lock until trip starts | ✅ COMPLETE | No |
+| History dialog (sap_assignments fallback chain) | ✅ COMPLETE | No |
+| Per-shipment returnStatus mirror | ✅ COMPLETE | No — backward-compatible |
 | Modular checklist | ✅ COMPLETE | This file |
+
+---
+
+## 5B. 📜 Schema: Per-Shipment Return Outcome Mirror
+
+**Problem:** `drivers.{uid}.returnStatus` and `drivers.{uid}.returnedToBaseAt` are
+**single-value, get overwritten** on every return-to-base cycle. Querying past
+trips by those fields loses history (only the LAST cycle is visible).
+
+**Solution (2026-08-10):** Mirror the driver-level return outcome into each
+`sap_assignments.{docId}` document at the moment of confirm arrival. This makes
+the per-shipment document carry its own complete lifecycle.
+
+### Schema comparison
+
+| Field | Where | Persists across trips? |
+|---|---|---|
+| `drivers.{uid}.returnStatus` | driver doc | ❌ — single value, overwritten |
+| `drivers.{uid}.returnedToBaseAt` | driver doc | ❌ — single value, overwritten |
+| `drivers.{uid}.sessionHistory[]` | driver doc, array | ✅ — append-only, last 50 |
+| `sap_assignments.{docId}.returnStatus` | per-shipment doc | ✅ — JOINED 2026-08-10 |
+| `sap_assignments.{docId}.returnedToBaseAt` | per-shipment doc | ✅ — JOINED 2026-08-10 |
+| `sap_assignments.{docId}.tripStatus` | per-shipment doc | ✅ — already correct |
+| `sap_assignments.{docId}.completedAt` | per-shipment doc | ✅ — already correct |
+
+### What writes these new fields
+
+`ReturnToBaseBottomSheet.performConfirmArrival()` (line ~289-300):
+
+```kotlin
+val updates = mapOf(
+    "tripStatus" to "completed",
+    "completedAt" to now,
+    "returnStatus" to "completed",      // NEW
+    "returnedToBaseAt" to now           // NEW
+)
+for (docId in docIds) {
+    db.collection("sap_assignments").document(docId).update(updates).await()
+}
+```
+
+### Backward compatibility
+
+- Legacy docs (created before this change) won't have `returnStatus` / `returnedToBaseAt`
+  on `sap_assignments`. History dialog treats missing fields as "—" (silent skip).
+- History dialog query is still `whereEqualTo("tripStatus", "completed")` — works
+  for both legacy and new docs.
+
+### Why not queue collection?
+
+The queue doc's `driverId` field is `FieldValue.delete()`-ed on Confirm Arrival
+(line 385 of `ReturnToBaseBottomSheet`), so the queue doc loses its link to the
+driver. sap_assignments is the more durable per-trip record.
+
+### Future work (for sysu-app team)
+
+- Consider adding `returnStatus` and `returnedToBaseAt` to **every** sap_assignment
+  update path (not just Confirm Arrival), so the per-shipment mirror is
+  consistent across all writes.
+- Decide whether `drivers.{uid}.returnStatus` should be **renamed** to
+  `drivers.{uid}.currentReturnStatus` to clarify its lifecycle-state semantics.
+
+
 
 ---
 
