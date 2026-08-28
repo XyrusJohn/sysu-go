@@ -114,20 +114,86 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     private fun bindConfirmButton() {
         binding.btnConfirmReturn.setOnClickListener {
             when {
-                // Step 2 first-tap: write arrived_at_base, then show confirm step
+                // Step 2: Arrived at Base (Unlocked only if inside geofence)
                 currentReturnStatus == "returning_to_base" && !awaitingWarehouseConfirm -> {
-                    performArrivedAtBase()
+                    showDualConfirmation(
+                        title = "Dumating na sa Base?",
+                        message = "Kumpirmahin kung nakarating ka na sa $warehouseName. Ito ay magsisilbing senyales ng pagdating sa warehouse.",
+                        confirmText = "Oo, Dumating Na",
+                        confirmColor = R.color.sysu_blue,
+                        iconRes = R.drawable.ic_location_crosshairs
+                    ) {
+                        performArrivedAtBase()
+                    }
                 }
-                // Step 3: write tripStatus="completed" + release driver
+                // Step 3: Final Confirm Arrival (release driver & complete trip)
                 currentReturnStatus == "arrived_at_base" || awaitingWarehouseConfirm -> {
-                    performConfirmArrival()
+                    showDualConfirmation(
+                        title = "Kumpirmahin ang Pagtatapos?",
+                        message = "Ito ang magtatapos sa buong shipment session at magbabalik sa iyo sa pila para sa susunod na biyahe.",
+                        confirmText = "Oo, Tapusin ang Biyahe",
+                        confirmColor = R.color.sysu_green,
+                        iconRes = R.drawable.ic_dialog_confirm
+                    ) {
+                        performConfirmArrival()
+                    }
                 }
-                // Step 1: write drivers.returnStatus = "returning_to_base"
+                // Step 1: Start Returning to Base
                 else -> {
-                    performStartReturning()
+                    showDualConfirmation(
+                        title = "Babalik na sa Warehouse?",
+                        message = "Kumpirmahin kung tapos na ang lahat ng deliveries at papunta ka na pabalik sa $warehouseName.",
+                        confirmText = "Oo, Bumalik sa Base",
+                        confirmColor = R.color.sysu_blue,
+                        iconRes = R.drawable.ic_dialog_confirm
+                    ) {
+                        performStartReturning()
+                    }
                 }
             }
         }
+    }
+
+    private fun showDualConfirmation(
+        title: String,
+        message: String,
+        confirmText: String,
+        confirmColor: Int,
+        iconRes: Int,
+        onConfirm: () -> Unit
+    ) {
+        val ctx = requireContext()
+        val dlgView = LayoutInflater.from(ctx).inflate(R.layout.dialog_sysu_confirmation, null)
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setView(dlgView)
+            .setCancelable(true)
+            .create()
+
+        dlgView.findViewById<android.widget.ImageView>(R.id.ivDialogIcon)?.apply {
+            setImageResource(iconRes)
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(ctx, confirmColor)
+            )
+        }
+        dlgView.findViewById<android.widget.TextView>(R.id.tvDialogTitle)?.text = title
+        dlgView.findViewById<android.widget.TextView>(R.id.tvDialogMessage)?.text = message
+
+        dlgView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnCancel)?.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dlgView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnConfirm)?.apply {
+            text = confirmText
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(ctx, confirmColor)
+            )
+            setOnClickListener {
+                dialog.dismiss()
+                onConfirm()
+            }
+        }
+
+        dialog.show()
     }
 
     // ─── DocId helpers ────────────────────────────────────────────────────────
@@ -154,7 +220,10 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(requireContext())
     }
 
+    private var geofenceLocationCallback: com.google.android.gms.location.LocationCallback? = null
+
     private fun configureForDeliveredState() {
+        stopGeofenceLocationUpdates()
         binding.tvPanelTitle.text = "All Deliveries Complete"
         binding.tvPanelSubtitle.text = "All shipments have been delivered. Ready to return to base?"
         binding.tvDeliveredSummary.visibility = View.VISIBLE
@@ -162,6 +231,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         binding.llGeofenceStatus.visibility = View.GONE
         binding.btnConfirmReturn.text = "START RETURNING TO BASE"
         binding.btnConfirmReturn.isEnabled = true
+        binding.btnConfirmReturn.alpha = 1.0f
         binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
             requireContext(), R.color.sysu_blue
         )
@@ -177,17 +247,19 @@ class ReturnToBaseBottomSheet : DialogFragment() {
         // Initially locked until GPS confirms driver is inside geofence
         updateGeofenceUI(false, null)
 
-        // Fetch dynamic warehouse config and verify live GPS location
-        fetchWarehouseBaseSettingsAndCheckDistance()
+        // Fetch dynamic warehouse config and start live GPS geofence tracking
+        fetchWarehouseBaseSettingsAndStartTracking()
     }
 
     private fun configureForWarehouseConfirmStep() {
+        stopGeofenceLocationUpdates()
         binding.tvPanelTitle.text = "Confirm Arrival"
         binding.tvPanelSubtitle.text = "You're at $warehouseName. Tap CONFIRM to finalize the trip and return to queue."
         binding.tvDeliveredSummary.visibility = View.GONE
         binding.llGeofenceStatus.visibility = View.GONE
         binding.btnConfirmReturn.text = "YES, CONFIRM ARRIVAL"
         binding.btnConfirmReturn.isEnabled = true
+        binding.btnConfirmReturn.alpha = 1.0f
         binding.btnConfirmReturn.backgroundTintList = ContextCompat.getColorStateList(
             requireContext(), R.color.sysu_green
         )
@@ -196,9 +268,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     /**
      * Fetches warehouse_base from settings collection:
      *   settings/warehouse_base -> lat, lng, radiusMeters, name
-     * Then immediately queries FusedLocationProviderClient to verify distance.
+     * Then initiates live GPS updates to continuously check distance against geofence.
      */
-    private fun fetchWarehouseBaseSettingsAndCheckDistance() {
+    private fun fetchWarehouseBaseSettingsAndStartTracking() {
         lifecycleScope.launch {
             try {
                 val doc = db.collection("settings").document("warehouse_base").get().await()
@@ -215,34 +287,73 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to fetch warehouse_base settings, using defaults: ${e.message}")
             }
-            checkCurrentLocationGeofence()
+            startGeofenceLocationUpdates()
         }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
-    private fun checkCurrentLocationGeofence() {
+    private fun startGeofenceLocationUpdates() {
         if (!com.sysu.go.utils.PermissionHelper.hasLocationPermission(requireContext())) {
             updateGeofenceUI(false, null, "Kailangan ng Location Permission para ma-verify ang distansya.")
             return
         }
 
+        // Quick initial check via lastLocation
         fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
             if (loc != null) {
-                val results = FloatArray(1)
-                android.location.Location.distanceBetween(
-                    loc.latitude, loc.longitude,
-                    warehouseLat, warehouseLng,
-                    results
-                )
-                val distanceMeters = results[0]
-                val inside = distanceMeters <= warehouseRadiusMeters
-                isInsideGeofence = inside
-                updateGeofenceUI(inside, distanceMeters)
+                evaluateLocation(loc)
             } else {
                 updateGeofenceUI(false, null, "Kinukuha pa ang GPS signal...")
             }
-        }.addOnFailureListener {
-            updateGeofenceUI(false, null, "Hindi makuha ang GPS location.")
+        }
+
+        // Continuous location requests while bottom sheet is open in returning_to_base state
+        if (geofenceLocationCallback == null) {
+            val locationRequest = com.google.android.gms.location.LocationRequest.Builder(
+                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+                3000L
+            ).setMinUpdateIntervalMillis(2000L)
+             .setMinUpdateDistanceMeters(2f)
+             .build()
+
+            geofenceLocationCallback = object : com.google.android.gms.location.LocationCallback() {
+                override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                    val location = result.lastLocation ?: return
+                    evaluateLocation(location)
+                }
+            }
+
+            try {
+                fusedLocationClient.requestLocationUpdates(
+                    locationRequest,
+                    geofenceLocationCallback!!,
+                    android.os.Looper.getMainLooper()
+                )
+            } catch (e: SecurityException) {
+                Log.w(TAG, "SecurityException on geofence location updates: ${e.message}")
+            }
+        }
+    }
+
+    private fun evaluateLocation(loc: android.location.Location) {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(
+            loc.latitude, loc.longitude,
+            warehouseLat, warehouseLng,
+            results
+        )
+        val distanceMeters = results[0]
+        val inside = distanceMeters <= warehouseRadiusMeters
+        isInsideGeofence = inside
+        updateGeofenceUI(inside, distanceMeters)
+    }
+
+    private fun stopGeofenceLocationUpdates() {
+        geofenceLocationCallback?.let {
+            try {
+                fusedLocationClient.removeLocationUpdates(it)
+            } catch (_: Exception) {}
+            geofenceLocationCallback = null
         }
     }
 
@@ -565,6 +676,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     }
 
     override fun onDestroyView() {
+        stopGeofenceLocationUpdates()
         super.onDestroyView()
         _binding = null
     }

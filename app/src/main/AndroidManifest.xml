@@ -144,6 +144,10 @@
             android:name=".activities.MyTripActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".activities.GeneralTrackingActivity"
+            android:exported="false" />
+
     </application>
 
 </manifest>

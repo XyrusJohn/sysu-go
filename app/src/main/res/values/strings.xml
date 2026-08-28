@@ -152,7 +152,7 @@
     <string name="perm_redirecting">Nag-reredirect sa dashboard...</string>
 
     <!-- Assignment (My Assignments) -->
-    <string name="assignment_header_title">MY SHIPMENT</string>
+    <string name="assignment_header_title">SHIPMENT</string>
     <string name="assignment_badge_all_verified">Beripikado Lahat</string>
     <string name="assignment_badge_pending">PENDING VERIFICATION</string>
     <string name="guard_status_verified">Beripikado</string>
@@ -237,4 +237,8 @@
     <!-- Return to Base Panel -->
     <string name="return_panel_all_delivered">Na-deliver na lahat — handa nang bumalik sa base.</string>
     <string name="btn_start_returning_to_base">SIMULAN ANG PAGBALIK SA BASE</string>
+
+    <!-- Tracking tab labels -->
+    <string name="tracking_active">Tracking Active</string>
+    <string name="start_tracking">Start Tracking</string>
 </resources>

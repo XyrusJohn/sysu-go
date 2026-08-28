@@ -76,44 +76,95 @@ async function tick(onlineDriver, io) {
     const ageSec = Math.round(ageMs / 1000);
     console.log(`[${ts()}] [PRESENCE] ⚠️  Driver ${entry.name} (${uid}) stale: lastSeen ${ageSec}s ago — marking OFFLINE`);
 
-    // Remove from in-memory map BEFORE the async writes so a concurrent
-    // update_status from the client doesn't race with our OFFLINE broadcast.
-    onlineDriver.delete(uid);
-
-    // Persist OFFLINE to Firestore
+    // Centralised offline-protection check via Firestore
+    let active = false;
     try {
       const db = getDb();
-      await db.collection("drivers").doc(uid).set(
-        { status: "offline", lastSeenOfflineAt: new Date() },
-        { merge: true }
-      );
-      console.log(`[${ts()}] [PRESENCE] ✓ Firestore: drivers/${uid}.status = "offline"`);
+      const snap = await db
+        .collection("sap_assignments")
+        .where("driverId", "==", uid)
+        .where("tripStatus", "not-in", ["completed"])
+        .limit(1)
+        .get();
+      active = !snap.empty;
     } catch (err) {
-      console.error(`[${ts()}] [PRESENCE] ✗ Firestore write failed for ${uid}:`, err.message);
+      console.error(`[${ts()}] [PRESENCE] Firestore error checking active shipment for ${uid}:`, err.message);
+      active = true; // Safe fallback
     }
 
-    // Broadcast to room driver:{uid} (other ProfileActivity instances on the
-    // same driver account) and globally (sysu-web admin app)
-    if (io) {
-      const payload = {
-        driverId: uid,
-        status: "offline",
-        name: entry.name,
-        timestamp: Date.now(),
-        source: "presence_watcher",
-        staleAgeMs: ageMs,
-      };
-      io.to(`driver:${uid}`).emit("driver_status_change", payload);
-      io.emit("driver_status_change", payload);
-      io.emit("vendor_status_update", {
-        driverId: uid,
-        name: entry.name,
-        status: "offline",
-        lat: entry.lat,
-        lng: entry.lng,
-        source: "presence_watcher",
-      });
-      console.log(`[${ts()}] [PRESENCE] ✓ Broadcast driver_status_change:offline to room driver:${uid} + global`);
+    if (active && entry.lat != null && entry.lng != null) {
+      // Mark offline in-place — keep lat/lng for web frontend
+      entry.isOffline = true;
+      entry.offlineSince = Date.now();
+      entry.socketIds.clear();
+
+      // Persist OFFLINE to Firestore (still important for audit trail)
+      try {
+        const db = getDb();
+        await db.collection("drivers").doc(uid).set(
+          { status: "offline_in_transit", lastSeenOfflineAt: new Date(), lastKnownLat: entry.lat, lastKnownLng: entry.lng },
+          { merge: true }
+        );
+        console.log(`[${ts()}] [PRESENCE] ✓ Firestore: drivers/${uid}.status = "offline_in_transit" (last pos retained)`);
+      } catch (err) {
+        console.error(`[${ts()}] [PRESENCE] ✗ Firestore write failed for ${uid}:`, err.message);
+      }
+
+      // Broadcast offline_in_transit so sysu-web shows grey marker at last known position
+      if (io) {
+        const payload = {
+          driverId: uid,
+          status: "offline_in_transit",
+          name: entry.name,
+          lat: entry.lat,
+          lng: entry.lng,
+          offlineSince: entry.offlineSince,
+          timestamp: Date.now(),
+          source: "presence_watcher",
+          staleAgeMs: ageMs,
+        };
+        io.to(`driver:${uid}`).emit("driver_status_change", { ...payload, status: "offline" });
+        io.emit("driver_status_change", { ...payload, status: "offline" });
+        io.emit("vendor_status_update", payload);
+        console.log(`[${ts()}] [PRESENCE] ✓ Broadcast offline_in_transit for ${entry.name} — last pos [${entry.lat}, ${entry.lng}] retained`);
+      }
+    } else {
+      // Not in_transit — full removal from map (same as before)
+      onlineDriver.delete(uid);
+
+      // Persist OFFLINE to Firestore
+      try {
+        const db = getDb();
+        await db.collection("drivers").doc(uid).set(
+          { status: "offline", lastSeenOfflineAt: new Date() },
+          { merge: true }
+        );
+        console.log(`[${ts()}] [PRESENCE] ✓ Firestore: drivers/${uid}.status = "offline"`);
+      } catch (err) {
+        console.error(`[${ts()}] [PRESENCE] ✗ Firestore write failed for ${uid}:`, err.message);
+      }
+
+      if (io) {
+        const payload = {
+          driverId: uid,
+          status: "offline",
+          name: entry.name,
+          timestamp: Date.now(),
+          source: "presence_watcher",
+          staleAgeMs: ageMs,
+        };
+        io.to(`driver:${uid}`).emit("driver_status_change", payload);
+        io.emit("driver_status_change", payload);
+        io.emit("vendor_status_update", {
+          driverId: uid,
+          name: entry.name,
+          status: "offline",
+          lat: entry.lat,
+          lng: entry.lng,
+          source: "presence_watcher",
+        });
+        console.log(`[${ts()}] [PRESENCE] ✓ Broadcast driver_status_change:offline to room driver:${uid} + global`);
+      }
     }
   }
 }

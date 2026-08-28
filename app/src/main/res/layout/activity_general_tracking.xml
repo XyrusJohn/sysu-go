@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/white"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvTrackingStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Tracking: OFF"
+        android:textSize="18sp"
+        android:textColor="@color/text_primary"
+        android:fontFamily="@font/atkinson_hyperlegible_bold"
+        android:gravity="center"
+        android:layout_marginTop="16dp" />
+
+    <TextView
+        android:id="@+id/tvCurrentLocation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Location: Waiting for GPS..."
+        android:textSize="14sp"
+        android:textColor="@color/text_secondary"
+        android:fontFamily="@font/atkinson_hyperlegible_bold"
+        android:gravity="center"
+        android:layout_marginTop="8dp" />
+
+    <TextView
+        android:id="@+id/tvSocketStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Socket: Disconnected"
+        android:textSize="14sp"
+        android:textColor="@color/text_secondary"
+        android:fontFamily="@font/atkinson_hyperlegible_bold"
+        android:gravity="center"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/btnStartTracking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Tracking"
+        android:layout_marginBottom="8dp"
+        android:backgroundTint="@color/sysu_red"
+        android:textColor="@color/white"
+        android:fontFamily="@font/atkinson_hyperlegible_bold" />
+
+    <Button
+        android:id="@+id/btnEndTracking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="End Trip"
+        android:layout_marginBottom="8dp"
+        android:backgroundTint="@color/sysu_amber"
+        android:textColor="@color/white"
+        android:fontFamily="@font/atkinson_hyperlegible_bold" />
+
+    <Button
+        android:id="@+id/btnStopTracking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Stop Tracking"
+        android:layout_marginBottom="8dp"
+        android:backgroundTint="@color/text_secondary"
+        android:textColor="@color/white"
+        android:fontFamily="@font/atkinson_hyperlegible_bold" />
+
+</LinearLayout>

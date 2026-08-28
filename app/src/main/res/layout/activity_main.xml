@@ -548,6 +548,7 @@
                     app:tint="@color/sysu_red" />
 
                 <TextView
+                    android:id="@+id/tvHomeLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Home"
@@ -557,11 +558,7 @@
                     android:layout_marginTop="4dp" />
             </LinearLayout>
 
-            <View
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1" />
-
+            
             <LinearLayout
                 android:id="@+id/btnProfile"
                 android:layout_width="0dp"
@@ -581,6 +578,7 @@
                     app:tint="@color/text_muted" />
 
                 <TextView
+                    android:id="@+id/tvProfileLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Profile"

@@ -2,6 +2,7 @@ package com.sysu.go.utils
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.core.content.edit
 
 class SessionManager(context: Context) {
@@ -34,6 +35,8 @@ class SessionManager(context: Context) {
          *  the only reliable lookup once the queue doc's driverId field has been deleted. */
         private const val KEY_LAST_QUEUE_DOC_ID = "last_queue_doc_id"
         private const val KEY_PENDING_CONFIRMED_DOC_ID = "pendingConfirmedDocId"
+
+        private const val TAG = "SESSIONMANAGER_DEFINITIVE"
     }
 
     private val prefs: SharedPreferences =
@@ -176,10 +179,15 @@ class SessionManager(context: Context) {
      * LocationServices reads this on onStartCommand to decide whether to start GPS updates.
      */
     fun setTrackingActive(active: Boolean) {
+        Log.d(TAG, "[SESSION] setTrackingActive called: $active")
         prefs.edit { putBoolean(KEY_TRACKING_ACTIVE, active) }
     }
 
-    fun isTrackingActive(): Boolean = prefs.getBoolean(KEY_TRACKING_ACTIVE, false)
+    fun isTrackingActive(): Boolean {
+        val result = prefs.getBoolean(KEY_TRACKING_ACTIVE, false)
+        Log.d(TAG, "[SESSION] isTrackingActive called: $result")
+        return result
+    }
 
     fun clearTripSession() {
         prefs.edit {

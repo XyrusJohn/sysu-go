@@ -134,10 +134,13 @@ class TransitActivity : AppCompatActivity() {
                 val lastLng = sessionManager.getLastEmitLng()
                 Log.d(TAG, "[RESTORE] Re-emitting last location: [$lastLat, $lastLng]")
                 SocketManager.emitDriverMoving(lastLat, lastLng, currentSapDocId, "online")
-                // NOTE: DO NOT unconditionally write tripStatus = "in_transit" here.
-                // Let loadTripData() read tripStatus source-of-truth from Firestore instead.
             }
             socketConnectListener?.let { SocketManager.addOnConnectListener(it) }
+
+            // If already connected, emit immediately without waiting for onConnect event
+            if (SocketManager.isConnected()) {
+                emitLastKnownLocation(currentSapDocId)
+            }
 
             // Restart location tracking — survives force-stop.
             // LocationServices will read tracking_active and begin GPS ONLY if flag is true.
@@ -183,6 +186,7 @@ class TransitActivity : AppCompatActivity() {
             sessionManager.saveCurrentSapDocId(newDocId)
             sessionManager.setTrackingActive(true)
             isTripStarted = true
+            emitLastKnownLocation(newDocId)
             loadTripData()
             if (isLocationPermissionGranted()) {
                 startLocationUpdates()
@@ -196,7 +200,11 @@ class TransitActivity : AppCompatActivity() {
         // Strict presence: re-announce online immediately when app comes to foreground,
         // so sysu-app updates the driver marker to green without waiting for driver_moving
         if (isSessionRestored || isTripStarted) {
-            SocketManager.emitStatusUpdate("online", sessionManager.getDriverName() ?: "Driver")
+            SocketManager.emitStatusUpdate(
+            "online",
+            sessionManager.getDriverName() ?: "Driver",
+            includeLocationFromPrefs = sessionManager.isTrackingActive()
+        )
         }
         // Refresh ALL state when returning from MyTripActivity.
         // The driver may have completed all PODs, or tripStatus may have changed
@@ -233,12 +241,35 @@ class TransitActivity : AppCompatActivity() {
         super.onPause()
         unregisterConnectionMonitor()
         isOfflineDialogShowing = false
-        // Strict presence: immediately tell sysu-app driver is going to background.
-        // Driver stays on sysu-app map in OFFLINE (red) state at last driver_moving position.
-        // This replaces relying on Socket.IO's 30s ping/pong timeout.
-        if (isSessionRestored || isTripStarted) {
+        // CRITICAL FIX: Only emit 'offline' when the app is truly going to background
+        // (i.e. the user pressed Home / switched to another app).
+        // Do NOT emit 'offline' when we are just finishing this activity to navigate
+        // to another in-app screen (e.g. TransitActivity → MainActivity via BACK/BACK TO HOME).
+        // Emitting offline here was killing the real-time tracking marker on the admin map
+        // every time the driver tapped BACK or BACK TO HOME — even mid-trip.
+        //
+        // isFinishing = true means this activity is being destroyed (BACK pressed / finish() called).
+        //   → Driver is navigating within the app — LocationServices keeps the socket alive → NO offline emit.
+        // isFinishing = false means another activity came on top of us (we're paused but not destroyed).
+        //   → Could be a system overlay, notification shade, etc. — still not a true background event → NO offline emit.
+        // The Socket.IO EVENT_DISCONNECT handler in SocketManager already emits offline
+        // when the physical socket actually drops (network loss, app process killed, etc.).
+        // That is the correct and only place offline should originate from during an active trip.
+        //
+        // Exception: if isFinishing AND the trip is NOT active (e.g. user exits the app from
+        // TransitActivity after the trip is done), emit offline for presence accuracy.
+        if (!isFinishing && (isSessionRestored || isTripStarted)) {
+            // Activity is being covered by another — do NOT emit offline.
+            // LocationServices foreground service keeps socket alive and tracking running.
+            Log.d(TAG, "[onPause] Covered by another activity — keeping socket ONLINE, no offline emit")
+        } else if (isFinishing && !(isSessionRestored || isTripStarted)) {
+            // Trip is not active and we're finishing — safe to mark offline
             SocketManager.emitStatusUpdate("offline", sessionManager.getDriverName() ?: "Driver")
+            Log.d(TAG, "[onPause] No active trip, activity finishing — emitting offline")
         }
+        // If isFinishing AND trip IS active: still don't emit offline here.
+        // onBackPressed / navigateToMainActivity() calls finish() to transition to MainActivity —
+        // but the trip is still in_transit. LocationServices keeps tracking.
     }
 
     // ─── Permission helpers ──────────────────────────────────────────────────
@@ -816,6 +847,12 @@ class TransitActivity : AppCompatActivity() {
      * Falls back silently if no last known location is available. */
     @SuppressLint("MissingPermission")
     private fun emitLastKnownLocation(sapDocId: String) {
+        // Only emit last known location if tracking is actually active
+        if (!sessionManager.isTrackingActive()) {
+            Log.d(TAG, "[LAST KNOWN] Tracking not active, skipping last known location emit")
+            return
+        }
+
         // Ensure socket is initialized so it can read driver_name from SharedPrefs
         SocketManager.init(this)
 

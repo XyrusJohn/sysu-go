@@ -123,6 +123,43 @@ function touchLastSeen(uid) {
 }
 
 /**
+ * Centralised offline-protection gate.
+ *
+ * Returns true if the driver has at least one sap_assignment that is NOT
+ * yet completed — i.e. they still have active work (assigned / loading /
+ * loaded / fully_loaded / in_transit).
+ *
+ * This is the AUTHORITATIVE source of truth for "should we retain this
+ * driver's last-known position on the admin map when they go offline?"
+ * Using Firestore (not socket-derived state) guarantees correctness across:
+ *   - Server restarts (in-memory Map is wiped)
+ *   - Driver force-kills (socket state was never fully hydrated)
+ *   - Race conditions between disconnect and status events
+ *
+ * Cost: 1 Firestore read per offline event, limit(1) → minimal quota impact.
+ *
+ * @param {string} uid  Firebase UID of the driver
+ * @returns {Promise<boolean>}
+ */
+async function hasActiveShipment(uid) {
+  try {
+    const db = getDb();
+    const snap = await db
+      .collection("sap_assignments")
+      .where("driverId", "==", uid)
+      .where("tripStatus", "not-in", ["completed"])
+      .limit(1)
+      .get();
+    return !snap.empty;
+  } catch (err) {
+    console.error(`[${ts()}] [hasActiveShipment] Firestore error for ${uid}:`, err.message);
+    // Fail-safe: if Firestore is unreachable, assume active — better to show
+    // a stale marker than to silently drop a driver who might be in danger.
+    return true;
+  }
+}
+
+/**
  * Valid driver lifecycle statuses broadcast via driver_status_change.
  * Anything outside this set is rejected by the server.
  */
@@ -241,11 +278,16 @@ io.on("connection", async (socket) => {
       if (entry) {
         entry.socketIds.add(socket.id);
         entry.name = fullName;
-        entry.status = entry.status || "online";
+        entry.status = "online";
+        // FLEET TRACKING FIX: driver came back online after offline_in_transit — clear flags
+        entry.isOffline = false;
+        entry.offlineSince = null;
         entry.lastSeen = Date.now();
         if (lat != null) entry.lat = lat;
         if (lng != null) entry.lng = lng;
-        console.log(`[${ts()}] Driver ${fullName} socket added (${entry.socketIds.size} active sockets)`);
+        // If they were offline_in_transit and just reconnected, announce green marker
+        io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
+        console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets)`);
       } else {
         onlineDriver.set(verifiedUid, {
           name: fullName,
@@ -253,6 +295,8 @@ io.on("connection", async (socket) => {
           lng: lng ?? null,
           socketIds: new Set([socket.id]),
           status: "online",
+          isOffline: false,
+          tripStatus: null,
           lastSeen: Date.now(),
         });
         console.log(`[${ts()}] Driver ${fullName} is now ONLINE`);
@@ -271,16 +315,45 @@ io.on("connection", async (socket) => {
       io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: lastLat, lng: lastLng });
       console.log(`[${ts()}] Driver ${fullName} COMPLETED trip [marker removed from map]`);
     } else {
-      // Driver went offline (emitOfflineStatus path — e.g. "End Trip" button).
-      // Remove ALL sockets for this driver — explicit session end, not a reconnect blip.
+      // Driver went offline (network loss, force-stop, phone restart, tab kill).
+      //
+      // AUTHORITATIVE OFFLINE PROTECTION (centralised gate):
+      // Check Firestore — if this driver has any sap_assignment that is not yet
+      // completed, they still have active work. Retain their last known lat/lng
+      // on the admin map as a grey "last seen" marker so dispatch always knows
+      // where they were. Only fully remove the marker when they have no active work.
+      //
+      // This is Firestore-backed (not socket-derived state) so it's correct even
+      // across server restarts, driver force-kills, and socket race conditions.
       const entry = onlineDriver.get(verifiedUid);
       const offlineLat = entry ? entry.lat : null;
       const offlineLng = entry ? entry.lng : null;
-      onlineDriver.delete(verifiedUid);
-      // Broadcast on BOTH channels so web frontend driverSocket also catches it
-      io.emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
-      io.emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
-      console.log(`[${ts()}] Driver ${fullName} is now OFFLINE [explicit]`);
+
+      const active = await hasActiveShipment(verifiedUid);
+      if (active && offlineLat != null && offlineLng != null) {
+        // Has unfinished work — retain in map with isOffline flag
+        if (entry) {
+          entry.isOffline = true;
+          entry.offlineSince = Date.now();
+          entry.socketIds.clear();
+        }
+        io.emit("update_status", { driverId: verifiedUid, status: "offline_in_transit", name: fullName });
+        io.emit("vendor_status_update", {
+          driverId: verifiedUid,
+          status: "offline_in_transit",
+          name: fullName,
+          lat: offlineLat,
+          lng: offlineLng,
+          offlineSince: entry ? entry.offlineSince : Date.now(),
+        });
+        console.log(`[${ts()}] Driver ${fullName} OFFLINE — has active shipment, retaining last position [${offlineLat}, ${offlineLng}]`);
+      } else {
+        // No active shipment (or no last known position) — full removal
+        onlineDriver.delete(verifiedUid);
+        io.emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
+        io.emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
+        console.log(`[${ts()}] Driver ${fullName} is now OFFLINE — no active shipment, marker removed`);
+      }
     }
   });
 
@@ -328,6 +401,11 @@ io.on("connection", async (socket) => {
     if (entry) {
       entry.status = status;
       entry.name = fullName;
+      // FLEET TRACKING: mirror lifecycle status into tripStatus so disconnect /
+      // presenceWatcher can decide whether to retain or remove the map marker.
+      if (status === "in_transit") entry.tripStatus = "in_transit";
+      else if (status === "online") { entry.tripStatus = null; entry.isOffline = false; }
+      else if (status === "returning_to_base") entry.tripStatus = null; // trip ended — don't retain on offline
       // Refresh lastSeen — driver_status_change is also a heartbeat signal.
       touchLastSeen(verifiedUid);
     } else if (status !== "offline") {
@@ -338,6 +416,8 @@ io.on("connection", async (socket) => {
         lng: null,
         socketIds: new Set([socket.id]),
         status,
+        tripStatus: status === "in_transit" ? "in_transit" : null,
+        isOffline: false,
         lastSeen: Date.now(),
       });
     }
@@ -388,17 +468,43 @@ io.on("connection", async (socket) => {
     console.log(`[${ts()}] [Socket] request_driver_status → ${currentStatus} for ${fullName}`);
   });
 
-  socket.on("disconnect", (reason) => {
+  socket.on("disconnect", async (reason) => {
     console.log(`[${ts()}] System Disconnected: ${socket.id} (Reason: ${reason})`);
 
     for (const [id, entry] of onlineDriver.entries()) {
       if (!entry.socketIds.has(socket.id)) continue;
       entry.socketIds.delete(socket.id);
+
       if (entry.socketIds.size === 0) {
-        // No more sockets for this driver — officially OFFLINE
-        onlineDriver.delete(id);
-        io.emit("vendor_status_update", { driverId: id, name: entry.name, status: "offline", lat: entry.lat, lng: entry.lng });
-        console.log(`[${ts()}] Driver ${entry.name} is now OFFLINE`);
+        // No more live sockets for this driver — they are unreachable.
+        // Capture values now before any async operation modifies the entry.
+        const driverName = entry.name;
+        const lastLat = entry.lat;
+        const lastLng = entry.lng;
+
+        // AUTHORITATIVE OFFLINE PROTECTION (same gate as explicit offline handler):
+        // Query Firestore — does this driver have any unfinished sap_assignment?
+        // If yes → retain last known position as grey "last seen" marker on admin map.
+        // If no  → remove marker entirely (driver has no active work).
+        // Firestore-backed so it's correct across server restarts and force-kills.
+        const active = await hasActiveShipment(id);
+        if (active && lastLat != null && lastLng != null) {
+          entry.isOffline = true;
+          entry.offlineSince = Date.now();
+          io.emit("vendor_status_update", {
+            driverId: id,
+            name: driverName,
+            status: "offline_in_transit",
+            lat: lastLat,
+            lng: lastLng,
+            offlineSince: entry.offlineSince,
+          });
+          console.log(`[${ts()}] Driver ${driverName} OFFLINE — has active shipment, retaining last position [${lastLat}, ${lastLng}]`);
+        } else {
+          onlineDriver.delete(id);
+          io.emit("vendor_status_update", { driverId: id, name: driverName, status: "offline", lat: lastLat, lng: lastLng });
+          console.log(`[${ts()}] Driver ${driverName} is now OFFLINE — no active shipment, marker removed`);
+        }
       } else {
         // Other socket(s) still alive — driver stays online, just lost one socket
         console.log(`[${ts()}] Driver ${entry.name} still online via ${entry.socketIds.size} other socket(s)`);
@@ -424,6 +530,17 @@ io.on("connection", async (socket) => {
       entry.socketIds.add(socket.id);
       entry.lat = lat;
       entry.lng = lng;
+      // FLEET TRACKING: driver_moving always means trip is active — mark in_transit
+      // so disconnect/offline handlers know to retain the last position.
+      entry.tripStatus = "in_transit";
+      // If driver was previously marked offline_in_transit and is now moving again,
+      // they've reconnected — clear the offline flag and restore the green marker.
+      if (entry.isOffline) {
+        entry.isOffline = false;
+        entry.offlineSince = null;
+        io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: entry.name, lat, lng });
+        console.log(`[${ts()}] Driver ${entry.name} RECONNECTED — back online at [${lat}, ${lng}]`);
+      }
       fullName = entry.name;
       // driver_moving is also a heartbeat signal — driver is alive and moving.
       touchLastSeen(verifiedUid);
@@ -438,6 +555,8 @@ io.on("connection", async (socket) => {
           lng,
           socketIds: new Set([socket.id]),
           status: "online",
+          tripStatus: "in_transit",
+          isOffline: false,
           lastSeen: Date.now(),
         });
       } catch (e) {
@@ -446,7 +565,7 @@ io.on("connection", async (socket) => {
     }
 
     console.log(`[${ts()}] Live Driver ${fullName} moved to [${lat}, ${lng}]`);
-    io.emit("update_admin_map", { driverId: verifiedUid, lat, lng, sapDocId, name: fullName });
+    io.emit("update_admin_map", { driverId: verifiedUid, lat, lng, sapDocId, name: fullName, status: "online" });
   });
 
   /**

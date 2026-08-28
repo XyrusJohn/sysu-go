@@ -13,7 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 object TrackingStateMonitor {
 
-    private const val TAG = "TrackingStateMonitor"
+    private const val TAG = "TRACKING_STATE_DEFINITIVE"
 
     enum class State {
         /** Driver is actively moving — green indicator */
@@ -37,22 +37,30 @@ object TrackingStateMonitor {
 
     fun addListener(listener: Listener) {
         listeners.add(listener)
+        Log.d(TAG, "[LISTENER] Added tracking state listener - total listeners: ${listeners.size}")
         // Immediately notify of current state so UI is never stale
         listener.onTrackingStateChanged(currentState)
     }
 
     fun removeListener(listener: Listener) {
         listeners.remove(listener)
+        Log.d(TAG, "[LISTENER] Removed tracking state listener - total listeners: ${listeners.size}")
     }
 
     /** Called by LocationServices or ConnectivityMonitor to push state changes */
     fun setState(state: State) {
         if (state != currentState) {
-            Log.d(TAG, "Tracking state: $currentState → $state")
+            Log.d(TAG, "[STATE] Tracking state: $currentState → $state")
             currentState = state
             listeners.forEach { it.onTrackingStateChanged(state) }
+            Log.d(TAG, "[STATE] Tracking state change propagated to ${listeners.size} listeners")
+        } else {
+            Log.d(TAG, "[STATE] Tracking state change ignored - already $state")
         }
     }
 
-    fun getCurrentState(): State = currentState
+    fun getCurrentState(): State {
+        Log.d(TAG, "[STATE] getCurrentState called: $currentState")
+        return currentState
+    }
 }

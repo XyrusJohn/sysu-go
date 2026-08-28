@@ -27,7 +27,7 @@ import com.sysu.go.utils.SessionManager
 import com.sysu.go.utils.TrackingStateMonitor
 import kotlinx.coroutines.*
 
-private const val TAG = "LocationServices"
+private const val TAG = "LOCATION_TRACKING_DEFINITIVE"
 private const val CHANNEL_ID = "LocationServiceChannel"
 private const val NOTIFICATION_ID = 1
 
@@ -77,13 +77,14 @@ class LocationServices : Service() {
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_BATTERY_LOW) {
-                Log.w(TAG, "Battery LOW — emitting offline, disabling tracking")
+                Log.w(TAG, "[BATTERY] Battery LOW — emitting offline, disabling tracking")
                 sessionManager.setTrackingActive(false)
                 TrackingStateMonitor.setState(TrackingStateMonitor.State.OFFLINE)
                 SocketManager.emitOfflineStatus(
                     FirebaseAuth.getInstance().currentUser?.uid,
                     SocketManager.getDriverName()
                 )
+                Log.w(TAG, "[EMIT] Battery LOW - emitted offline status")
             }
         }
     }
@@ -92,13 +93,17 @@ class LocationServices : Service() {
         super.onCreate()
         fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(this)
         sessionManager = SessionManager(this)
+        Log.d(TAG, "LocationServices created - tracking_active=${sessionManager.isTrackingActive()}")
 
         // Register battery critical listener — fires when battery drops to low threshold
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_LOW))
+        Log.d(TAG, "Battery critical listener registered")
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
                 for (location in locationResult.locations) {
+                    Log.d(TAG, "LocationCallback received location: [${
+                        location.latitude}, ${location.longitude}] tracking_active=${sessionManager.isTrackingActive()}")
                     handleLocation(location.latitude, location.longitude)
                 }
             }
@@ -115,15 +120,21 @@ class LocationServices : Service() {
         // the service was already in the middle of dispatching a callback.
         // Without this check we'd get one stray emit between trip end and the
         // removeLocationUpdates() call, polluting the sysu-app map.
-        if (!sessionManager.isTrackingActive()) {
-            Log.w(TAG, "[STRICT] handleLocation called but tracking_active=FALSE — dropping emit")
+        val isTracking = sessionManager.isTrackingActive()
+        if (!isTracking) {
+            Log.w(TAG, "[STRICT] handleLocation called but tracking_active=FALSE — dropping emit. lat=$lat, lng=$lng")
             return
         }
+
+        Log.d(TAG, "[GPS] Handling location update: lat=$lat, lng=$lng, tracking_active=$isTracking")
 
         val currentTime = System.currentTimeMillis()
 
         // Throttle: emit at most every 5 seconds during transit
-        if (currentTime - lastEmitTime < 5000) return
+        if (currentTime - lastEmitTime < 5000) {
+            Log.d(TAG, "[THROTTLE] Skipping emit - last emit was ${currentTime - lastEmitTime}ms ago")
+            return
+        }
 
         val newLocation = android.location.Location("GPS").apply {
             latitude = lat
@@ -132,8 +143,9 @@ class LocationServices : Service() {
 
         // Filter noise: 10m minimum movement (tightened from 30m for transit use)
         lastEmitLocation?.let { last ->
-            if (last.distanceTo(newLocation) < 10.0) {
-                Log.d(TAG, "Filtered stationary/drift ($lat, $lng)")
+            val distance = last.distanceTo(newLocation)
+            if (distance < 10.0) {
+                Log.d(TAG, "[FILTER] Filtering stationary/drift - distance=$distance m, lat=$lat, lng=$lng")
                 return
             }
         }
@@ -157,11 +169,12 @@ class LocationServices : Service() {
         // Normalize stopped state to ONLINE on any valid movement
         if (wasStoppedEmitted) {
             TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
+            Log.d(TAG, "[STATE] Stopped state reset to ONLINE due to movement")
         }
 
         // Emit via Socket.IO for real-time admin map
         SocketManager.emitDriverMoving(lat, lng, sapDocId, status = "online")
-        Log.d(TAG, "driver_moving: [$lat, $lng], sapDocId=$sapDocId")
+        Log.d(TAG, "[EMIT] driver_moving: [$lat, $lng], sapDocId=$sapDocId")
 
         wasStoppedEmitted = false
 
@@ -185,7 +198,10 @@ class LocationServices : Service() {
      */
     private fun emitDriverStopped() {
         // If driver is moving again, skip — driver_moving takes precedence
-        if (wasStoppedEmitted) return
+        if (wasStoppedEmitted) {
+            Log.d(TAG, "[STOP] emitDriverStopped skipped - wasStoppedEmitted=true")
+            return
+        }
 
         val lat = lastStoppedLat ?: return
         val lng = lastStoppedLng ?: return
@@ -193,7 +209,7 @@ class LocationServices : Service() {
 
         wasStoppedEmitted = true
         SocketManager.emitDriverStopped(lat, lng, sapDocId)
-        Log.d(TAG, "driver_stopped: [$lat, $lng], sapDocId=$sapDocId")
+        Log.d(TAG, "[EMIT] driver_stopped: [$lat, $lng], sapDocId=$sapDocId")
     }
 
     /**
@@ -208,21 +224,27 @@ class LocationServices : Service() {
         val emitLng = lastStoppedLng ?: return
         val emitSapDocId = lastStoppedSapDocId
 
+        Log.d(TAG, "[TIMER] Starting stopped timer with position: [$emitLat, $emitLng], sapDocId=$emitSapDocId")
+
         stoppedRunnable?.let { stoppedHandler.removeCallbacks(it) }
 
         val runnable = Runnable {
-            if (sessionManager.isTrackingActive()) {
+            val isTracking = sessionManager.isTrackingActive()
+            Log.d(TAG, "[TIMER] Timer fired - tracking_active=$isTracking")
+            if (isTracking) {
                 // Re-fetch from captured vals — they may have been updated by a later
                 // handleLocation call if the timer was re-posted; emit from latest
                 SocketManager.emitDriverStopped(emitLat, emitLng, emitSapDocId)
                 TrackingStateMonitor.setState(TrackingStateMonitor.State.STOPPED)
                 wasStoppedEmitted = true
-                Log.d(TAG, "driver_stopped timer fired at last position: [$emitLat, $emitLng]")
+                Log.d(TAG, "[EMIT] driver_stopped timer fired at last position: [$emitLat, $emitLng]")
+            } else {
+                Log.d(TAG, "[TIMER] Timer fired but tracking_active=FALSE - skipping emit")
             }
         }
         stoppedRunnable = runnable
         stoppedHandler.postDelayed(runnable, 60_000L) // 60 seconds
-        Log.d(TAG, "Stopped timer started — will emit driver_stopped in 60s if no ≥10m movement")
+        Log.d(TAG, "[TIMER] Stopped timer started — will emit driver_stopped in 60s if no ≥10m movement")
     }
 
     private fun cancelStoppedTimer() {
@@ -231,12 +253,13 @@ class LocationServices : Service() {
             stoppedRunnable = null
             wasStoppedEmitted = false
             TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
-            Log.d(TAG, "Stopped timer cancelled — movement detected")
+            Log.d(TAG, "[TIMER] Stopped timer cancelled — movement detected")
         }
     }
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand called - tracking_active=${sessionManager.isTrackingActive()}")
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
 
@@ -257,7 +280,8 @@ class LocationServices : Service() {
         // When the app starts from MainActivity (no trip active), tracking is OFF —
         // the service runs as a foreground service (notification stays alive,
         // socket stays online) but does NOT emit driver_moving.
-        if (sessionManager.isTrackingActive()) {
+        val isTracking = sessionManager.isTrackingActive()
+        if (isTracking) {
             Log.i(TAG, "LocationServices: tracking_active=TRUE — starting GPS location updates")
             try {
                 startLocationUpdates()
@@ -273,6 +297,10 @@ class LocationServices : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
+        Log.d(TAG, "[GPS] Starting location updates")
+        lastEmitLocation = null
+        lastEmitTime = 0
+
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             5000  // 5 second interval for smooth transit tracking
@@ -280,6 +308,7 @@ class LocationServices : Service() {
           .setMinUpdateDistanceMeters(10f)
           .build()
 
+        Log.d(TAG, "[GPS] Requesting location updates with request: $locationRequest")
         fusedLocationClient.requestLocationUpdates(
             locationRequest,
             locationCallback,
@@ -322,6 +351,7 @@ class LocationServices : Service() {
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "LocationServices destroyed")
         super.onDestroy()
         cancelStoppedTimer()
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
