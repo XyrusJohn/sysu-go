@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.os.Looper
 import android.util.Log
 import android.view.View
-import android.widget.Button
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
@@ -21,8 +20,10 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.auth.FirebaseAuth
+import com.google.android.material.button.MaterialButton
 import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.SessionManager
+import com.sysu.go.utils.TrackingStateMonitor
 
 private const val TAG = "GENERAL_TRACKING_MANUAL"
 
@@ -30,9 +31,9 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
-    private lateinit var btnStartTracking: Button
-    private lateinit var btnStopTracking: Button
-    private lateinit var btnEndTracking: Button
+    private lateinit var btnStartTracking: MaterialButton
+    private lateinit var btnStopTracking: MaterialButton
+    private lateinit var btnEndTracking: MaterialButton
     private lateinit var tvTrackingStatus: TextView
     private lateinit var tvCurrentLocation: TextView
     private lateinit var tvSocketStatus: TextView
