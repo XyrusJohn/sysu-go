@@ -203,42 +203,44 @@ io.on("connection", async (socket) => {
     // them to move first. This fixes the regression introduced by the multi-socket fix.
     const existingEntry = onlineDriver.get(verifiedUid);
     if (existingEntry) {
-      // Ensure this new socket is added to the driver's set
       existingEntry.socketIds.add(socket.id);
       existingEntry.lastSeen = Date.now();
-      socket.emit("vendor_status_update", {
-        driverId: verifiedUid,
-        status: "online",
-        name: existingEntry.name,
-        lat: existingEntry.lat,
-        lng: existingEntry.lng,
-      });
-      // Also emit update_admin_map with latest known position
-      socket.emit("update_admin_map", {
-        driverId: verifiedUid,
-        lat: existingEntry.lat,
-        lng: existingEntry.lng,
-        name: existingEntry.name,
-        sapDocId: null,
-      });
-      console.log(`[${ts()}] [Socket] Emitted current driver state to reconnecting socket ${socket.id}`);
+
+      const hasActive = await hasActiveShipment(verifiedUid);
+      if (hasActive && existingEntry.status !== "completed" && existingEntry.lat != null && existingEntry.lng != null && existingEntry.lat !== 0 && existingEntry.lng !== 0) {
+        socket.emit("vendor_status_update", {
+          driverId: verifiedUid,
+          status: "online",
+          name: existingEntry.name,
+          lat: existingEntry.lat,
+          lng: existingEntry.lng,
+        });
+        socket.emit("update_admin_map", {
+          driverId: verifiedUid,
+          lat: existingEntry.lat,
+          lng: existingEntry.lng,
+          name: existingEntry.name,
+          sapDocId: null,
+        });
+        console.log(`[${ts()}] [Socket] Emitted active driver state to reconnecting socket ${socket.id}`);
+      }
     }
 
     // Also emit full state of ALL OTHER active drivers to this new socket,
     // so sysu-app rebuilds the full map on page reload (not just this driver).
     for (const [otherId, entry] of onlineDriver.entries()) {
       if (otherId === verifiedUid) continue; // skip self (handled above)
-      // Only emit if this driver's socket set actually contains a lived socket
       const hasLiveSocket = Array.from(entry.socketIds).some(sid => io.sockets.sockets.get(sid));
-      if (hasLiveSocket) {
-        socket.emit("vendor_status_update", {
-          driverId: otherId,
-          status: "online",
-          name: entry.name,
-          lat: entry.lat,
-          lng: entry.lng,
-        });
-        if (entry.lat != null && entry.lng != null) {
+      if (hasLiveSocket && entry.status !== "completed" && entry.lat != null && entry.lng != null && entry.lat !== 0 && entry.lng !== 0) {
+        const hasActive = await hasActiveShipment(otherId);
+        if (hasActive) {
+          socket.emit("vendor_status_update", {
+            driverId: otherId,
+            status: "online",
+            name: entry.name,
+            lat: entry.lat,
+            lng: entry.lng,
+          });
           socket.emit("update_admin_map", {
             driverId: otherId,
             lat: entry.lat,
@@ -273,6 +275,8 @@ io.on("connection", async (socket) => {
       }
 
       if (status === "online") {
+        const hasActive = await hasActiveShipment(verifiedUid);
+        const validCoords = (typeof lat === "number" && typeof lng === "number" && lat !== 0 && lng !== 0);
         const entry = onlineDriver.get(verifiedUid);
         if (entry) {
           entry.socketIds.add(socket.id);
@@ -281,31 +285,36 @@ io.on("connection", async (socket) => {
           entry.isOffline = false;
           entry.offlineSince = null;
           entry.lastSeen = Date.now();
-          if (lat != null) entry.lat = lat;
-          if (lng != null) entry.lng = lng;
-          io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
-          console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets)`);
+          if (validCoords) {
+            entry.lat = lat;
+            entry.lng = lng;
+          }
+          if (hasActive && validCoords) {
+            io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
+            io.emit("update_admin_map", { driverId: verifiedUid, lat: entry.lat, lng: entry.lng, name: fullName, sapDocId: null });
+          }
+          console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets, hasActive=${hasActive})`);
         } else {
           onlineDriver.set(verifiedUid, {
             name: fullName,
-            lat: lat ?? null,
-            lng: lng ?? null,
+            lat: validCoords ? lat : null,
+            lng: validCoords ? lng : null,
             socketIds: new Set([socket.id]),
             status: "online",
             isOffline: false,
             tripStatus: null,
             lastSeen: Date.now(),
           });
-          console.log(`[${ts()}] Driver ${fullName} is now ONLINE`);
-          io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: lat ?? null, lng: lng ?? null });
+          console.log(`[${ts()}] Driver ${fullName} is now ONLINE (hasActive=${hasActive})`);
+          if (hasActive && validCoords) {
+            io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat, lng });
+            io.emit("update_admin_map", { driverId: verifiedUid, lat, lng, name: fullName, sapDocId: null });
+          }
         }
       } else if (status === "completed") {
-        const entry = onlineDriver.get(verifiedUid);
-        const lastLat = entry ? entry.lat : null;
-        const lastLng = entry ? entry.lng : null;
         onlineDriver.delete(verifiedUid);
         io.emit("update_status", { driverId: verifiedUid, status: "completed", name: fullName });
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: lastLat, lng: lastLng });
+        io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: null, lng: null });
         console.log(`[${ts()}] Driver ${fullName} COMPLETED trip [marker removed from map]`);
       } else {
         const entry = onlineDriver.get(verifiedUid);
