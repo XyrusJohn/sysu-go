@@ -254,218 +254,256 @@ io.on("connection", async (socket) => {
   }
 
   socket.on("update_status", async (data) => {
-    // Reject if not authenticated or if driverId doesn't match verified UID
-    if (!verifiedUid || data.driverId !== verifiedUid) {
-      console.warn(`[${ts()}] [Socket] update_status rejected: unauthorized (socket ${socket.id})`);
-      return;
-    }
-
-    const { status, lat, lng } = data;
-
-    let fullName = "Unknown Driver";
     try {
-      const driverInfo = await Driver.findDriverById(verifiedUid);
-      if (driverInfo) fullName = `${driverInfo.first_name} ${driverInfo.last_name}`.trim();
-    } catch (err) {
-      console.error(`[${ts()}] DB Error in Socket:`, err);
-    }
+      if (!data) data = {};
+      const targetDriverId = data.driverId || verifiedUid;
+      if (!verifiedUid || (data.driverId && data.driverId !== verifiedUid)) {
+        console.warn(`[${ts()}] [Socket] update_status rejected: unauthorized (socket ${socket.id})`);
+        return;
+      }
 
-    if (status === "online") {
-      // Add this socket to the driver's set of live sockets. Use Set so both
-      // Railway and sysu-app sockets are tracked independently. Driver stays ONLINE
-      // as long as ANY socket remains. When the LAST socket disconnects, OFFLINE fires.
-      const entry = onlineDriver.get(verifiedUid);
+      const { status, lat, lng } = data;
+
+      let fullName = "Unknown Driver";
+      try {
+        const driverInfo = await Driver.findDriverById(verifiedUid);
+        if (driverInfo) fullName = `${driverInfo.first_name} ${driverInfo.last_name}`.trim();
+      } catch (err) {
+        console.error(`[${ts()}] DB Error in Socket:`, err);
+      }
+
+      if (status === "online") {
+        const entry = onlineDriver.get(verifiedUid);
+        if (entry) {
+          entry.socketIds.add(socket.id);
+          entry.name = fullName;
+          entry.status = "online";
+          entry.isOffline = false;
+          entry.offlineSince = null;
+          entry.lastSeen = Date.now();
+          if (lat != null) entry.lat = lat;
+          if (lng != null) entry.lng = lng;
+          io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
+          console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets)`);
+        } else {
+          onlineDriver.set(verifiedUid, {
+            name: fullName,
+            lat: lat ?? null,
+            lng: lng ?? null,
+            socketIds: new Set([socket.id]),
+            status: "online",
+            isOffline: false,
+            tripStatus: null,
+            lastSeen: Date.now(),
+          });
+          console.log(`[${ts()}] Driver ${fullName} is now ONLINE`);
+          io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: lat ?? null, lng: lng ?? null });
+        }
+      } else if (status === "completed") {
+        const entry = onlineDriver.get(verifiedUid);
+        const lastLat = entry ? entry.lat : null;
+        const lastLng = entry ? entry.lng : null;
+        onlineDriver.delete(verifiedUid);
+        io.emit("update_status", { driverId: verifiedUid, status: "completed", name: fullName });
+        io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: lastLat, lng: lastLng });
+        console.log(`[${ts()}] Driver ${fullName} COMPLETED trip [marker removed from map]`);
+      } else {
+        const entry = onlineDriver.get(verifiedUid);
+        const offlineLat = entry ? entry.lat : null;
+        const offlineLng = entry ? entry.lng : null;
+
+        const active = await hasActiveShipment(verifiedUid);
+        if (active && offlineLat != null && offlineLng != null) {
+          if (entry) {
+            entry.isOffline = true;
+            entry.offlineSince = Date.now();
+            entry.socketIds.clear();
+          }
+          io.emit("update_status", { driverId: verifiedUid, status: "offline_in_transit", name: fullName });
+          io.emit("vendor_status_update", {
+            driverId: verifiedUid,
+            status: "offline_in_transit",
+            name: fullName,
+            lat: offlineLat,
+            lng: offlineLng,
+            offlineSince: entry ? entry.offlineSince : Date.now(),
+          });
+          console.log(`[${ts()}] Driver ${fullName} OFFLINE — has active shipment, retaining last position [${offlineLat}, ${offlineLng}]`);
+        } else {
+          onlineDriver.delete(verifiedUid);
+          io.emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
+          io.emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
+          console.log(`[${ts()}] Driver ${fullName} is now OFFLINE — no active shipment, marker removed`);
+        }
+      }
+    } catch (err) {
+      console.error(`[${ts()}] Error in update_status:`, err);
+    }
+  });
+
+  /**
+   * Real-time GPS movement events from mobile app
+   */
+  socket.on("driver_moving", async (data) => {
+    try {
+      if (!data) return;
+      const dId = data.driverId || verifiedUid;
+      if (!dId) return;
+      const { lat, lng, name, sapDocId, status } = data;
+      if (typeof lat !== "number" || typeof lng !== "number" || lat === 0 || lng === 0) return;
+
+      touchLastSeen(dId);
+      const fullName = name || (onlineDriver.get(dId)?.name) || "Driver";
+
+      const entry = onlineDriver.get(dId);
       if (entry) {
-        entry.socketIds.add(socket.id);
+        entry.lat = lat;
+        entry.lng = lng;
         entry.name = fullName;
         entry.status = "online";
-        // FLEET TRACKING FIX: driver came back online after offline_in_transit — clear flags
         entry.isOffline = false;
-        entry.offlineSince = null;
         entry.lastSeen = Date.now();
-        if (lat != null) entry.lat = lat;
-        if (lng != null) entry.lng = lng;
-        // If they were offline_in_transit and just reconnected, announce green marker
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
-        console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets)`);
       } else {
-        onlineDriver.set(verifiedUid, {
+        onlineDriver.set(dId, {
           name: fullName,
-          lat: lat ?? null,
-          lng: lng ?? null,
+          lat,
+          lng,
           socketIds: new Set([socket.id]),
           status: "online",
           isOffline: false,
-          tripStatus: null,
+          tripStatus: "in_transit",
           lastSeen: Date.now(),
         });
-        console.log(`[${ts()}] Driver ${fullName} is now ONLINE`);
-        // First online → emit so sysu-app can place GREEN marker immediately
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: lat ?? null, lng: lng ?? null });
       }
-    } else if (status === "completed") {
-      // Trip completed — remove from in-memory map and notify ALL connected clients
-      // (web dispatcher, other monitors) so markers disappear immediately without reload.
-      const entry = onlineDriver.get(verifiedUid);
-      const lastLat = entry ? entry.lat : null;
-      const lastLng = entry ? entry.lng : null;
-      onlineDriver.delete(verifiedUid);
-      // Broadcast on BOTH channels so every listener type catches it
-      io.emit("update_status", { driverId: verifiedUid, status: "completed", name: fullName });
-      io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: lastLat, lng: lastLng });
-      console.log(`[${ts()}] Driver ${fullName} COMPLETED trip [marker removed from map]`);
-    } else {
-      // Driver went offline (network loss, force-stop, phone restart, tab kill).
-      //
-      // AUTHORITATIVE OFFLINE PROTECTION (centralised gate):
-      // Check Firestore — if this driver has any sap_assignment that is not yet
-      // completed, they still have active work. Retain their last known lat/lng
-      // on the admin map as a grey "last seen" marker so dispatch always knows
-      // where they were. Only fully remove the marker when they have no active work.
-      //
-      // This is Firestore-backed (not socket-derived state) so it's correct even
-      // across server restarts, driver force-kills, and socket race conditions.
-      const entry = onlineDriver.get(verifiedUid);
-      const offlineLat = entry ? entry.lat : null;
-      const offlineLng = entry ? entry.lng : null;
 
-      const active = await hasActiveShipment(verifiedUid);
-      if (active && offlineLat != null && offlineLng != null) {
-        // Has unfinished work — retain in map with isOffline flag
-        if (entry) {
-          entry.isOffline = true;
-          entry.offlineSince = Date.now();
-          entry.socketIds.clear();
-        }
-        io.emit("update_status", { driverId: verifiedUid, status: "offline_in_transit", name: fullName });
-        io.emit("vendor_status_update", {
-          driverId: verifiedUid,
-          status: "offline_in_transit",
-          name: fullName,
-          lat: offlineLat,
-          lng: offlineLng,
-          offlineSince: entry ? entry.offlineSince : Date.now(),
-        });
-        console.log(`[${ts()}] Driver ${fullName} OFFLINE — has active shipment, retaining last position [${offlineLat}, ${offlineLng}]`);
-      } else {
-        // No active shipment (or no last known position) — full removal
-        onlineDriver.delete(verifiedUid);
-        io.emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
-        console.log(`[${ts()}] Driver ${fullName} is now OFFLINE — no active shipment, marker removed`);
-      }
+      const mapPayload = {
+        driverId: dId,
+        lat,
+        lng,
+        name: fullName,
+        sapDocId: sapDocId || null,
+        status: status || "online",
+      };
+      io.emit("update_admin_map", mapPayload);
+      io.emit("vendor_status_update", { driverId: dId, status: "online", name: fullName, lat, lng });
+    } catch (err) {
+      console.error(`[${ts()}] Error in driver_moving:`, err);
     }
   });
 
   /**
-   * Lifecycle status changes for the driver — emitted by DriverStatus.write() on the
-   * mobile app whenever the lifecycle state changes:
-   *   "online" | "offline" | "in_transit" | "returning_to_base"
-   *
-   * This is the authoritative real-time channel so the Profile screen (and the
-   * sysu-web admin app) can react without depending on Firestore snapshot listeners
-   * (we are migrating the source of truth to MySQL).
-   *
-   * On receipt:
-   *   1. Persist to drivers/{uid}.status in Firestore (last-known-truth backup).
-   *   2. Update in-memory onlineDriver entry's lifecycle field.
-   *   3. Broadcast to room driver:{uid} AND globally so subscribers update.
+   * Stationary stopped event from mobile app
+   */
+  socket.on("driver_stopped", async (data) => {
+    try {
+      if (!data) return;
+      const dId = data.driverId || verifiedUid;
+      if (!dId) return;
+      const { lat, lng, name } = data;
+      touchLastSeen(dId);
+      const fullName = name || (onlineDriver.get(dId)?.name) || "Driver";
+      io.emit("vendor_status_update", { driverId: dId, status: "stopped", name: fullName, lat, lng });
+    } catch (err) {
+      console.error(`[${ts()}] Error in driver_stopped:`, err);
+    }
+  });
+
+  /**
+   * Lifecycle status changes for the driver
    */
   socket.on("driver_status_change", async (data) => {
-    if (!verifiedUid || data.driverId !== verifiedUid) {
-      console.warn(`[${ts()}] [Socket] driver_status_change rejected: unauthorized (socket ${socket.id})`);
-      return;
-    }
-
-    const { status, name, timestamp } = data;
-    const VALID_STATUSES = new Set(["online", "offline", "in_transit", "returning_to_base"]);
-    if (!status || !VALID_STATUSES.has(status)) {
-      console.warn(`[${ts()}] [Socket] driver_status_change rejected: invalid status '${status}'`);
-      return;
-    }
-
-    const fullName = name || (onlineDriver.get(verifiedUid)?.name) || "Driver";
-    const driverName = fullName;
-
-    // 1. Persist to Firestore (single source of truth backup)
     try {
-      const db = getDb();
-      await db.collection("drivers").doc(verifiedUid)
-        .set({ status }, { merge: true });
-    } catch (err) {
-      console.error(`[${ts()}] [Socket] driver_status_change Firestore write failed for ${verifiedUid}:`, err.message);
-    }
+      if (!data) data = {};
+      const targetDriverId = data.driverId || verifiedUid;
+      if (!verifiedUid || (data.driverId && data.driverId !== verifiedUid)) {
+        console.warn(`[${ts()}] [Socket] driver_status_change rejected: unauthorized (socket ${socket.id})`);
+        return;
+      }
 
-    // 2. Update in-memory entry so disconnect/connect logic stays consistent
-    const entry = onlineDriver.get(verifiedUid);
-    if (entry) {
-      entry.status = status;
-      entry.name = fullName;
-      // FLEET TRACKING: mirror lifecycle status into tripStatus so disconnect /
-      // presenceWatcher can decide whether to retain or remove the map marker.
-      if (status === "in_transit") entry.tripStatus = "in_transit";
-      else if (status === "online") { entry.tripStatus = null; entry.isOffline = false; }
-      else if (status === "returning_to_base") entry.tripStatus = null; // trip ended — don't retain on offline
-      // Refresh lastSeen — driver_status_change is also a heartbeat signal.
-      touchLastSeen(verifiedUid);
-    } else if (status !== "offline") {
-      // First time we see this driver outside of an explicit connect — create a stub
-      onlineDriver.set(verifiedUid, {
-        name: fullName,
-        lat: null,
-        lng: null,
-        socketIds: new Set([socket.id]),
+      const { status, name, timestamp } = data;
+      const VALID_STATUSES = new Set(["online", "offline", "in_transit", "returning_to_base"]);
+      if (!status || !VALID_STATUSES.has(status)) {
+        console.warn(`[${ts()}] [Socket] driver_status_change rejected: invalid status '${status}'`);
+        return;
+      }
+
+      const fullName = name || (onlineDriver.get(verifiedUid)?.name) || "Driver";
+      const driverName = fullName;
+
+      try {
+        const db = getDb();
+        await db.collection("drivers").doc(verifiedUid)
+          .set({ status }, { merge: true });
+      } catch (err) {
+        console.error(`[${ts()}] [Socket] driver_status_change Firestore write failed for ${verifiedUid}:`, err.message);
+      }
+
+      const entry = onlineDriver.get(verifiedUid);
+      if (entry) {
+        entry.status = status;
+        entry.name = fullName;
+        if (status === "in_transit") entry.tripStatus = "in_transit";
+        else if (status === "online") { entry.tripStatus = null; entry.isOffline = false; }
+        else if (status === "returning_to_base") entry.tripStatus = null;
+        touchLastSeen(verifiedUid);
+      } else if (status !== "offline") {
+        onlineDriver.set(verifiedUid, {
+          name: fullName,
+          lat: null,
+          lng: null,
+          socketIds: new Set([socket.id]),
+          status,
+          tripStatus: status === "in_transit" ? "in_transit" : null,
+          isOffline: false,
+          lastSeen: Date.now(),
+        });
+      }
+
+      const payload = {
+        driverId: verifiedUid,
         status,
-        tripStatus: status === "in_transit" ? "in_transit" : null,
-        isOffline: false,
-        lastSeen: Date.now(),
-      });
+        name: driverName,
+        timestamp: timestamp || Date.now(),
+      };
+      io.to(`driver:${verifiedUid}`).emit("driver_status_change", payload);
+      io.emit("driver_status_change", payload);
+      console.log(`[${ts()}] [Socket] driver_status_change → ${status} for ${driverName} (${verifiedUid})`);
+    } catch (err) {
+      console.error(`[${ts()}] Error in driver_status_change:`, err);
     }
-
-    // 3. Broadcast to room driver:{uid} (other ProfileActivity instances on the
-    //    same driver account, e.g. another device of the same driver) and globally
-    //    (sysu-web admin app)
-    const payload = {
-      driverId: verifiedUid,
-      status,
-      name: driverName,
-      timestamp: timestamp || Date.now(),
-    };
-    io.to(`driver:${verifiedUid}`).emit("driver_status_change", payload);
-    io.emit("driver_status_change", payload);
-    console.log(`[${ts()}] [Socket] driver_status_change → ${status} for ${driverName} (${verifiedUid})`);
   });
 
-  /**
-   * Client (e.g. ProfileActivity) asks for the current driver status.
-   * Responds by emitting `driver_status_change` to the requesting socket only.
-   */
   socket.on("request_driver_status", async (data) => {
-    if (!verifiedUid || data.driverId !== verifiedUid) {
-      console.warn(`[${ts()}] [Socket] request_driver_status rejected: unauthorized (socket ${socket.id})`);
-      return;
-    }
-    let currentStatus = "online";
-    let fullName = "Driver";
     try {
-      const db = getDb();
-      const snap = await db.collection("drivers").doc(verifiedUid).get();
-      if (snap.exists) {
-        const data = snap.data();
-        if (data && data.status) currentStatus = data.status;
-        if (data && data.name) fullName = data.name;
+      if (!data) data = {};
+      if (!verifiedUid || (data.driverId && data.driverId !== verifiedUid)) {
+        console.warn(`[${ts()}] [Socket] request_driver_status rejected: unauthorized (socket ${socket.id})`);
+        return;
       }
+      let currentStatus = "online";
+      let fullName = "Driver";
+      try {
+        const db = getDb();
+        const snap = await db.collection("drivers").doc(verifiedUid).get();
+        if (snap.exists) {
+          const docData = snap.data();
+          if (docData && docData.status) currentStatus = docData.status;
+          if (docData && docData.name) fullName = docData.name;
+        }
+      } catch (err) {
+        console.error(`[${ts()}] [Socket] request_driver_status Firestore read failed:`, err.message);
+      }
+      const payload = {
+        driverId: verifiedUid,
+        status: currentStatus,
+        name: fullName,
+        timestamp: Date.now(),
+      };
+      socket.emit("driver_status_change", payload);
+      console.log(`[${ts()}] [Socket] request_driver_status → ${currentStatus} for ${fullName}`);
     } catch (err) {
-      console.error(`[${ts()}] [Socket] request_driver_status Firestore read failed:`, err.message);
+      console.error(`[${ts()}] Error in request_driver_status:`, err);
     }
-    const payload = {
-      driverId: verifiedUid,
-      status: currentStatus,
-      name: fullName,
-      timestamp: Date.now(),
-    };
-    socket.emit("driver_status_change", payload);
-    console.log(`[${ts()}] [Socket] request_driver_status → ${currentStatus} for ${fullName}`);
   });
 
   socket.on("disconnect", async (reason) => {
