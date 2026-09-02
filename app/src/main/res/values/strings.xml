@@ -203,9 +203,9 @@
     <string name="label_quantity">Dami</string>
 
     <!-- Per-OBD POD Status -->
-    <string name="pod_status_delivered">Na-Deliver</string>
-    <string name="pod_status_rejected">Tinanggihan</string>
-    <string name="pod_status_delivered_rejection">Na-Deliver may Tinanggihan</string>
+    <string name="pod_status_delivered">All Delivered</string>
+    <string name="pod_status_rejected">Rejected</string>
+    <string name="pod_status_delivered_rejection">Delivered w/ Rejection</string>
     <string name="pod_confirm_take_photo">KUMPIRMAHIN AT KUNAN NG LITRATO</string>
     <string name="pod_select_status_hint">Pumili ng delivery status para magpatuloy</string>
     <string name="pod_photo_required">Kailangan ng litrato para makumpirma ang delivery.</string>

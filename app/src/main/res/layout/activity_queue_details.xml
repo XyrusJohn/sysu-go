@@ -211,7 +211,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:gravity="end"
-                        android:text="AUV"
+                        android:text="—"
                         android:textColor="@color/black"
                         android:textStyle="bold"
                         android:textSize="@dimen/text_size_body"
@@ -242,7 +242,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:gravity="end"
-                        android:text="Pedro Santos"
+                        android:text="—"
                         android:textColor="@color/black"
                         android:textStyle="bold"
                         android:textSize="@dimen/text_size_body"
@@ -606,6 +606,21 @@
 
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
+
+            <!-- Go to Tracking Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnGoToTracking"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/btn_height"
+                android:layout_marginTop="16dp"
+                android:text="Go to Tracking"
+                android:textColor="@color/white"
+                android:textAllCaps="false"
+                android:fontFamily="@font/atkinson_hyperlegible_bold"
+                android:textSize="@dimen/text_size_button"
+                android:visibility="gone"
+                app:backgroundTint="@color/sysu_red"
+                app:cornerRadius="@dimen/corner_radius_button" />
 
             <!-- Bottom padding so content doesn't hide behind nav bar -->
             <View

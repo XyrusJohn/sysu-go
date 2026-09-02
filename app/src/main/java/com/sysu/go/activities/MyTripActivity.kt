@@ -42,9 +42,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.auth.FirebaseAuth
 import com.sysu.go.R
-import com.sysu.go.activities.ObdItemsBottomSheet
-import com.sysu.go.activities.GuardVerificationBottomSheet
-import com.sysu.go.activities.TransitActivity
+import com.sysu.go.activities.GeneralTrackingActivity
 import com.sysu.go.adapter.MyTripTabAdapter
 import com.sysu.go.databinding.ActivityMyTripBinding
 import com.sysu.go.model.Assignment
@@ -1474,9 +1472,7 @@ class MyTripActivity : AppCompatActivity() {
 
     private fun launchDeliveryActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
-        // Launch the live map / tracking screen — NOT MyTripActivity (prevents loop)
-        // Do NOT call finish() here — keep MyTripActivity in the back stack.
-        val intent = Intent(this, TransitActivity::class.java).apply {
+        val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
             putExtra("shipment_doc_id", sapDocId)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }

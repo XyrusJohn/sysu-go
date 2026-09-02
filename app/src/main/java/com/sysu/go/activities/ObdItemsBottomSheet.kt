@@ -405,6 +405,16 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 tvDeliveryStatus.parent?.parent?.let { parentView ->
                     val rowView = parentView as? android.view.View ?: return@let
                     val tvUnloadAction = rowView.findViewById<TextView>(R.id.tvUnloadAction)
+                    val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
+                    val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
+
+                    // ── Gate all action buttons behind podCaptureEnabled ──
+                    // When trip is NOT in_transit, hide UNLOAD/CAPTURE/CANCEL — read-only view only
+                    if (!podCaptureEnabled) {
+                        tvUnloadAction?.visibility = View.GONE
+                        tvCancelUnload?.visibility = View.GONE
+                        return@let
+                    }
 
                     if (isUnloading) {
                         // ── UNLOADING: CAPTURE button (ORANGE pill) + CANCEL button (RED outline) ──
@@ -431,8 +441,6 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                         }
 
                         // CANCEL UNLOAD — returns to PENDING state
-                        val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
-                        val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
                         tvCancelUnload?.visibility = View.VISIBLE
                         tvCancelUnload?.setOnClickListener {
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
@@ -443,8 +451,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                     } else {
                         // ── PENDING: show UNLOAD button only (amber pill), hide CANCEL ──
                         Log.d(TAG, "configureStatusPill: PENDING branch for obd=${item["obdNumber"]}")
-                        val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
-                        rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)?.visibility = View.GONE
+                        tvCancelUnload?.visibility = View.GONE
                         tvUnloadAction?.visibility = View.VISIBLE
                         tvUnloadAction?.text = "UNLOAD"
                         tvUnloadAction?.alpha = 1f
@@ -458,19 +465,19 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                             val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
                             if (clickedItem == null) return@setOnClickListener
                             val dlgView = LayoutInflater.from(ctx).inflate(R.layout.dialog_sysu_confirmation, null)
-                                dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
-                                dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Simulan ang Pag-Unload?"
-							dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Simulan ang pag-unload para sa $obdNumber sa ${clickedItem["customerName"] as? String ?: "lokasyong ito"}?"
-							val dialog = AlertDialog.Builder(ctx).setView(dlgView).create()
-							dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
-								text = "I-Unload"
-								backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.sysu_red))
-								setOnClickListener { dialog.dismiss()
-									onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
+								dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_shipping)
+								dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Simulan ang Pag-Unload?"
+								dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = "Simulan ang pag-unload para sa $obdNumber sa ${clickedItem["customerName"] as? String ?: "lokasyong ito"}?"
+								val dialog = AlertDialog.Builder(ctx).setView(dlgView).create()
+								dlgView.findViewById<MaterialButton>(R.id.btnConfirm).apply {
+									text = "I-Unload"
+									backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(ctx, R.color.sysu_red))
+									setOnClickListener { dialog.dismiss()
+										onUnloadConfirm?.invoke(clickedItem, shipmentDocId)
+									}
 								}
-							}
-							dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
-							dialog.show()
+								dlgView.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener { dialog.dismiss() }
+								dialog.show()
                         }
                     }
                 }
@@ -497,19 +504,24 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 tvDeliveryStatus.alpha = 1f
 
                 // Show RETAKE in the tvUnloadAction slot (same position as UNLOAD/CAPTURE)
+                // Only shown when podCaptureEnabled (i.e. trip is in_transit)
                 val rowCardView = (tvDeliveryStatus.parent as? android.view.View)?.parent as? android.view.View
                 val tvRetake = rowCardView?.findViewById<TextView>(R.id.tvUnloadAction)
                 val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
                 tvCancelUnload?.visibility = View.GONE
-                tvRetake?.visibility = View.VISIBLE
-                tvRetake?.text = "RETAKE"
-                tvRetake?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
-                tvRetake?.setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
-                tvRetake?.setOnClickListener {
-                    val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
-                    if (clickedItem != null) {
-                        onRetakeTap?.invoke(clickedItem, shipmentDocId)
+                if (podCaptureEnabled) {
+                    tvRetake?.visibility = View.VISIBLE
+                    tvRetake?.text = "RETAKE"
+                    tvRetake?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
+                    tvRetake?.setTextColor(ContextCompat.getColor(ctx, R.color.text_secondary))
+                    tvRetake?.setOnClickListener {
+                        val clickedItem: Map<String, Any?>? = tvDeliveryStatus.tag as? Map<String, Any?>
+                        if (clickedItem != null) {
+                            onRetakeTap?.invoke(clickedItem, shipmentDocId)
+                        }
                     }
+                } else {
+                    tvRetake?.visibility = View.GONE
                 }
             } else {
                 // isPodCompleted but no deliveryStatus yet — treat as PENDING

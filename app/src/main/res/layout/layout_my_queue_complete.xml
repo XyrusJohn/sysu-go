@@ -217,7 +217,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:gravity="end"
-                        android:text="AUV"
+                        android:text="—"
                         android:textColor="@color/black"
                         android:textStyle="bold"
                         android:textSize="@dimen/text_size_body"

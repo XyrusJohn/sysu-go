@@ -28,7 +28,8 @@ import com.sysu.go.utils.TrackingStateMonitor
 import kotlinx.coroutines.*
 
 private const val TAG = "LOCATION_TRACKING_DEFINITIVE"
-private const val CHANNEL_ID = "LocationServiceChannel"
+private const val CHANNEL_ID = "sysu_tracking_channel"
+private const val CHANNEL_NAME = "Live Trip Tracking"
 private const val NOTIFICATION_ID = 1
 
 // Static shared state — updated on every valid GPS fix.
@@ -89,6 +90,11 @@ class LocationServices : Service() {
         }
     }
 
+    // For dynamic notification updates
+    private var lastUpdateTime: Long = 0
+    private var lastAccuracy: Float? = null
+    private val notificationManager by lazy { getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
+
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(this)
@@ -104,13 +110,17 @@ class LocationServices : Service() {
                 for (location in locationResult.locations) {
                     Log.d(TAG, "LocationCallback received location: [${
                         location.latitude}, ${location.longitude}] tracking_active=${sessionManager.isTrackingActive()}")
-                    handleLocation(location.latitude, location.longitude)
+                    handleLocation(location)
                 }
             }
         }
     }
 
-    private fun handleLocation(lat: Double, lng: Double) {
+    private fun handleLocation(location: android.location.Location) {
+        val lat = location.latitude
+        val lng = location.longitude
+        val accuracy = location.accuracy
+
         // Update shared static cache for POD timestamp overlay
         lastKnownLat = lat
         lastKnownLng = lng
@@ -126,7 +136,7 @@ class LocationServices : Service() {
             return
         }
 
-        Log.d(TAG, "[GPS] Handling location update: lat=$lat, lng=$lng, tracking_active=$isTracking")
+        Log.d(TAG, "[GPS] Handling location update: lat=$lat, lng=$lng, accuracy=$accuracy m, tracking_active=$isTracking")
 
         val currentTime = System.currentTimeMillis()
 
@@ -153,8 +163,8 @@ class LocationServices : Service() {
         lastEmitTime = currentTime
         lastEmitLocation = newLocation
 
-        // Read sap_doc_id from SharedPreferences (written by SessionManager in TransitActivity)
-        val sapDocId = prefs?.getString(sapDocIdKey, null)
+        // Read active SAP doc ID from SessionManager
+        val sapDocId = sessionManager.getActiveSapDocId() ?: sessionManager.getCurrentSapDocId() ?: prefs?.getString(sapDocIdKey, null)
 
         // Persist coords BEFORE emit — used for session restore on app reopen
         prefs.edit()
@@ -176,6 +186,37 @@ class LocationServices : Service() {
         SocketManager.emitDriverMoving(lat, lng, sapDocId, status = "online")
         Log.d(TAG, "[EMIT] driver_moving: [$lat, $lng], sapDocId=$sapDocId")
 
+        // ── Direct Firestore Real-Time Location Dual-Channel ───────────────────
+        val currentUid = FirebaseAuth.getInstance().currentUser?.uid
+            ?: sessionManager.getDriverId()
+        if (!currentUid.isNullOrBlank()) {
+            val driverName = sessionManager.getDriverName() ?: "Driver"
+            val locData = hashMapOf(
+                "driverId" to currentUid,
+                "name" to driverName,
+                "lat" to lat,
+                "lng" to lng,
+                "status" to "online",
+                "sapDocId" to sapDocId,
+                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+            )
+            com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("driver_locations")
+                .document(currentUid)
+                .set(locData, com.google.firebase.firestore.SetOptions.merge())
+
+            if (!sapDocId.isNullOrBlank()) {
+                com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("sap_assignments")
+                    .document(sapDocId)
+                    .update(
+                        mapOf(
+                            "lastLocation.lat" to lat,
+                            "lastLocation.lng" to lng,
+                            "lastLocation.at" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                        )
+                    )
+            }
+        }
+
         wasStoppedEmitted = false
 
         // Capture this position as the "last known stopped position" for potential
@@ -189,6 +230,11 @@ class LocationServices : Service() {
         // Start/update the 60s stopped timer.
         // Resets on every subsequent valid movement event.
         postStoppedTimer()
+
+        // Update notification with latest GPS accuracy and time
+        lastUpdateTime = currentTime
+        lastAccuracy = accuracy
+        updateNotification()
     }
 
     /**
@@ -210,6 +256,19 @@ class LocationServices : Service() {
         wasStoppedEmitted = true
         SocketManager.emitDriverStopped(lat, lng, sapDocId)
         Log.d(TAG, "[EMIT] driver_stopped: [$lat, $lng], sapDocId=$sapDocId")
+
+        val currentUid = FirebaseAuth.getInstance().currentUser?.uid
+            ?: sessionManager.getDriverId()
+        if (!currentUid.isNullOrBlank()) {
+            com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("driver_locations")
+                .document(currentUid)
+                .update(
+                    mapOf(
+                        "status" to "stopped",
+                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                    )
+                )
+        }
     }
 
     /**
@@ -261,7 +320,10 @@ class LocationServices : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand called - tracking_active=${sessionManager.isTrackingActive()}")
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
+        // Initialize notification update timers
+        lastUpdateTime = System.currentTimeMillis()
+        lastAccuracy = null
+        startForeground(NOTIFICATION_ID, buildNotification("Initializing GPS..."))
 
         // Prevent double-connect: if SocketManager already initialized and
         // connected from this service's context, skip reconnecting.
@@ -316,7 +378,7 @@ class LocationServices : Service() {
         )
     }
 
-    private fun createNotification(): Notification {
+    private fun buildNotification(contentText: String): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -325,33 +387,49 @@ class LocationServices : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Aktibo ang SYSU Tracking")
-            .setContentText("Ipinapadala ang iyong lokasyon sa dispatch")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("SYSU-GO Tracking Active")
+            .setContentText(contentText)
+            .setSmallIcon(R.mipmap.ic_launcher) // TODO: replace with @drawable/ic_notification if available
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateNotification() {
+        val secondsAgo = ((System.currentTimeMillis() - lastUpdateTime) / 1000).toInt()
+        val accuracy = lastAccuracy
+        val accuracyLabel = when {
+            accuracy == null -> "GPS: Waiting..."
+            accuracy < 10 -> "GPS: Excellent (${accuracy.toInt()}m)"
+            accuracy < 30 -> "GPS: Good (${accuracy.toInt()}m)"
+            accuracy < 50 -> "GPS: Weak (${accuracy.toInt()}m)"
+            else -> "GPS: Poor (${accuracy.toInt()}m)"
+        }
+        val contentText = "🟢 $accuracyLabel | Last update: ${secondsAgo}s ago"
+        val notification = buildNotification(contentText)
+        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "GPS Location Tracking",
-                NotificationManager.IMPORTANCE_HIGH
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps app alive for real-time driver tracking"
-                enableLights(true)
+                description = "Live trip tracking notification"
+                enableLights(false)
                 enableVibration(false)
             }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(channel)
         }
     }
 
     override fun onDestroy() {
         Log.d(TAG, "LocationServices destroyed")
+        // Remove the foreground notification
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
         cancelStoppedTimer()
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}

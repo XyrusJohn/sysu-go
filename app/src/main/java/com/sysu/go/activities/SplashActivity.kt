@@ -76,8 +76,8 @@ class SplashActivity : AppCompatActivity() {
 
         // User is logged in — route based on trip state
         val destination = if (session.isTripActive()) {
-            Log.d(TAG, "[SPLASH] Active session + active trip → TransitActivity")
-            TransitActivity::class.java
+            Log.d(TAG, "[SPLASH] Active session + active trip → GeneralTrackingActivity")
+            GeneralTrackingActivity::class.java
         } else {
             Log.d(TAG, "[SPLASH] Active session, no trip → MainActivity")
             MainActivity::class.java

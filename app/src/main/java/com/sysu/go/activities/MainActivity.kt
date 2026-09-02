@@ -21,6 +21,7 @@ import com.google.android.material.button.MaterialButton
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 
+import android.graphics.Color
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -29,10 +30,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.DocumentSnapshot
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityMainBinding
-import com.sysu.go.activities.TransitActivity
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.SocketManager
 import com.sysu.go.services.LocationServices
@@ -500,27 +499,10 @@ class MainActivity : AppCompatActivity() {
         shipmentCardAdapter = com.sysu.go.adapter.ShipmentCardAdapter(
             sessionActiveDocId = SessionManager(this).getActiveSapDocId()
         ) { assignment ->
-            // Card tapped → navigate based on trip status
-            when {
-                assignment.isInTransit -> {
-                    // Active trip in progress → open MyTripActivity for POD execution
-                    val intent = Intent(this, MyTripActivity::class.java)
-                    intent.putExtra("shipment_doc_id", assignment.docId)
-                    startActivity(intent)
-                }
-                assignment.isCompleted -> {
-                    // Completed → read-only per-shipment detail view
-                    val intent = Intent(this, QueueDetailsActivity::class.java)
-                    intent.putExtra("shipment_doc_id", assignment.docId)
-                    startActivity(intent)
-                }
-                else -> {
-                    // Pre-transit → QueueDetailsActivity for review
-                    val intent = Intent(this, QueueDetailsActivity::class.java)
-                    intent.putExtra("shipment_doc_id", assignment.docId)
-                    startActivity(intent)
-                }
-            }
+            // Card tapped → navigate to QueueDetailsActivity for POD execution / review
+            val intent = Intent(this, QueueDetailsActivity::class.java)
+            intent.putExtra("shipment_doc_id", assignment.docId)
+            startActivity(intent)
         }
         binding.rvShipmentCards.adapter = shipmentCardAdapter
         shipmentCardAdapter?.submitList(currentShipments.toList())
@@ -598,12 +580,23 @@ class MainActivity : AppCompatActivity() {
                 currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_start_trip)
-                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.transit_green))
+                
+                // Gawing white ang text para mabasa
+                binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = getString(R.string.cta_header_start_trip)
                 binding.tvCTABody?.text = getString(R.string.cta_body_start_trip)
-                binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
+                
+                // ANG FIX: Gamitin ang solid background (bg_status_pill_green) bago i-tint
+                val purpleBg = ContextCompat.getDrawable(this, R.drawable.bg_status_pill_green)?.mutate()
+                purpleBg?.setTint(android.graphics.Color.parseColor("#9C27B0"))
+                binding.statusPill?.background = purpleBg
+                
                 startStatusDotPulse()
-                binding.ctaStatusDot?.setBackgroundResource(R.drawable.bg_status_dot_green)
+                
+                // Gawing white din ang dot para malinis tingnan
+                val whiteDot = ContextCompat.getDrawable(this, R.drawable.bg_status_dot)?.mutate()
+                whiteDot?.setTint(android.graphics.Color.WHITE)
+                binding.ctaStatusDot?.background = whiteDot
 
                 updateReadyBadge("START TRIP", R.color.white, R.color.frosted_green)
             }
@@ -899,76 +892,41 @@ class MainActivity : AppCompatActivity() {
         binding.tvDriverName.text = session.getDriverName()
 
         binding.btnScanQR.setOnClickListener {
-            // SCENARIO B: There is an active in_transit trip — go directly to live tracking screen.
-            // Check both in-memory list (fast) and SharedPreferences (survives app restart after START TRIP).
             val sessionMgr = SessionManager(this)
             val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
                 || (sessionMgr.getActiveSapDocId() != null && sessionMgr.isTripActive())
+            val isReturning = currentShipments.any { it.tripStatus == "returning_to_base" }
+            val allCompleted = currentShipments.isNotEmpty() && currentShipments.all { it.isCompleted }
 
-            // ═══ RETURN PANEL takes priority over all other routes ═══
-            // Checked BEFORE hasActiveTrip because returning_to_base / completed
-            // shipments are no longer "in_transit" and would miss the gate.
-
-            // ── Route 0: all shipments completed → ARRIVED AT WAREHOUSE (finalize) ──
-            // Driver has already END SHIPMENT/END TRIP on every shipment.
-            // Show the return panel to clear the session and release the driver.
-            if (currentShipments.isNotEmpty() &&
-                currentShipments.all { it.isCompleted }) {
-                val docIds = currentShipments.joinToString(",") { it.docId }
-                ReturnToBaseBottomSheet.newInstance(docIds)
-                    .show(supportFragmentManager, "ReturnToBaseBottomSheet")
-                return@setOnClickListener
-            }
-
-            // ── Route 1: returning_to_base → ARRIVED AT WAREHOUSE ──
-            val returningShipments = currentShipments.filter {
-                it.tripStatus == "returning_to_base"
-            }
-            if (returningShipments.isNotEmpty()) {
-                val docIds = returningShipments.joinToString(",") { it.docId }
-                ReturnToBaseBottomSheet.newInstance(docIds)
-                    .show(supportFragmentManager, "ReturnToBaseBottomSheet")
-                return@setOnClickListener
-            }
-
-            // ── Route 2 REMOVED ──
-            // Previously: all PODs complete → START RETURNING TO BASE
-            // This used to fire the floating panel as soon as every shipment had
-            // its POD items captured, even before the user pressed END SHIPMENT.
-            // Per the agreed flow, the map icon must only enable return-to-base
-            // AFTER all shipments have been END SHIPMENT'd (Route 0 above).
-            // Mid-delivery (all PODs done but not all END'd), the map icon falls
-            // through to TransitActivity, where the in-screen
-            // "START RETURNING TO BASE" button handles the transition per spec.
-
-            if (hasActiveTrip) {
+            // ── Priority 1: If there is an active trip, returning to base, or completed shipments -> GeneralTrackingActivity ──
+            if (hasActiveTrip || isReturning || allCompleted) {
                 val activeDocId = sessionMgr.getActiveSapDocId()
+                    ?: currentShipments.firstOrNull { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }?.docId
 
-                // Normal transit — open TransitActivity tracking screen
-                activeDocId?.let { docId ->
-                    startActivity(Intent(this, TransitActivity::class.java).apply {
-                        putExtra("shipment_doc_id", docId)
-                    })
-                } ?: startActivity(Intent(this, TransitActivity::class.java))
+                val intent = Intent(this, GeneralTrackingActivity::class.java)
+                if (activeDocId != null) {
+                    intent.putExtra("shipment_doc_id", activeDocId)
+                }
+                startActivity(intent)
                 return@setOnClickListener
             }
 
             when {
-                // SCENARIO A: All confirmed — show MyTripActivity card list with START TRIP buttons
+                // ── Route 3: all shipments guardVerified && driverConfirmed → GeneralTrackingActivity ──
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                     startActivity(Intent(this, GeneralTrackingActivity::class.java))
                 }
-                // Shipment assigned → open AssignmentActivity (shows all assignments)
+                // ── Route 4: hasShipment → AssignmentActivity ──
                 hasShipment -> {
                     startActivity(Intent(this, AssignmentActivity::class.java))
                 }
-                // In queue, no shipment yet → show queue details
+                // ── Route 5: isInQueue → queue details ──
                 isInQueue -> {
                     openQueueDetails()
                 }
                 else -> {
-                    // NOT IN QUEUE — icon shows QR, open QRScanActivity
+                    // Else → QRScanActivity
                     openQRScan()
                 }
             }
@@ -1385,9 +1343,69 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, ">> Synced shipment: docId=$docId, plate=$truckPlate, lineItems=${lineItems.size}, tripStatus=$tripStatus")
         }
 
-        // Replace currentShipments completely — removed shipments vanish immediately
+        // Replace currentShipments completely — removed shipments vanish immediately.
+        // ── KEY FIX: exclude shipments that are fully completed so the driver UI
+        //    resets after a confirmed arrival. A shipment is "done" when tripStatus
+        //    is "completed" AND returnStatus is "completed" (both set by performConfirmArrival).
+        //    Shipments still in returning_to_base are kept so the map-icon route works.
         currentShipments.clear()
-        currentShipments.addAll(newShipments)
+        val activeShipments = newShipments.filter { assignment ->
+            val doc = sapSnapshots.documents.firstOrNull { it.id == assignment.docId }
+            val returnStatus = doc?.getString("returnStatus")
+            // Keep if NOT fully completed: either still active or still returning
+            !(assignment.tripStatus == "completed" && returnStatus == "completed")
+        }
+        currentShipments.addAll(activeShipments)
+
+        // ── Auto-sync Queue Status ──────────────────────────────────────────
+        // Ensure this driver's queue entry in Firestore is marked as assigned/loading
+        // so they vanish immediately from the QR Generator Waiting board!
+        if (activeShipments.isNotEmpty()) {
+            val currentDriverUid = sessionDriverId.ifBlank { FirebaseAuth.getInstance().currentUser?.uid }
+            if (!currentDriverUid.isNullOrBlank()) {
+                db.collection("queue")
+                    .whereEqualTo("driverId", currentDriverUid)
+                    .whereIn("status", listOf("waiting", "called"))
+                    .get()
+                    .addOnSuccessListener { qDocs ->
+                        for (qDoc in qDocs.documents) {
+                            db.collection("queue").document(qDoc.id)
+                                .update(mapOf(
+                                    "isAssigned" to true,
+                                    "status" to "assigned",
+                                    "overallTripStatus" to "assigned"
+                                ))
+                        }
+                    }
+            }
+        }
+
+        // If ALL shipments are done → act as if there are no shipments so the UI resets
+        // to the default "NOT IN QUEUE / READY TO SCAN" state.
+        if (activeShipments.isEmpty() && newShipments.isNotEmpty()) {
+            Log.d(TAG, ">> All shipments fully completed — resetting MainActivity UI to default state")
+            hasShipment = false
+            currentShipments.clear()
+            currentQueueEntries.clear()
+            shipmentCardAdapter?.submitList(emptyList())
+            binding.rvShipmentCards.visibility = View.GONE
+            binding.tvQueueStatus.text = "NOT IN QUEUE"
+            binding.tvQueueStatus.textSize = 24f
+            binding.tvQueueStatusLabel.text = ""
+            binding.tvQueueStatusLabel.visibility = View.GONE
+            binding.tvQueueDetails.text = ""
+            binding.tvQueueDetails.visibility = View.GONE
+            binding.tvStatusBadgeText.text = "Ready to Scan"
+            binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
+            binding.tvScanHint.text = "Show QR code at booth to check in"
+            binding.tvScanHint.visibility = View.VISIBLE
+            binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
+            binding.ivQueueIcon.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
+            binding.dividerCancelQueue.visibility = View.GONE
+            binding.cancelQueueContainer.visibility = View.GONE
+            updateScanButtonState()
+            return
+        }
 
         // ── Optimistic bridge: CONFIRM SHIPMENT → MainActivity live update ──────────
         // When the user confirms a shipment in AssignmentActivity, the Firestore write
@@ -1443,6 +1461,7 @@ class MainActivity : AppCompatActivity() {
             // Determine the canonical display status
             val displayStatus: String = when {
                 allTripStatuses.any { it == "in_transit" } -> "IN TRANSIT"
+                allTripStatuses.any { it == "returning_to_base" } || (allTripStatuses.all { it == "completed" } && allTripStatuses.isNotEmpty()) -> "DELIVERED"
                 allTripStatuses.all { it == "loaded" || it == "fully_loaded" }
                     && allTripStatuses.isNotEmpty() -> "LOADED"
                 allTripStatuses.any { it == "loading" || it == "fully_loaded" } -> "LOADING"
@@ -1453,45 +1472,57 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            binding.tvQueueStatus.text = displayStatus
+            if (displayStatus == "DELIVERED") {
+                binding.tvQueueStatus.text = "COMPLETED" // Pinalitan mula "Shipment/s Delivered"
+                binding.statusBadge.setCardBackgroundColor(Color.parseColor("#9E9E9E")) 
+                binding.ivQueueIcon.setColorFilter(Color.parseColor("#9C27B0")) // Purple na ticket
+            } else {
+                binding.tvQueueStatus.text = displayStatus
+            }
             binding.tvQueueStatus.textSize = when (displayStatus) {
-                "NOT IN QUEUE" -> 24f
+                "NOT IN QUEUE", "DELIVERED" -> 24f
                 else -> 28f
             }
 
             // ── Badge (frosted pill at top) ──────────────────────────────────
             binding.tvStatusBadgeText.text = when (displayStatus) {
                 "IN TRANSIT" -> "In Transit"
+                "DELIVERED" -> "Delivered"
                 "LOADED" -> "Loaded"
                 "LOADING" -> "Loading"
                 "ASSIGNED" -> "Assigned"
                 else -> "In Queue"
             }
-            binding.statusBadge.setCardBackgroundColor(
-                when (displayStatus) {
-                    "IN TRANSIT" -> ContextCompat.getColor(this, R.color.sysu_blue)
-                    "LOADED" -> ContextCompat.getColor(this, R.color.sysu_green)
-                    "LOADING" -> ContextCompat.getColor(this, R.color.sysu_amber)
-                    "ASSIGNED" -> ContextCompat.getColor(this, R.color.sysu_gold)
-                    else -> ContextCompat.getColor(this, android.R.color.transparent)
-                }
-            )
+            if (displayStatus != "DELIVERED") {
+                binding.statusBadge.setCardBackgroundColor(
+                    when (displayStatus) {
+                        "IN TRANSIT" -> ContextCompat.getColor(this, R.color.sysu_blue)
+                        "LOADED" -> ContextCompat.getColor(this, R.color.sysu_green)
+                        "LOADING" -> ContextCompat.getColor(this, R.color.sysu_amber)
+                        "ASSIGNED" -> ContextCompat.getColor(this, R.color.sysu_gold)
+                        else -> ContextCompat.getColor(this, android.R.color.transparent)
+                    }
+                )
+            }
 
             // ── Ticket icon — ticket, tint varies by status ──────────────────
             binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
-            binding.ivQueueIcon.setColorFilter(
-                ContextCompat.getColor(this, when (displayStatus) {
-                    "IN TRANSIT" -> R.color.sysu_blue
-                    "LOADED" -> R.color.sysu_green
-                    "LOADING" -> R.color.sysu_amber
-                    "ASSIGNED" -> R.color.sysu_blue
-                    else -> R.color.sysu_red
-                })
-            )
+            if (displayStatus != "DELIVERED") {
+                binding.ivQueueIcon.setColorFilter(
+                    ContextCompat.getColor(this, when (displayStatus) {
+                        "IN TRANSIT" -> R.color.sysu_blue
+                        "LOADED" -> R.color.sysu_green
+                        "LOADING" -> R.color.sysu_amber
+                        "ASSIGNED" -> R.color.sysu_blue
+                        else -> R.color.sysu_red
+                    })
+                )
+            }
 
             // ── Label ────────────────────────────────────────────────────────
             binding.tvQueueStatusLabel.text = when (displayStatus) {
                 "IN TRANSIT" -> "On the road"
+                "DELIVERED" -> "Completed"
                 "LOADED" -> "Ready"
                 "LOADING" -> "Loading"
                 "ASSIGNED" -> "Ready"
@@ -1506,6 +1537,7 @@ class MainActivity : AppCompatActivity() {
             // ── Detail line ──────────────────────────────────────────────────
             binding.tvQueueDetails.text = when (displayStatus) {
                 "IN TRANSIT" -> "Shipment #${firstShipmentId ?: "—"} • On the road"
+                "DELIVERED" -> "Shipment #${firstShipmentId ?: "—"} • All items delivered"
                 "LOADED" -> "Shipment #${firstShipmentId ?: "—"} • Verified & ready"
                 "LOADING" -> if (firstShipmentId != null) {
                     "Shipment #$firstShipmentId • Being loaded"
@@ -1523,7 +1555,7 @@ class MainActivity : AppCompatActivity() {
 
             // Show cancel queue only when driver is still waiting (not yet assigned/loading/loaded/transit)
             val canCancel = isInQueue && !hasShipment &&
-                displayStatus !in listOf("ASSIGNED", "LOADING", "LOADED", "IN TRANSIT")
+                displayStatus !in listOf("ASSIGNED", "LOADING", "LOADED", "IN TRANSIT", "DELIVERED")
             binding.dividerCancelQueue.visibility = if (canCancel) View.VISIBLE else View.GONE
             binding.cancelQueueContainer.visibility = if (canCancel) View.VISIBLE else View.GONE
         }
@@ -1716,8 +1748,10 @@ class MainActivity : AppCompatActivity() {
         batch.commit()
             .addOnSuccessListener {
                 Log.d(TAG, "Batch startTrip: ${confirmed.size} shipment(s) → in_transit")
-                // Navigate to MyTripActivity for the first (primary) shipment
-                val intent = Intent(this, MyTripActivity::class.java)
+                // Navigate to GeneralTrackingActivity
+                val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+                    putExtra("shipment_doc_id", firstDocId)
+                }
                 startActivity(intent)
             }
             .addOnFailureListener { e ->
@@ -1844,14 +1878,15 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                             "VERIFY_GUARD" -> {
-                                val intent = Intent(this, MyTripActivity::class.java).apply {
+                                val intent = Intent(this, AssignmentActivity::class.java).apply {
                                     putExtra("shipment_doc_id", assignment.docId)
                                 }
                                 startActivity(intent)
                             }
                             "OPEN_ACTIVE_TRIP" -> {
-                                val intent = Intent(this, MyTripActivity::class.java)
-                                intent.putExtra("shipment_doc_id", assignment.docId)
+                                val intent = Intent(this, QueueDetailsActivity::class.java).apply {
+                                    putExtra("shipment_doc_id", assignment.docId)
+                                }
                                 startActivity(intent)
                             }
                             "START_TRIP" -> {
@@ -1990,9 +2025,10 @@ class MainActivity : AppCompatActivity() {
         ))
         batch.commit().addOnSuccessListener {
             Toast.makeText(this, "Nagsimula na ang biyahe!", Toast.LENGTH_SHORT).show()
-            // Navigate to MyTripActivity
-            val intent = Intent(this, MyTripActivity::class.java)
-            intent.putExtra("shipment_doc_id", docId)
+            // Navigate to GeneralTrackingActivity
+            val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+                putExtra("shipment_doc_id", docId)
+            }
             startActivity(intent)
         }.addOnFailureListener { e ->
             Log.e(TAG, "startSingleShipment failed: ${e.message}")

@@ -430,6 +430,19 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         .await()
                 }
 
+                val docIds = getAllDocIds()
+                for (docId in docIds) {
+                    try {
+                        db.collection("sap_assignments").document(docId)
+                            .update(mapOf(
+                                "tripStatus" to "returning_to_base",
+                                "returnStatus" to "returning_to_base"
+                            ))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error updating assignment $docId to returning_to_base: ${e.message}")
+                    }
+                }
+
                 Log.d(TAG, "performStartReturning: driver → returning_to_base (isReturning=true)")
                 // Mark driver-level status for the Profile badge and Socket.IO broadcast
                 DriverStatus.write(driverId, DriverStatus.State.RETURNING_TO_BASE)
@@ -617,6 +630,8 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     if (uid != null) {
                         SocketManager.emitCompletedStatus(uid, driverName)
                         SocketManager.emitStatusUpdate("completed", driverName)
+                        // Clean up live tracking collection in Firestore so overview map removes marker immediately
+                        db.collection("driver_locations").document(uid).delete()
                     }
                     requireContext().stopService(Intent(requireContext(), LocationServices::class.java))
                 } catch (e: Exception) {
@@ -626,9 +641,12 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 // Clear queue doc ID from local session — releases driver from queue lookup
                 sessionManager.saveCurrentQueueDocId(null)
 
-                // Update Firestore queue document to complete this trip cycle
-                if (!queueDocId.isNullOrBlank()) {
-                    try {
+                // Update Firestore queue documents to complete this trip cycle and remove from Queue Command Center
+                try {
+                    val currentDriverId = sessionManager.getDriverId() ?: FirebaseAuth.getInstance().currentUser?.uid
+
+                    // 1. Direct update if queueDocId was stored in session
+                    if (!queueDocId.isNullOrBlank()) {
                         db.collection("queue").document(queueDocId)
                             .update(mapOf(
                                 "status" to "completed",
@@ -638,10 +656,29 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                             ))
                             .await()
                         Log.d(TAG, "performConfirmArrival: queue $queueDocId marked completed")
-                    } catch (e: FirebaseFirestoreException) {
-                        // Queue doc may already be cleaned up — log and continue
-                        Log.w(TAG, "performConfirmArrival: queue doc update failed: ${e.message}")
                     }
+
+                    // 2. Query and mark ALL active/waiting queue entries for this driver as completed
+                    if (!currentDriverId.isNullOrBlank()) {
+                        val activeQueueDocs = db.collection("queue")
+                            .whereEqualTo("driverId", currentDriverId)
+                            .whereIn("status", listOf("waiting", "called", "loading", "assigned", "in_transit"))
+                            .get()
+                            .await()
+                        for (qDoc in activeQueueDocs.documents) {
+                            db.collection("queue").document(qDoc.id)
+                                .update(mapOf(
+                                    "status" to "completed",
+                                    "overallTripStatus" to "completed",
+                                    "completedAt" to FieldValue.serverTimestamp(),
+                                    "isAssigned" to false
+                                ))
+                                .await()
+                            Log.d(TAG, "performConfirmArrival: active queue doc ${qDoc.id} marked completed")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "performConfirmArrival: queue doc update failed: ${e.message}")
                 }
 
                 dismiss()

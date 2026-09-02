@@ -162,11 +162,14 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
                     Log.i(TAG, ">>> EVENT_CONNECT! $url → socket.id=${socket.id()}")
                     registerAllListenersOnSocket(socket)
                     offlineEmitted = false
-                    emitStatusUpdateOnSocket(socket, "online", getDriverName(), includeLocationFromPrefs = true)
+                    val isTracking = isTrackingActive()
+                    emitStatusUpdateOnSocket(socket, "online", getDriverName(), includeLocationFromPrefs = isTracking)
                     emitStatusChangeOnSocket(socket, getDriverName())
-                    startHeartbeat()
+                    if (isTracking) {
+                        startHeartbeat()
+                    }
                     notifyConnectListeners()
-                    Log.i(TAG, ">>> update_status ONLINE emitted for $url")
+                    Log.i(TAG, ">>> update_status ONLINE emitted for $url (trackingActive=$isTracking)")
                 }
 
                 socket.on(Socket.EVENT_DISCONNECT) {
@@ -174,7 +177,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
                     stopHeartbeat()
                     if (!offlineEmitted) {
                         offlineEmitted = true
-                        emitStatusUpdateOnSocket(socket, "offline", getDriverName(), includeLocationFromPrefs = true)
+                        emitStatusUpdateOnSocket(socket, "offline", getDriverName(), includeLocationFromPrefs = isTrackingActive())
                     }
                 }
 
@@ -228,7 +231,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
                 put("driverId", uid)
                 put("status", status)
                 put("name", name)
-                if (status == "online" && includeLocationFromPrefs) {
+                if (status == "online" && includeLocationFromPrefs && isTrackingActive()) {
                     val srcLat = explicitLat ?: prefs?.getFloat(KEY_LAST_EMIT_LAT, 0f)?.toDouble()?.takeIf { it != 0.0 }
                     val srcLng = explicitLng ?: prefs?.getFloat(KEY_LAST_EMIT_LNG, 0f)?.toDouble()?.takeIf { it != 0.0 }
                     if (srcLat != null && srcLng != null) {
@@ -310,6 +313,11 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
 
     fun emitCompletedStatus(driverId: String?, driverName: String) {
         if (driverId == null) return
+        prefs?.edit()
+            ?.remove(KEY_LAST_EMIT_LAT)
+            ?.remove(KEY_LAST_EMIT_LNG)
+            ?.putBoolean(KEY_TRACKING_ACTIVE, false)
+            ?.apply()
         val json = JSONObject().apply {
             put("driverId", driverId)
             put("status", "completed")

@@ -24,6 +24,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.sysu.go.R
+import com.sysu.go.activities.SelectActiveTripBottomSheet
 import com.sysu.go.adapter.AssignmentAdapter
 import com.sysu.go.databinding.ActivityAssignmentBinding
 import com.sysu.go.model.Assignment
@@ -200,8 +201,14 @@ class AssignmentActivity : AppCompatActivity() {
             }
 
             assignment.isLoaded || assignment.canConfirmTrip -> {
-                // Guard verified — open central batch confirmation sheet
-                openBatchConfirmationSheet()
+                // Kung confirmed na, ipakita agad ang floating tab para pumili ng active trip
+                if (assignment.driverConfirmed) {
+                    val readyToStart = assignments.filter { it.tripStatus == "loaded" && it.driverConfirmed }
+                    showSelectActiveTripSheet(readyToStart)
+                } else {
+                    // Kung hindi pa confirmed, open batch confirmation sheet
+                    openBatchConfirmationSheet()
+                }
             }
 
             // ── Existing terminal/active states ───────────────────────────────
@@ -210,7 +217,7 @@ class AssignmentActivity : AppCompatActivity() {
             }
 
             assignment.isInTransit -> {
-                launchTransitActivity(assignment.docId)
+                launchGeneralTrackingActivity(assignment.docId)
             }
 
             assignment.driverConfirmed -> {
@@ -526,7 +533,7 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Trip started: $docId")
-                        launchTransitActivity(docId)
+                        launchGeneralTrackingActivity(docId)
                     }
                     .addOnFailureListener { e ->
                         Log.e(TAG, "Failed to start trip: ${e.message}")
@@ -544,6 +551,19 @@ class AssignmentActivity : AppCompatActivity() {
                 sessionManager.saveActiveSapDocId(null)
             }
         }
+    }
+
+    /**
+     * Opens the floating tab (Bottom Sheet) to select which loaded & confirmed
+     * shipment will be activated (tripStatus -> "in_transit").
+     */
+    private fun showSelectActiveTripSheet(readyToStart: List<Assignment>) {
+        SelectActiveTripBottomSheet.newInstance(readyToStart).apply {
+            onTripSelected = { selectedAssignment ->
+                // I-a-activate ang pinili na shipment (papalitan ang tripStatus to "in_transit")
+                performStartTrip(selectedAssignment)
+            }
+        }.show(supportFragmentManager, SelectActiveTripBottomSheet.TAG)
     }
 
     /**
@@ -667,44 +687,34 @@ class AssignmentActivity : AppCompatActivity() {
             return
         }
 
-        // Only show the batch confirmation floating bar when ALL shipments are:
-        // 1. Fully loaded & Guard verified (guardVerified == true)
-        // 2. Not in progress / completed / returning
-        val allGuardVerified = list.all { it.guardVerified }
-        if (!allGuardVerified) {
-            // Loading / Fully Loaded / Guard Verification is still pending on at least one shipment
+        // I-filter lang yung mga shipment na "loaded" at "driverConfirmed"
+        val readyToStart = list.filter { it.tripStatus == "loaded" && it.driverConfirmed }
+
+        if (readyToStart.isEmpty()) {
             binding.bottomBatchBar.visibility = View.GONE
             return
         }
 
-        // Show floating bottom batch confirmation bar
+        // Ipakita ang floating bottom bar
         binding.bottomBatchBar.visibility = View.VISIBLE
+        binding.tvBatchStatus.text = "Handa na mag-Start Trip"
+        binding.tvBatchSubtext.text = "Piliin ang shipment na i-aactivate"
+        binding.btnBatchConfirm.text = "Piliin ang Active Trip"
+        binding.btnBatchConfirm.backgroundTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, R.color.sysu_red)
+        )
 
-        val confirmedCount = list.count { it.driverConfirmed }
-        val totalCount = list.size
-        val allConfirmed = totalCount > 0 && confirmedCount == totalCount
-
-        binding.tvBatchStatus.text = "$confirmedCount/$totalCount Kumpirmado"
-
-        if (allConfirmed) {
-            binding.tvBatchSubtext.text = "Lahat ay kumpirmado na ✓"
-            binding.btnBatchConfirm.text = "Kumpleto Na (Bumalik sa Dashboard)"
-            binding.btnBatchConfirm.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.transit_green)
-            )
-        } else {
-            val remaining = totalCount - confirmedCount
-            binding.tvBatchSubtext.text = "Kailangan kumpirmahin lahat bago mag-Start Trip"
-            binding.btnBatchConfirm.text = "Kumpirmahin ang mga Shipment ($confirmedCount/$totalCount)"
-            binding.btnBatchConfirm.backgroundTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.sysu_red)
-            )
+        // Kapag tinap, bubuksan ang Floating Tab (Bottom Sheet)
+        binding.btnBatchConfirm.setOnClickListener {
+            showSelectActiveTripSheet(readyToStart)
         }
     }
 
-    private fun launchTransitActivity(sapDocId: String) {
+    private fun launchGeneralTrackingActivity(sapDocId: String) {
         sessionManager.saveCurrentSapDocId(sapDocId)
-        val intent = Intent(this, TransitActivity::class.java)
+        val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+            putExtra("shipment_doc_id", sapDocId)
+        }
         startActivity(intent)
     }
 
@@ -790,14 +800,14 @@ class AssignmentActivity : AppCompatActivity() {
         }
 
         if (assignment.isInTransit) {
-            // In-transit shipment → each completed row navigates to MyTripActivity
+            // In-transit shipment → each completed row navigates to QueueDetailsActivity
             ObdItemsBottomSheet.newInstance(
                 lineItems = assignment.lineItems,
                 shipmentDocId = assignment.docId,
                 rowLayoutType = RowLayoutType.DETAIL,
                 podCaptureEnabled = false,  // read-only view of OBD items
                 onItemClick = { item ->
-                    val intent = Intent(this, MyTripActivity::class.java)
+                    val intent = Intent(this, QueueDetailsActivity::class.java)
                     intent.putExtra("shipment_doc_id", assignment.docId)
                     startActivity(intent)
                 },

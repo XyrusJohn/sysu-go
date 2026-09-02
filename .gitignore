@@ -54,3 +54,6 @@ __pycache__/
 *.swp
 *.swo
 *~
+
+# Session summary markdown files
+*_SUMMARY.md
