@@ -154,10 +154,25 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
                     if (isTrackingStarted) {
                         val session = SessionManager(this@GeneralTrackingActivity)
+
+                        // Guard Clause: Halt if session was already closed by BottomSheet or other process
+                        if (!session.isTrackingActive()) {
+                            Log.w(TAG, "[GPS] Ghost tick detected! Session is inactive. Stopping tracker.")
+                            stopTracking()
+                            return@let
+                        }
+
                         val sapDocId = session.getActiveSapDocId()
                         val currentUid = FirebaseAuth.getInstance().currentUser?.uid ?: session.getDriverId()
+
                         if (!currentUid.isNullOrBlank()) {
                             val driverName = session.getDriverName() ?: "Driver"
+
+                            // 1. Socket.IO: emit driver_moving (ito ang iniintay ng server.js para mag-emit ng update_admin_map sa overview map!)
+                            SocketManager.emitDriverMoving(it.latitude, it.longitude, sapDocId, status = "online")
+                            Log.d(TAG, "[SOCKET] Emitted driver_moving: lat=${it.latitude}, lng=${it.longitude}, sapDocId=$sapDocId")
+
+                            // 2. Firestore: dual-write sa driver_locations para sa web overview map na naka-Firestore listener
                             val locData = hashMapOf(
                                 "driverId" to currentUid,
                                 "name" to driverName,
@@ -189,7 +204,6 @@ class GeneralTrackingActivity : AppCompatActivity() {
         }
 
         // Set up button click listeners
-        btnStartTracking.setOnClickListener { startTracking() }
         btnEndTracking.setOnClickListener { endTrip() }
 
         // Back button
@@ -224,19 +238,20 @@ class GeneralTrackingActivity : AppCompatActivity() {
         if (isTrackingStarted || !session.isTripActive() || activeDocId.isNullOrEmpty()) return
         Log.d(TAG, "[TRACKING_BUTTON] 🟢 START Tracking button clicked by user")
 
-        SocketManager.disconnect()
-        SocketManager.connect(this)
-        Log.d(TAG, "[SOCKET] Reconnecting socket before starting location updates...")
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            session.setTrackingActive(true)
+            isTrackingStarted = true
+
+            SocketManager.disconnect()
+            SocketManager.connect(this)
+            Log.d(TAG, "[SOCKET] Reconnecting socket before starting location updates...")
+
             startLocationUpdates()
 
             val serviceIntent = Intent(this, com.sysu.go.services.LocationServices::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
             Log.d(TAG, "[SERVICE] LocationServices successfully restarted")
 
-            session.setTrackingActive(true)
-            isTrackingStarted = true
             updateTrackingStatus()
             Log.d(TAG, "[TRACKING] trackingActive set to true & Socket reconnect initiated")
         } else {
@@ -246,7 +261,8 @@ class GeneralTrackingActivity : AppCompatActivity() {
     }
 
     private fun endTrip() {
-        if (!isTrackingStarted) return
+        // NOTE: Intentionally NOT gated by isTrackingStarted — driver must be able to
+        // trigger Return to Base even if tracking was accidentally stopped or session lost.
         val isReturningToBase = allAssignments.any { it.tripStatus == "returning_to_base" }
         if (!allAssignedShipmentsCompleted && !isReturningToBase) {
             Toast.makeText(this, "Complete all PODs for all shipments before ending trip.", Toast.LENGTH_SHORT).show()
@@ -271,17 +287,24 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
         stopLocationUpdates()
         val session = SessionManager(this)
+        // Only pause tracking — intentionally NOT clearing isTripActive or activeDocId.
+        // This preserves the trip session so the driver can still trigger End Trip
+        // even after stopping GPS updates (e.g. if accidentally stopped or app paused).
         session.setTrackingActive(false)
-        session.setTripActive(false)
-        session.saveActiveSapDocId(null)
 
         isTrackingStarted = false
         pendingStart = false
 
-        val driverId = FirebaseAuth.getInstance().currentUser?.uid
+        val driverId = FirebaseAuth.getInstance().currentUser?.uid ?: session.getDriverId()
         val driverName = session.getDriverName()
-        SocketManager.emitOfflineStatus(driverId, driverName)
-        Log.d(TAG, "[STATUS] Emitted offline status to server")
+        if (!driverId.isNullOrBlank()) {
+            SocketManager.emit("remove_marker", driverId)
+            SocketManager.emitOfflineStatus(driverId, driverName)
+            Log.d(TAG, "[STATUS] Emitted remove_marker and offline status to server for $driverId")
+
+            // Linisin din ang Firestore driver_locations para walang maiwang ghost marker
+            db.collection("driver_locations").document(driverId).delete()
+        }
 
         SocketManager.disconnect()
         Log.d(TAG, "[SOCKET] Disconnected from server")
@@ -302,27 +325,33 @@ class GeneralTrackingActivity : AppCompatActivity() {
         val isReturningToBase = allAssignments.any { it.tripStatus == "returning_to_base" }
 
         // ═══ ENTERPRISE GATE: Lock start button if no trip is selected ═══
-        val canStartTracking = !isTrackingStarted && isTripActive && !activeDocId.isNullOrEmpty() && !isReturningToBase
+        val canStartTracking = isTripActive && !activeDocId.isNullOrEmpty()
         btnStartTracking.isEnabled = canStartTracking
         if (!canStartTracking) {
             btnStartTracking.alpha = 0.4f
-            btnStartTracking.text = when {
-                isReturningToBase -> "Returning to Base"
-                isTrackingStarted -> "Tracking in Progress"
-                else -> "Select Trip First"
-            }
-            btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(
-                this, if (isTrackingStarted || isReturningToBase) R.color.text_secondary else R.color.sysu_red
-            )
+            btnStartTracking.text = if (isReturningToBase) "Returning to Base" else "Select Trip First"
+            btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
+            btnStartTracking.setOnClickListener { /* Do nothing */ }
         } else {
             btnStartTracking.alpha = 1.0f
-            btnStartTracking.text = "Start Tracking"
-            btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
+            if (isTrackingStarted) {
+                // Gawing STOP button kapag nagta-track na
+                btnStartTracking.text = "Stop Tracking"
+                btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_amber)
+                btnStartTracking.setOnClickListener { stopTracking() }
+            } else {
+                // Gawing START button kapag naka-pause
+                btnStartTracking.text = "Start Tracking"
+                btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
+                btnStartTracking.setOnClickListener { startTracking() }
+            }
         }
         btnStartTracking.setTextColor(ContextCompat.getColor(this, R.color.white))
 
         // ═══ END TRIP GATE: btnEndTracking ═══
-        val canEndTrip = isTrackingStarted && (allAssignedShipmentsCompleted || isReturningToBase)
+        // Intentionally NOT requiring isTrackingStarted — driver must still be able to
+        // trigger Return to Base even if GPS tracking was paused or session was lost.
+        val canEndTrip = allAssignedShipmentsCompleted || isReturningToBase
         btnEndTracking.isEnabled = canEndTrip
         btnEndTracking.alpha = if (canEndTrip) 1.0f else 0.4f
         val endTripColor = if (isReturningToBase) R.color.sysu_blue else R.color.sysu_amber
@@ -377,11 +406,20 @@ class GeneralTrackingActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         isTrackingStarted = SessionManager(this).isTrackingActive()
-        if (isTrackingStarted && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            startLocationUpdates()
-        }
+        updateTrackingStatus()
         updateSocketStatus()
         loadShipmentsData()
+
+        // Re-attach the UI location listener if tracking is already active.
+        // onPause() detaches it to save battery; onResume() must re-attach it
+        // so the screen stops showing "Waiting for GPS..." after coming back.
+        // The background LocationServices service keeps running regardless.
+        if (isTrackingStarted &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            startLocationUpdates()
+            Log.d(TAG, "[RESUME] Reattached UI location listener (tracking was active)")
+        }
     }
 
     override fun onPause() {
@@ -495,10 +533,11 @@ class GeneralTrackingActivity : AppCompatActivity() {
                 if (inTransitAssignment != null) {
                     session.saveActiveSapDocId(inTransitAssignment.docId)
                     session.setTripActive(true)
-                } else if (!currentActiveDocId.isNullOrEmpty()) {
+                } else if (!currentActiveDocId.isNullOrEmpty() || isTrackingStarted) {
                     // Stale session cleanup
                     session.saveActiveSapDocId(null)
                     session.setTripActive(false)
+                    stopTracking()
                 }
 
                 readyToStartShipments = allList.filter { it.tripStatus == "loaded" && it.driverConfirmed }
@@ -589,8 +628,10 @@ class GeneralTrackingActivity : AppCompatActivity() {
                 btnSelectActiveTrip.text = "View Active Shipment"
                 btnSelectActiveTrip.backgroundTintList = ContextCompat.getColorStateList(this, R.color.transit_green)
                 btnSelectActiveTrip.setOnClickListener {
-                    val intent = Intent(this@GeneralTrackingActivity, QueueDetailsActivity::class.java)
-                    intent.putExtra("shipment_doc_id", activeDocId)
+                    val intent = Intent(this@GeneralTrackingActivity, QueueDetailsActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("shipment_doc_id", activeDocId)
+                    }
                     startActivity(intent)
                 }
             }

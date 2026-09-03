@@ -525,7 +525,7 @@ class MainActivity : AppCompatActivity() {
             }
             // ── LOADED — verified, ready to start trip ──
             tripStatus == "loaded" -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "LOADED (START TRIP)"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = "Cargo Verified & Loaded"
@@ -538,7 +538,7 @@ class MainActivity : AppCompatActivity() {
             }
             // ── LOADING — cargo is being loaded at bay ──
             tripStatus == "loading" -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "LOADING CARGO"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = "Loading In Progress"
@@ -551,6 +551,7 @@ class MainActivity : AppCompatActivity() {
             }
             // ── FULLY LOADED — guard verification needed before trip ──
             tripStatus == "fully_loaded" -> {
+                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "GUARD VERIFICATION"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = "Guard Verification Required"
@@ -564,7 +565,7 @@ class MainActivity : AppCompatActivity() {
             // ── Guard verified, awaiting driver confirmation ──
             currentShipments.any { it.guardVerified } &&
                 !currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
-                binding.btnScanQR.setImageResource(R.drawable.map)
+                binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "GUARD VERIFIED"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
                 binding.tvCTAHeader?.text = "Guard Verified — Confirm Shipment"
@@ -893,8 +894,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnScanQR.setOnClickListener {
             val sessionMgr = SessionManager(this)
+
+            // STRICTLY check currentShipments for "in_transit"
             val hasActiveTrip = currentShipments.any { it.tripStatus == "in_transit" }
-                || (sessionMgr.getActiveSapDocId() != null && sessionMgr.isTripActive())
+
             val isReturning = currentShipments.any { it.tripStatus == "returning_to_base" }
             val allCompleted = currentShipments.isNotEmpty() && currentShipments.all { it.isCompleted }
 
@@ -903,9 +906,11 @@ class MainActivity : AppCompatActivity() {
                 val activeDocId = sessionMgr.getActiveSapDocId()
                     ?: currentShipments.firstOrNull { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }?.docId
 
-                val intent = Intent(this, GeneralTrackingActivity::class.java)
-                if (activeDocId != null) {
-                    intent.putExtra("shipment_doc_id", activeDocId)
+                val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    if (activeDocId != null) {
+                        putExtra("shipment_doc_id", activeDocId)
+                    }
                 }
                 startActivity(intent)
                 return@setOnClickListener
@@ -915,7 +920,10 @@ class MainActivity : AppCompatActivity() {
                 // ── Route 3: all shipments guardVerified && driverConfirmed → GeneralTrackingActivity ──
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
-                    startActivity(Intent(this, GeneralTrackingActivity::class.java))
+                    val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(intent)
                 }
                 // ── Route 4: hasShipment → AssignmentActivity ──
                 hasShipment -> {
@@ -1120,7 +1128,7 @@ class MainActivity : AppCompatActivity() {
         queueListener?.remove()
         queueListener = db.collection("queue")
             .whereEqualTo("driverId", driverId)
-            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
+            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit"))
             .addSnapshotListener { snapshots, error ->
                 if (error != null) return@addSnapshotListener
 
@@ -1158,9 +1166,10 @@ class MainActivity : AppCompatActivity() {
                         listenToAssignment(queueId, truckType, sessionDriverId)
                         updateQueueUI(null, status, truckType, null)
                         updateScanButtonState()
-                    } else if (status == "loading") {
+                    } else if (status == "loading" || status == "fully_loaded") {
                         // Check guardVerified from sap_assignments and ALWAYS call listenToAssignment
                         // to show the shipment assignment regardless of guard verified state.
+                        // Also covers "fully_loaded" so drivers in that state are restored after re-login.
                         db.collection("sap_assignments")
                             .whereEqualTo("driverId", queueId)
                             .addSnapshotListener { assignSnap, assignError ->
@@ -1182,11 +1191,21 @@ class MainActivity : AppCompatActivity() {
                         positionListener = db.collection("queue")
                             .whereEqualTo("truckType", truckType)
                             .whereIn("status", listOf("waiting", "called"))
-                            .whereEqualTo("registrationComplete", true)
-                            .whereLessThan("joinedAt", joinedAt)
                             .addSnapshotListener { posSnapshots, posError ->
                                 if (posError != null) return@addSnapshotListener
-                                val position = (posSnapshots?.size() ?: 0) + 1
+
+                                // Gayahin ang dashboard.js: Filter regComplete !== false at sort by entryTime/joinedAt
+                                val queueList = posSnapshots?.documents?.mapNotNull { d ->
+                                    val dTimestamp = d.getTimestamp("entryTime") ?: d.getTimestamp("joinedAt") ?: com.google.firebase.Timestamp(0, 0)
+                                    val regComplete = d.getBoolean("registrationComplete")
+
+                                    if (regComplete == false) null else Pair(d.id, dTimestamp)
+                                }?.sortedBy { it.second } ?: emptyList()
+
+                                // Hanapin ang pwesto ng current driver sa sorted list
+                                val index = queueList.indexOfFirst { it.first == entry.id }
+                                val position = if (index >= 0) index + 1 else 1
+
                                 updateQueueUI(position, status, truckType, null)
                                 updateScanButtonState()
                             }
@@ -1356,6 +1375,38 @@ class MainActivity : AppCompatActivity() {
             !(assignment.tripStatus == "completed" && returnStatus == "completed")
         }
         currentShipments.addAll(activeShipments)
+
+        // ── Hanapin ang active shipment at i-restore ang SessionManager state ──
+        val inTransitShipment = activeShipments.find { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }
+        val loadedShipment = if (inTransitShipment == null)
+            activeShipments.find { it.tripStatus == "loaded" || it.tripStatus == "fully_loaded" || it.tripStatus == "loading" }
+        else null
+        val session = SessionManager(this)
+
+        when {
+            inTransitShipment != null -> {
+                // Driver mid-trip: restore active shipment doc ID and trip active state
+                session.saveActiveSapDocId(inTransitShipment.docId)
+                session.saveCurrentSapDocId(inTransitShipment.docId)
+                session.setTripActive(true)
+                // STRICT BUTTON-ONLY: do not auto-force trackingActive=true here.
+                // Tracking should only start when the user taps "Start Tracking".
+            }
+            loadedShipment != null -> {
+                // Driver cargo loaded but not started trip yet:
+                session.saveActiveSapDocId(loadedShipment.docId)
+                session.saveCurrentSapDocId(loadedShipment.docId)
+                session.setTripActive(false)
+                // Don't setTrackingActive(true) here — driver hasn't pressed Start Tracking yet
+            }
+            else -> {
+                // Siguraduhing malinis ang state kung walang active trip
+                session.saveActiveSapDocId(null)
+                session.clearCurrentSapDocId()
+                session.setTripActive(false)
+                session.setTrackingActive(false)
+            }
+        }
 
         // ── Auto-sync Queue Status ──────────────────────────────────────────
         // Ensure this driver's queue entry in Firestore is marked as assigned/loading
