@@ -152,53 +152,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
                         updateGpsSignal(it.accuracy)
                     }
 
-                    if (isTrackingStarted) {
-                        val session = SessionManager(this@GeneralTrackingActivity)
-
-                        // Guard Clause: Halt if session was already closed by BottomSheet or other process
-                        if (!session.isTrackingActive()) {
-                            Log.w(TAG, "[GPS] Ghost tick detected! Session is inactive. Stopping tracker.")
-                            stopTracking()
-                            return@let
-                        }
-
-                        val sapDocId = session.getActiveSapDocId()
-                        val currentUid = FirebaseAuth.getInstance().currentUser?.uid ?: session.getDriverId()
-
-                        if (!currentUid.isNullOrBlank()) {
-                            val driverName = session.getDriverName() ?: "Driver"
-
-                            // 1. Socket.IO: emit driver_moving (ito ang iniintay ng server.js para mag-emit ng update_admin_map sa overview map!)
-                            SocketManager.emitDriverMoving(it.latitude, it.longitude, sapDocId, status = "online")
-                            Log.d(TAG, "[SOCKET] Emitted driver_moving: lat=${it.latitude}, lng=${it.longitude}, sapDocId=$sapDocId")
-
-                            // 2. Firestore: dual-write sa driver_locations para sa web overview map na naka-Firestore listener
-                            val locData = hashMapOf(
-                                "driverId" to currentUid,
-                                "name" to driverName,
-                                "lat" to it.latitude,
-                                "lng" to it.longitude,
-                                "status" to "online",
-                                "sapDocId" to sapDocId,
-                                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                            )
-                            db.collection("driver_locations")
-                                .document(currentUid)
-                                .set(locData, com.google.firebase.firestore.SetOptions.merge())
-
-                            if (!sapDocId.isNullOrBlank()) {
-                                db.collection("sap_assignments")
-                                    .document(sapDocId)
-                                    .update(
-                                        mapOf(
-                                            "lastLocation.lat" to it.latitude,
-                                            "lastLocation.lng" to it.longitude,
-                                            "lastLocation.at" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                                        )
-                                    )
-                            }
-                        }
-                    }
+                    pushLocationUpdate(it.latitude, it.longitude)
                 }
             }
         }
@@ -212,6 +166,89 @@ class GeneralTrackingActivity : AppCompatActivity() {
         // Check location permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
+        }
+    }
+
+    // Iniisa ang emit (Socket.IO) + dual-write (Firestore) logic para magamit
+    // parehas ng periodic locationCallback AT ng "push agad" sa startTracking().
+    private fun pushLocationUpdate(lat: Double, lng: Double) {
+        if (!isTrackingStarted) return
+
+        val session = SessionManager(this)
+
+        // Guard Clause: Halt if session was already closed by BottomSheet or other process
+        if (!session.isTrackingActive()) {
+            Log.w(TAG, "[GPS] Ghost tick detected! Session is inactive. Stopping tracker.")
+            stopTracking()
+            return
+        }
+
+        val sapDocId = session.getActiveSapDocId()
+        val currentUid = FirebaseAuth.getInstance().currentUser?.uid ?: session.getDriverId()
+
+        if (currentUid.isNullOrBlank()) return
+        val driverName = session.getDriverName() ?: "Driver"
+
+        // 1. Socket.IO: emit driver_moving (ito ang iniintay ng server.js para mag-emit ng update_admin_map sa overview map!)
+        SocketManager.emitDriverMoving(lat, lng, sapDocId, status = "online")
+        Log.d(TAG, "[SOCKET] Emitted driver_moving: lat=$lat, lng=$lng, sapDocId=$sapDocId")
+
+        // 2. Firestore: dual-write sa driver_locations para sa web overview map na naka-Firestore listener
+        val locData = hashMapOf(
+            "driverId" to currentUid,
+            "name" to driverName,
+            "lat" to lat,
+            "lng" to lng,
+            "status" to "online",
+            "sapDocId" to sapDocId,
+            "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+        )
+        db.collection("driver_locations")
+            .document(currentUid)
+            .set(locData, com.google.firebase.firestore.SetOptions.merge())
+
+        if (!sapDocId.isNullOrBlank()) {
+            db.collection("sap_assignments")
+                .document(sapDocId)
+                .update(
+                    mapOf(
+                        "lastLocation.lat" to lat,
+                        "lastLocation.lng" to lng,
+                        "lastLocation.at" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                    )
+                )
+        }
+    }
+
+    // Kunin agad ang pinaka-fresh na fix (hindi lang basta cached lastLocation, kasi
+    // pwedeng null/stale yun kung matagal nang hindi na-touch ang GPS ng OS) at i-push
+    // kaagad sa socket + Firestore. Ito yung "instant on click" na location bago pa man
+    // dumating yung unang periodic tick ng locationCallback — dahil dun sa dating code,
+    // kailangan pa munang gumalaw ng driver bago mag-fire ang unang onLocationResult,
+    // kaya blangko muna sa overview map hanggang sa gumalaw siya.
+    @Suppress("MissingPermission")
+    private fun pushImmediateLocation() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) return
+
+        val cts = com.google.android.gms.tasks.CancellationTokenSource()
+        fusedLocationClient.getCurrentLocation(
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+            cts.token
+        ).addOnSuccessListener { location ->
+            if (location == null) {
+                Log.w(TAG, "[GPS] getCurrentLocation returned null, waiting for first periodic tick instead")
+                return@addOnSuccessListener
+            }
+            Log.d(TAG, "[GPS] Immediate fix on Start Tracking: ${location.latitude}, ${location.longitude}")
+            runOnUiThread {
+                tvCurrentLocation.text = "Location: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}"
+                tvCurrentLocation.setTextColor(ContextCompat.getColor(this, R.color.sysu_red))
+                updateGpsSignal(location.accuracy)
+            }
+            pushLocationUpdate(location.latitude, location.longitude)
+        }.addOnFailureListener { e ->
+            Log.w(TAG, "[GPS] Immediate fix failed: ${e.message}, waiting for first periodic tick instead")
         }
     }
 
@@ -247,6 +284,11 @@ class GeneralTrackingActivity : AppCompatActivity() {
             Log.d(TAG, "[SOCKET] Reconnecting socket before starting location updates...")
 
             startLocationUpdates()
+
+            // Huwag hintayin ang unang periodic tick (na kailangan pa munang gumalaw
+            // ang driver) — kumuha agad ng fresh fix at i-push kaagad papuntang
+            // overview map sa mismong sandaling na-click ang "Start Tracking".
+            pushImmediateLocation()
 
             val serviceIntent = Intent(this, com.sysu.go.services.LocationServices::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
