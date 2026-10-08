@@ -4,10 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 class EnvironmentIsolationTest {
  @Test fun compiledVariantTargetsExpectedServices() {
-  val api=if(BuildConfig.DEBUG) "http://10.0.2.2:3000" else "https://sysu-go-production.up.railway.app"
-  val frontend=if(BuildConfig.DEBUG) "http://10.0.2.2:5173" else "https://sysu-web-5a25d.web.app"
+  val emulator=BuildConfig.BUILD_TYPE=="emulator"
+  val api=if(emulator) "http://10.0.2.2:3000" else "https://sysu-go-production.up.railway.app"
+  val frontend=if(emulator) "http://10.0.2.2:5173" else "https://sysu-web-5a25d.web.app"
   assertEquals(api,BuildConfig.API_BASE_URL);assertEquals(api,BuildConfig.SOCKET_URL);assertEquals(frontend,BuildConfig.FRONTEND_URL)
-  assertEquals(if(BuildConfig.DEBUG) "com.sysu.go.debug" else "com.sysu.go",BuildConfig.APPLICATION_ID)
+  assertEquals(if(emulator) "com.sysu.go.debug" else "com.sysu.go",BuildConfig.APPLICATION_ID)
+ }
+
+ @Test fun compiledVariantUsesExplicitEmulatorSwitch() {
+  val setting=BuildConfig::class.java.getField("USE_FIREBASE_EMULATORS").getBoolean(null)
+  assertEquals(BuildConfig.BUILD_TYPE=="emulator",setting)
  }
 
  @Test fun policyAcceptsOnlyExactDemoDebugConfiguration() {EnvironmentPolicy.validate(true,"demo-sysu-security","http://10.0.2.2:3000","http://10.0.2.2:3000","http://10.0.2.2:5173")}
