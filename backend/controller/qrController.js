@@ -81,7 +81,19 @@ const scanQR = async (req, res) => {
     const io = req.app.get("io");
     if (io) { try { io.to("driver:" + req.user.uid).emit("queue_admitted", { queueId: queue.id }); } catch (_) {} }
     return res.status(200).json({ success: true, message: "Successfully joined the queue", queueId: queue.id, queuePosition: null });
-  } catch (error) { return errorResponse(res, error); }
+  } catch (error) {
+    // ABORTED guarantees no commit. Resolve the winning state without new writes.
+    if (error.code === 10) {
+      try {
+        const db = getDb();
+        const token = await db.collection("qr_tokens").doc(body.token).get();
+        if (token.exists && expires(token.data())) return errorResponse(res, fail(410, "QR token expired or already used"));
+        const active = await db.collection("queue").where("driverId", "==", req.user.uid).where("status", "in", ACTIVE).limit(1).get();
+        return errorResponse(res, fail(409, active.empty ? "Queue admission conflicted. Refresh before retrying" : "Driver already has an active queue entry"));
+      } catch (_) { return errorResponse(res, fail(500, "QR service unavailable")); }
+    }
+    return errorResponse(res, error);
+  }
 };
 
 const getQueue = async (req, res) => {
