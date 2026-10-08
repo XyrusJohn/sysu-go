@@ -36,3 +36,7 @@ No test may default to production Firebase/SAP/API/socket. Until G-04 isolation 
 ## Credential containment gate (G-24)
 
 Private-key export was tracked and exposed. Local index removal and Docker context restrictions are complete; IAM key deletion/rotation and exposure/history review require the deployment owner. Never print parser exceptions or credential source; inspect text markers and report file paths/booleans only. Do not force-push rewritten history without repository-owner coordination. Key invalidation and replacement deployment are required before release; history cleanup alone is insufficient.
+
+## Executed QR checkpoint (2026-10-08)
+
+G-08/G-09/G-10: 42 backend unit/HTTP/packaging, 18 real Firestore QR + 4 trip, and 19 shipped Kotlin QR transport + 2 basic Android cases pass (85 separate-run cases). Full debug/release build and lint pass; QrHttpClient scoped line/branch coverage 100%/92.73%, QR controller real integration 100%/91.36%. No device/staged acceptance claim. Next local critical targets: authoritative rules and owned Android writes (G-07/G-16), dispatch ownership/state (G-11), socket authentication/recipient privacy (G-13), SAP/diagnostic exposure (G-14), safe isolated variants (G-04). Real Auth plus combined QR HTTP, index deployment, timeout-refresh UI and cross-app end-to-end remain required. G-24 still requires IAM key invalidation and deployment replacement evidence before public release.
