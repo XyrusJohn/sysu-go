@@ -1,3 +1,5 @@
+> Contract correction, 2026-10-09: the duplicate mobile SAP proxy is retired; authorized staff receive 410 with no upstream data. Use sysu-app's guarded SAP service; Android has no shipped caller of the mobile proxy. Public Firestore diagnostics are disabled. Socket.IO requires verified Firebase identity/active profile and private tracking recipients. Historical endpoint/global-broadcast descriptions below do not supersede ../../../docs/FIX_TRACKER.md.
+
 > Release correction (2026-10-08): POST /api/dispatch/status is retired in local source. Authenticated calls return 410; anonymous calls return 401. It no longer writes assignments/queues or emits dispatch_status_update. Earlier descriptions below are historical and superseded. No shipped Android HTTP caller was found; external clients need migration. Full owned progress/POD acceptance remains G-16. See [current release tracker](../../../docs/FIX_TRACKER.md) and [executed evidence](../../../docs/RELEASE_FIXES_TDD.md). This change is not yet deployed.
 
 # SYSU Mobile App Integration Guide

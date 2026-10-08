@@ -35,3 +35,12 @@ Artifact check completed: generated debug/release Firebase projects match expect
 The mobile rule mirror must equal sysu-app/frontend/firestore.rules. From sysu-go/backend, node scripts/check-shared-rules.cjs requires that adjacent checkout and fails on drift; it never writes or deploys rules. Real client tests live at tests/integration/clientRules.spec.mjs and require demo-sysu-security with Firestore 127.0.0.1:8085. Optional RULES_TARGET=web selects the adjacent canonical file. All data is synthetic; the rules suite clears only its guarded disposable demo emulator.
 
 New registration creates a pending/inactive users profile. Synthetic approved-driver fixtures require explicit role=driver/status=active; missing-status profiles are denied. No automatic production migration or approval is performed. Strict rules still deny unimplemented legacy location/POD/profile contracts; do not deploy this batch as a complete mobile workflow release.
+
+
+## Current configuration correction — 2026-10-09
+
+The rule mirror now equals the reviewed canonical web file; the earlier permissive-rule wording above describes history. Remaining owned legacy location/POD/profile contracts are still incomplete, so do not deploy these strict rules alone. Current verification and statuses live in FIX_TRACKER.md.
+
+Socket.IO now requires a current Firebase bearer in handshake auth and an explicit active canonical profile. Tracking rooms are staff-only; role/token validity is rechecked on driver events and at the nominal 30-second idle interval. Web secondary reconnects use the current account; Android's central sign-out disconnects sockets. Actual Android/staging refresh and bounded scheduling acceptance remain pending. The mobile raw SAP endpoint is retired; the guarded sysu-app service owns upstream reads. Diagnostic endpoint is disabled.
+
+Existing drivers use production data and older installed artifacts; local debug APK connects only to demo emulators, while current production-configured release APK is unsigned. The shared beta checklist is ../../sysu-app/docs/BETA_CHECKLIST.md. No local automated command here is permission to modify production data or deploy shared rules/config.

@@ -58,3 +58,12 @@ G-11 legacy dispatch retirement is locally verified; actual Auth/deployed retire
 G-09 requires combined HTTP/Auth, Android timeout-refresh and staged contention/soak. Known transaction closure has controlled read-only outcome recovery with no mutation retry; three local targeted concurrency rounds are not production stability/load acceptance. Validate canonical state under outages/ambiguous outcomes and ensure one queue with truthful client refresh.
 
 Owner-supplied staging/device/signing, load budgets and IAM key invalidation remain required release gates. Local build/test metrics cannot replace these.
+
+
+## Controlled real-driver beta priority — 2026-10-09
+
+User selected real drivers/real data and confirmed the existing production database and deployed/installed versions. This changes priority to the [shared minimum beta checklist](../../sysu-app/docs/BETA_CHECKLIST.md), not an automatic deployment authorization or a public-release clearance. The current automated G-13/G-14/G-15 batch is verified; canonical counts/status live in FIX_TRACKER.md and executed RED/GREEN lives in RELEASE_FIXES_TDD.md.
+
+Next locally: complete bounded owned legacy profile/requirements, location and POD/Storage contracts and truthful Android error behavior (G-16/G-19); preserve repeated OBD line items and canonical driver UID. Then inventory installed application ID/version/signer, prepare the correct signed production-configured pilot artifact, rehearse the chosen flow and coordinate shared rule/backend/web/client compatibility. No device is attached; no physical acceptance exists. Debug remains demo-only and release APK remains unsigned. IAM key invalidation/replacement (G-24) is required for the real-data pilot. Metrics are gathered during the controlled pilot after pre-beta security/workflow gates; full public-release load/soak/accessibility/CI requirements remain separate.
+
+G-14 intentionally retires the duplicate mobile SAP proxy; do not add timeout/cache tests to a source that no longer makes upstream requests. Test anonymous 401, unrelated roles 403, staff 410, zero fetch/no raw data and disabled diagnostics 404. Canonical source timeout/filter/bounds/coalescing acceptance belongs to sysu-app's existing SAP service. External/deployed compatibility remains required. G-15 local routing is DONE; real Auth/deployment and full lifecycle transitions remain G-06/G-16/G-23.

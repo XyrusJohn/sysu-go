@@ -1,3 +1,5 @@
+> Contract correction, 2026-10-09: the duplicate mobile SAP proxy is retired; authorized staff receive 410 with no upstream data. Use sysu-app's guarded SAP service; Android has no shipped caller of the mobile proxy. Public Firestore diagnostics are disabled. Socket.IO requires verified Firebase identity/active profile and private tracking recipients. Historical endpoint/global-broadcast descriptions below do not supersede ../../../docs/FIX_TRACKER.md.
+
 # SYSU Frontend Changes — Integration Notes
 > **For Mobile App / TV App / Backend Team**
 > Last Updated: 2026-05-25

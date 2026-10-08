@@ -1,5 +1,7 @@
 # SYSU Backend API
 
+> Current contract correction (2026-10-09): this README contains historical MySQL/JWT endpoint descriptions. Current release authority is ../docs/FIX_TRACKER.md and ../docs/RELEASE_FIXES_TDD.md. Shipped server uses Firebase identity/active profiles; Socket.IO handshake authentication is mandatory, tracking broadcasts are scoped to fleet_manager/admin/super_admin, and driver mutations are self-scoped. GET /api/sap/shipments on this mobile backend is retired (staff 410; unrelated roles 403; anonymous 401); use the guarded sysu-app SAP service. /api/firestore-test is disabled. Do not deploy from the historical examples below.
+
 A Node.js/Express backend service powering the SYSU (Stanley University Transportation) driver management system. Provides REST API endpoints for driver authentication and real-time location tracking via Socket.IO.
 
 ---
