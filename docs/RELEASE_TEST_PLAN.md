@@ -40,3 +40,10 @@ Private-key export was tracked and exposed. Local index removal and Docker conte
 ## Executed QR checkpoint (2026-10-08)
 
 G-08/G-09/G-10: 42 backend unit/HTTP/packaging, 18 real Firestore QR + 4 trip, and 19 shipped Kotlin QR transport + 2 basic Android cases pass (85 separate-run cases). Full debug/release build and lint pass; QrHttpClient scoped line/branch coverage 100%/92.73%, QR controller real integration 100%/91.36%. No device/staged acceptance claim. Next local critical targets: authoritative rules and owned Android writes (G-07/G-16), dispatch ownership/state (G-11), socket authentication/recipient privacy (G-13), SAP/diagnostic exposure (G-14), safe isolated variants (G-04). Real Auth plus combined QR HTTP, index deployment, timeout-refresh UI and cross-app end-to-end remain required. G-24 still requires IAM key invalidation and deployment replacement evidence before public release.
+
+
+## G-04 next acceptance and G-07/G-16 plan
+
+Local isolation guards, 14 unit regression cases, 7 Kotlin configuration cases, actual Auth/Firestore SDK and both Android builds/lint are implemented and passing. See LOCAL_EMULATOR_SETUP.md for required deployment variables. Remaining: inspect merged debug/release resources/config on exact artifacts, verify pre-activity startup and unreachable-emulator behavior on device, provide reviewed staging variant and clean CI. Count repeated variant runs separately from unique cases.
+
+Next G-07/G-16: reproduce self-role escalation, public user/assignment reads and cross-driver queue/profile/assignment writes against the actual mobile rules in a demo emulator. Inventory Android user creation and owned driver/profile/location/assignment/OBD/POD/dropdown queries against web rules before changing rules. Use one reviewed canonical rule source and deploy workflow; preserve positive owned-driver operations while denying arbitrary role/status/assignment changes. Test multiple dispatches with distinct OBD items and canonical Firebase UID distinct from queue IDs. No permissive rule deployment; deployed shared project configuration requires separate read-only verification/owner evidence.
