@@ -1,67 +1,189 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // User Profiles
+    function active() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('status', '') == 'active'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['driver', 'fleet_manager', 'qr_generator', 'admin', 'super_admin'];
+    }
+    function staff() {
+      return active() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['fleet_manager', 'admin', 'super_admin'];
+    }
+    function adminUser() {
+      return active() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin'];
+    }
+    function ownsDriver() {
+      return active() && resource.data.driverId == request.auth.uid;
+    }
+    function basicProfile(data) {
+      return data.get('name', '') is string && data.get('name', '').size() <= 100
+        && data.get('fn', '') is string && data.get('fn', '').size() <= 50
+        && data.get('mi', '') is string && data.get('mi', '').size() <= 8
+        && data.get('ln', '') is string && data.get('ln', '').size() <= 50
+        && data.get('phone', '') is string && data.get('phone', '').size() <= 30;
+    }
+
+    // ─── User Profiles ───────────────────────────────────────────────────────
+    // Read: authenticated users (for admin user management UI).
+    // Write: own document only. Role changes MUST go through backend API
+    //        (PATCH /api/users/update-role) — not direct Firestore write.
     match /users/{userId} {
-      allow get: if true;
-      allow list: if request.auth != null;
-      allow create: if request.auth != null && request.auth.uid == userId;
-      // Any authenticated user can update their own profile (including role for Super Admin)
-      // Non-role changes for all users, role changes should go through role_request workflow
-      allow update: if request.auth != null;
+      allow get: if request.auth != null && (request.auth.uid == userId || staff());
+      allow list: if staff();
+      allow create: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'fn', 'mi', 'ln', 'email', 'phone', 'position', 'role', 'status', 'createdAt'])
+        && request.resource.data.role == 'pending'
+        && request.resource.data.status == 'inactive'
+        && request.resource.data.get('uid', userId) == userId
+        && request.resource.data.get('email', '') is string && request.resource.data.get('email', '').size() <= 254
+        && basicProfile(request.resource.data);
+      allow update: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'fn', 'mi', 'ln', 'displayName', 'photoURL', 'phone'])
+        && basicProfile(request.resource.data)
+        && request.resource.data.get('displayName', '') is string
+        && request.resource.data.get('displayName', '').size() <= 100
+        && (request.resource.data.get('photoURL', null) == null
+          || (request.resource.data.photoURL is string && request.resource.data.photoURL.size() <= 2048))
+        && request.resource.data.get('phone', '') is string
+        && request.resource.data.get('phone', '').size() <= 30;
       allow delete: if false;
     }
 
-    // Role change requests
-    // TODO: restrict to admin/super_admin only via custom claim (not set up yet)
-    // For now, allow all authenticated users to read/write
+    // ─── Role Requests ───────────────────────────────────────────────────────
     match /role_requests/{requestId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if adminUser() || (active() && resource.data.requesterId == request.auth.uid);
+      allow write: if false;
     }
 
-    // Queue - Authenticated read only
+    // ─── Queue ───────────────────────────────────────────────────────────────
+    // Read: public (Command Center / dashboard need live read).
+    // Write: limited to driver's own updates & non-authoritative fields.
+    //
+    // The authoritative FIFO ordering and dispatch assignment goes through
+    // the backend (POST /api/sap/assign). Drivers may update their own active
+    // progress (tripStatus, isFull, registrationComplete) on their own queue doc.
     match /queue/{queueId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if staff() || ownsDriver();
+
+      // Create: allowed for any authenticated user (QR scan via backend Admin SDK or authenticated client).
+      allow create: if false;
+
+      // Update: document owner (by driverId or queueId) or admin
+      allow update: if ownsDriver()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registrationComplete', 'isFull', 'updatedAt'])
+        && request.resource.data.get('registrationComplete', false) is bool
+        && request.resource.data.get('isFull', false) is bool;
+
+      allow delete: if false;
     }
 
-    // Drivers - Authenticated read only
+    // ─── Drivers (Live Fleet Tracking) ───────────────────────────────────────
+    // Public read: dashboard map needs live fleet positions.
+    // Write: the driver themselves (document ID === auth UID).
     match /drivers/{driverId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if staff() || (active() && request.auth.uid == driverId);
+      allow create: if active() && request.auth.uid == driverId
+        && request.resource.data.keys().hasOnly(['driverId', 'driverName', 'plateNumber', 'truckType', 'truckCompany', 'helperName', 'isFull', 'updatedAt'])
+        && request.resource.data.driverId == request.auth.uid;
+      allow update: if active() && request.auth.uid == driverId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driverName', 'helperName', 'isFull', 'updatedAt'])
+        && request.resource.data.get('isFull', false) is bool;
+      allow delete: if false;
     }
 
-    // SAP Assignments
+    // ─── SAP Assignments ──────────────────────────────────────────────────────
+    // Public read: anyone can see confirmed assignments (dispatch table).
+    // Creation & Deletion: backend API only (POST /api/sap/assign, POST /api/sap/cancel) via Admin SDK.
+    // Update: Allowed for the assigned driver to update tripStatus, lineItems (POD), and timestamps.
     match /sap_assignments/{shipmentId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read: if staff() || ownsDriver();
+      allow create: if false; // Backend Admin SDK only
+      allow delete: if false; // Backend Admin SDK only
+      allow update: if ownsDriver()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tripStatus', 'updatedAt'])
+        && ((resource.data.tripStatus == 'assigned' && request.resource.data.tripStatus == 'loading')
+          || (resource.data.tripStatus == 'loading' && request.resource.data.tripStatus in ['loaded', 'fully_loaded'])
+          || (resource.data.tripStatus in ['loaded', 'fully_loaded'] && request.resource.data.tripStatus == 'in_transit')
+          || (resource.data.tripStatus == 'in_transit' && request.resource.data.tripStatus == 'completed'));
+
+      match /pod_images/{obdNumber} {
+        allow read: if staff() || (active()
+          && get(/databases/$(database)/documents/sap_assignments/$(shipmentId)).data.driverId == request.auth.uid);
+        // Mobile upload schema and Storage contract need separate positive tests.
+        allow write: if false;
+      }
     }
 
-    // Truck Companies — public read for driver registration dropdown
-    match /truck_company/{companyId} {
-      allow read: if true;
+    // Cancellation archives retain the previous driver's identity and POD.
+    match /sap_assignment_history/{historyId} {
+      allow read: if staff() || ownsDriver();
       allow write: if false;
+      match /pod_images/{obdNumber} {
+        allow read: if staff() || (active()
+          && get(/databases/$(database)/documents/sap_assignment_history/$(historyId)).data.driverId == request.auth.uid);
+        allow write: if false;
+      }
     }
 
-    // Security Guards — public read for guard verification dropdown
-    match /security_guard/{guardId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Incidents
+    // ─── Incidents ───────────────────────────────────────────────────────────
     match /incidents/{incidentId} {
-      allow read: if request.auth != null
-                  && (resource.data.reporterId == request.auth.uid
-                      || !resource.data.keys().hasAll(['reporterId']));
-      allow create: if request.auth != null && resource.data.reporterId == request.auth.uid;
+      allow read:    if request.auth != null
+                     && (resource.data.reporterId == request.auth.uid
+                         || !resource.data.keys().hasAll(['reporterId']));
+      allow create:  if request.auth != null && request.resource.data.reporterId == request.auth.uid;
       allow update, delete: if request.auth != null && resource.data.reporterId == request.auth.uid;
     }
 
-    // Default: Deny all
+    // ─── QR Tokens ───────────────────────────────────────────────────────────
+    // Public read: TV client displays QR status.
+    // Write: backend API only (generateToken/verifyToken/scanToken).
+    //        Firebase Admin SDK bypasses rules; direct client writes are blocked.
+    match /qr_tokens/{tokenId} {
+      allow read, write: if false;
+    }
+
+    // ─── Override Requests (FIFO bypass flow) ───────────────────────────────
+    // Dispatchers may create a pending request tied to their own uid. Only the
+    // backend can move the request to approved/denied/revoked/consumed — that
+    // decision is what issues a single-use override token.
+    match /overrideRequests/{requestId} {
+      allow read: if staff() || (active() && resource.data.requestedBy == request.auth.uid);
+      allow write: if false; // Creation/revocation use the authenticated backend transaction paths.
+    }
+
+    match /cancelRequests/{requestId} {
+      allow read: if staff();
+      allow write: if false;
+    }
+
+    // ─── Override Tokens ─────────────────────────────────────────────────────
+    // Single-use, short-lived tokens issued by the backend. Clients must not
+    // read or write them — the controller verifies and consumes them through
+    // Admin SDK.
+    match /overrideTokens/{tokenId} {
+      allow read, write: if false;
+    }
+
+    // ─── Security Guards ───────────────────────────────────────────────────────
+    // Read: authenticated users (live onSnapshot in admin Document tab).
+    // Write: backend API only (POST/PATCH /api/admin/guards) which uses
+    //        Firebase Admin SDK and bypasses rules.
+    match /security_guard/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── Truck Companies ───────────────────────────────────────────────────────
+    // Read: authenticated users (live onSnapshot in admin Document tab).
+    // Write: backend API only (POST/PATCH /api/admin/truck-companies).
+    match /truck_company/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── Default: Deny all ────────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

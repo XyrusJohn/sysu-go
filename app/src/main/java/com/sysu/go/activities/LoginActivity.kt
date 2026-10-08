@@ -280,9 +280,16 @@ class LoginActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                val doc = db.collection("users").document(uid).get().await()
+                val doc = db.collection("users").document(uid).get(com.google.firebase.firestore.Source.SERVER).await()
 
                 if (doc.exists()) {
+                    if (!com.sysu.go.firebase.AccountPolicy.approved(doc.data ?: emptyMap())) {
+                        FirebaseAuth.getInstance().signOut()
+                        SessionManager(this@LoginActivity).clearSession()
+                        setLoading(false)
+                        showError("An active, administrator-approved driver account is required.")
+                        return@launch
+                    }
                     val storedName = doc.getString("name") ?: ""
                     val storedPhone = doc.getString("phone") ?: ""
                     val storedFN = doc.getString("fn") ?: ""

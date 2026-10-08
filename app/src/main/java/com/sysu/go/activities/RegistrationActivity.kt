@@ -422,20 +422,27 @@ class RegistrationActivity : AppCompatActivity() {
                         val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                         val uid = result.user.uid
 
-                        val updates = mapOf(
-                            "fn" to firstName,
-                            "mi" to middleInitial,
-                            "ln" to lastName,
-                            "name" to displayName,
-                            "phone" to phone,
-                            "truckingCompany" to truckCompany,
-                            "role" to "driver",
-                            "status" to "active",
-                            "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                        )
-                        
-                        db.collection("users").document(uid).set(updates, com.google.firebase.firestore.SetOptions.merge()).await()
-                        db.collection("drivers").document(uid).set(updates, com.google.firebase.firestore.SetOptions.merge()).await()
+                        val ref = db.collection("users").document(uid)
+                        val existing = ref.get(com.google.firebase.firestore.Source.SERVER).await()
+                        val details = com.sysu.go.firebase.AccountPolicy.details(firstName, middleInitial, lastName, displayName, phone)
+                        if (existing.exists()) {
+                            // Preserve canonical approval/identity on profile completion.
+                            ref.update(details).await()
+                        } else {
+                            ref.set(com.sysu.go.firebase.AccountPolicy.pending(uid, email, firstName, middleInitial, lastName,
+                                displayName, phone, com.google.firebase.firestore.FieldValue.serverTimestamp())).await()
+                        }
+                        if (!existing.exists() || !com.sysu.go.firebase.AccountPolicy.approved(existing.data ?: emptyMap())) {
+                            FirebaseAuth.getInstance().signOut()
+                            SessionManager(this@RegistrationActivity).clearSession()
+                            setLoading(false)
+                            Toast.makeText(this@RegistrationActivity, "Profile saved. An administrator must approve your driver account.", Toast.LENGTH_LONG).show()
+                            val login = Intent(this@RegistrationActivity, LoginActivity::class.java)
+                            login.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                            startActivity(login)
+                            finish()
+                            return@launch
+                        }
 
                         SessionManager(this@RegistrationActivity).saveDriverSessionWithSplit(
                             uid = uid,

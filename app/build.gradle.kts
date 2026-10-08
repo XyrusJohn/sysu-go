@@ -125,3 +125,11 @@ tasks.register<JacocoReport>("environmentPolicyCoverage") {
     sourceDirectories.setFrom(files("src/main/java"))
     reports { xml.required.set(true); html.required.set(true) }
 }
+
+tasks.register<JacocoReport>("accountPolicyCoverage") {
+ dependsOn("testDebugUnitTest")
+ executionData(layout.buildDirectory.file("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec"))
+ classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")){include("com/sysu/go/firebase/AccountPolicy*.class")})
+ sourceDirectories.setFrom(files("src/main/java"))
+ reports {xml.required.set(true);html.required.set(true)}
+}

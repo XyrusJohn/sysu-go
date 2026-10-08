@@ -136,37 +136,9 @@ object FirebaseAuthManager {
 
             // Write users/{uid} Firestore document
             val db = FirebaseFirestore.getInstance()
-            val userDoc = mapOf(
-                "uid" to user.uid,
-                "email" to email,
-                "fn" to fn,
-                "mi" to mi,
-                "ln" to ln,
-                "name" to displayName,
-                "phone" to phone,
-                "role" to "driver",
-                "status" to "active",
-                "position" to "Driver",
-                "createdAt" to FieldValue.serverTimestamp()
-            )
+            val userDoc = AccountPolicy.pending(user.uid, email, fn, mi, ln, displayName, phone, FieldValue.serverTimestamp())
             db.collection("users").document(user.uid).set(userDoc).await()
-
-            // Write drivers/{uid} document with split name and phone
-            val driverDoc = mapOf(
-                "uid" to user.uid,
-                "fn" to fn,
-                "mi" to mi,
-                "ln" to ln,
-                "name" to displayName,
-                "email" to email,
-                "phone" to phone,
-                "plateNumber" to "",
-                "truckType" to "",
-                "truckingCompany" to "",
-                "helper" to "",
-                "status" to "offline"
-            )
-            db.collection("drivers").document(user.uid).set(driverDoc).await()
+            // Operational driver profiles are provisioned only after approval.
 
             AuthResult.Success(user)
         } catch (e: Exception) {
