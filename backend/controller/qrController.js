@@ -91,7 +91,7 @@ const getQueue = async (req, res) => {
     const queue = Object.fromEntries(TYPES.map(type => [type, []]));
     for (const doc of snapshot.docs.slice(0, 100)) {
       const data = doc.data();
-      if (queue[data.truckType]) queue[data.truckType].push({ id: doc.id, driverId: data.driverId, driverName: data.driverName, truckType: data.truckType, plateNumber: data.plateNumber, status: data.status, registrationComplete: data.registrationComplete === true });
+      if (TYPES.includes(data.truckType)) queue[data.truckType].push({ id: doc.id, driverId: data.driverId, driverName: data.driverName, truckType: data.truckType, plateNumber: data.plateNumber, status: data.status, registrationComplete: data.registrationComplete === true });
     }
     return res.status(200).json({ success: true, queue, truncated: snapshot.size > 100 });
   } catch (_) { return res.status(500).json({ success: false, message: "Queue unavailable" }); }

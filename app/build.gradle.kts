@@ -1,4 +1,7 @@
+import org.gradle.testing.jacoco.tasks.JacocoReport
+
 plugins {
+    id("jacoco")
     alias(libs.plugins.android.application)
     alias(libs.plugins.google.services)
     alias(libs.plugins.kotlin.android)
@@ -100,4 +103,16 @@ dependencies {
 
     // JSON
     implementation("com.google.code.gson:gson:2.10.1")
+}
+
+// Scoped evidence for the shipped QR transport; this is not whole-app coverage.
+jacoco { toolVersion = "0.8.15" }
+tasks.register<JacocoReport>("qrTransportCoverage") {
+    dependsOn("testDebugUnitTest")
+    executionData(layout.buildDirectory.file("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec"))
+    classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+        include("com/sysu/go/network/QrHttpClient*.class")
+    })
+    sourceDirectories.setFrom(files("src/main/java"))
+    reports { xml.required.set(true); html.required.set(true) }
 }

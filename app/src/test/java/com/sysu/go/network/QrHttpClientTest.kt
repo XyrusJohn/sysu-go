@@ -66,4 +66,55 @@ class QrHttpClientTest {
         var calls=0;val client=QrHttpClient("https://synthetic.invalid/api/qr",{null},{calls++;Connection(200,"{}")})
         assertEquals(400,(client.verifyToken("../token") as QrResult.Error).code);assertEquals(0,calls)
     }
+
+    @Test fun invalidScanTokenMakesNoRequest() {
+        val client=QrHttpClient("https://synthetic.invalid",{throw AssertionError("auth requested")},{throw AssertionError("network requested")})
+        assertEquals(400,(client.scanToken(request.copy(token="../bad")) as QrResult.Error).code)
+    }
+    @Test fun identityProviderFailureDeniesBeforeNetwork() {
+        val client=QrHttpClient("https://synthetic.invalid",{throw IllegalStateException("private")},{throw AssertionError("network requested")})
+        assertEquals(401,(client.scanToken(request) as QrResult.Error).code)
+    }
+    @Test fun oversizedRegistrationMakesNoRequest() {
+        val client=QrHttpClient("https://synthetic.invalid",{"token"},{throw AssertionError("network requested")})
+        assertEquals(400,(client.scanToken(request.copy(driverName="x".repeat(8193))) as QrResult.Error).code)
+    }
+    @Test fun unsafeRemoteCleartextMakesNoRequest() {
+        val client=QrHttpClient("http://synthetic.invalid",{null},{throw AssertionError("network requested")})
+        assertEquals(400,(client.verifyToken("SYS-TEST") as QrResult.Error).code)
+    }
+    @Test fun nullAndNegativeRepliesCannotReportSuccess() {
+        for(body in listOf("null","{\"success\":false}")) {
+            val c=Connection(200,body)
+            val client=QrHttpClient("https://synthetic.invalid",{"token"},{c})
+            assertEquals(502,(client.verifyToken("SYS-TEST") as QrResult.Error).code)
+            assertEquals(502,(client.scanToken(request) as QrResult.Error).code)
+        }
+    }
+    @Test fun authConflictAndUnknownServerErrorsStayControlled() {
+        for(code in listOf(401,409,500)) {
+            val result=QrHttpClient("https://synthetic.invalid",{"token"},{Connection(code,"private")}).scanToken(request) as QrResult.Error
+            assertEquals(code,result.code);assertFalse(result.message.contains("private"))
+        }
+    }
+    @Test fun unexpectedTransportFailureIsControlled() {
+        val client=QrHttpClient("https://synthetic.invalid",{null},{throw IllegalStateException("private")})
+        val result=client.verifyToken("SYS-TEST") as QrResult.Error
+        assertEquals(502,result.code);assertFalse(result.message.contains("private"))
+    }
+    @Test fun realLoopbackTransportUsesDefaultConnectionFactory() {
+        val listener=java.net.ServerSocket(0,1,java.net.InetAddress.getByName("127.0.0.1"))
+        val worker=Thread {
+            listener.accept().use { socket ->
+                val reader=socket.getInputStream().bufferedReader()
+                while(true){val line=reader.readLine() ?: break;if(line.isEmpty())break}
+                val body="{\"success\":true,\"token\":\"SYS-TEST\"}"
+                val reply="HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+body.toByteArray().size+"\r\nConnection: close\r\n\r\n"+body
+                socket.getOutputStream().write(reply.toByteArray());socket.getOutputStream().flush()
+            }
+        }
+        worker.isDaemon=true;worker.start()
+        try {assertTrue(QrHttpClient("http://127.0.0.1:"+listener.localPort,{null}).verifyToken("SYS-TEST") is QrResult.Success)}
+        finally {listener.close();worker.join(2000)}
+    }
 }
