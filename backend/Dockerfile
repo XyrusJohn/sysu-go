@@ -1,7 +1,7 @@
 # backend/Dockerfile
-# Node.js 20 LTS — industry standard for production Node deployments
+# Node.js 24: matches the verified backend runtime
 # Railway auto-detects this and uses it instead of nixpacks
-FROM node:20-slim
+FROM node:24-slim
 
 # Set working directory
 WORKDIR /app
@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (production + dev for build tools if needed)
-RUN npm ci
+# Install locked runtime dependencies only
+RUN npm ci --omit=dev
 
 # Copy application code
 COPY . .

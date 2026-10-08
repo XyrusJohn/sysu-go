@@ -63,3 +63,6 @@ __pycache__/
 **/*credentials*.json
 *.pem
 *.key
+
+# Legacy local credential export; never track
+backend/firebase-temp.env

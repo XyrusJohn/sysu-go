@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-slim
 
 # Set working directory to /app
 WORKDIR /app
@@ -7,7 +7,7 @@ WORKDIR /app
 COPY backend/package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci --omit=dev
 
 # Copy the actual backend code into /app
 COPY backend/ .
