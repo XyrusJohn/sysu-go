@@ -82,14 +82,17 @@ const scanQR = async (req, res) => {
     if (io) { try { io.to("driver:" + req.user.uid).emit("queue_admitted", { queueId: queue.id }); } catch (_) {} }
     return res.status(200).json({ success: true, message: "Successfully joined the queue", queueId: queue.id, queuePosition: null });
   } catch (error) {
-    // ABORTED guarantees no commit. Resolve the winning state without new writes.
-    if (error.code === 10) {
+    // Resolve authoritative state after contention; never retry admission writes.
+    // A closed transaction alone does not prove a winner or a safe retry.
+    const closed = error.code === 3 && error.details === "Transaction is invalid or closed.";
+    if (error.code === 10 || closed) {
       try {
         const db = getDb();
         const token = await db.collection("qr_tokens").doc(body.token).get();
         if (token.exists && expires(token.data())) return errorResponse(res, fail(410, "QR token expired or already used"));
         const active = await db.collection("queue").where("driverId", "==", req.user.uid).where("status", "in", ACTIVE).limit(1).get();
-        return errorResponse(res, fail(409, active.empty ? "Queue admission conflicted. Refresh before retrying" : "Driver already has an active queue entry"));
+        if (!active.empty) return errorResponse(res, fail(409, "Driver already has an active queue entry"));
+        return errorResponse(res, fail(closed ? 500 : 409, "Queue admission conflicted. Refresh before retrying"));
       } catch (_) { return errorResponse(res, fail(500, "QR service unavailable")); }
     }
     return errorResponse(res, error);
