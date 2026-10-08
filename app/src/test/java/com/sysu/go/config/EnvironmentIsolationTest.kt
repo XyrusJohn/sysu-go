@@ -3,7 +3,12 @@ import com.sysu.go.BuildConfig
 import org.junit.Assert.*
 import org.junit.Test
 class EnvironmentIsolationTest {
- @Test fun debugBuildTargetsEmulatorOnly() {assertEquals("http://10.0.2.2:3000",BuildConfig.API_BASE_URL);assertEquals("http://10.0.2.2:3000",BuildConfig.SOCKET_URL);assertEquals("http://10.0.2.2:5173",BuildConfig.FRONTEND_URL);assertEquals("com.sysu.go.debug",BuildConfig.APPLICATION_ID)}
+ @Test fun compiledVariantTargetsExpectedServices() {
+  val api=if(BuildConfig.DEBUG) "http://10.0.2.2:3000" else "https://sysu-go-production.up.railway.app"
+  val frontend=if(BuildConfig.DEBUG) "http://10.0.2.2:5173" else "https://sysu-web-5a25d.web.app"
+  assertEquals(api,BuildConfig.API_BASE_URL);assertEquals(api,BuildConfig.SOCKET_URL);assertEquals(frontend,BuildConfig.FRONTEND_URL)
+  assertEquals(if(BuildConfig.DEBUG) "com.sysu.go.debug" else "com.sysu.go",BuildConfig.APPLICATION_ID)
+ }
 
  @Test fun policyAcceptsOnlyExactDemoDebugConfiguration() {EnvironmentPolicy.validate(true,"demo-sysu-security","http://10.0.2.2:3000","http://10.0.2.2:3000","http://10.0.2.2:5173")}
  @Test fun policyRejectsProductionFirebaseInDebug() {assertThrows(IllegalArgumentException::class.java){EnvironmentPolicy.validate(true,"sysu-web-5a25d","http://10.0.2.2:3000","http://10.0.2.2:3000","http://10.0.2.2:5173")}}
