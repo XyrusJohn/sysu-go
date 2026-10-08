@@ -31,6 +31,12 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     private var listenersNotified = false
     @Volatile
     private var offlineEmitted = false
+    /** Guards against multiple simultaneous socket creation attempts.
+     *  getIdToken() is async — without this flag, rapid calls to connect()
+     *  each see mSocketGo == null (not yet assigned) and create duplicate sockets. */
+    @Volatile
+    private var isConnecting = false
+    private val sessionGate = SocketSessionGate()
 
     private val eventListeners = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<(data: Any?) -> Unit>>()
     private val registeredEvents = java.util.concurrent.ConcurrentHashMap<Socket, MutableSet<String>>()
@@ -77,9 +83,6 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
 
     private fun unregisterEventListenerOnSocket(event: String, listener: ((data: Any?) -> Unit)?, socket: Socket?) {
         socket ?: return
-        try {
-            socket.emit(event)
-        } catch (_: Exception) { }
         socket.off(event)
         registeredEvents[socket]?.remove(event)
     }
@@ -128,6 +131,11 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
             Log.i(TAG, "[CONNECT] >>> connect(): Already connected, skipping")
             return
         }
+        if (isConnecting) {
+            Log.i(TAG, "[CONNECT] >>> connect(): Already connecting (getIdToken in progress), skipping duplicate")
+            return
+        }
+        isConnecting = true
         connectTo(SOCKET_URL_GO) { socket -> mSocketGo = socket }
     }
 
@@ -140,26 +148,34 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         val user = FirebaseAuth.getInstance().currentUser
         if (user == null) {
             Log.w(TAG, ">>> connectTo($url): NO authenticated user — cannot connect")
+            isConnecting = false
             return
         }
+        val sessionToken = sessionGate.begin(user.uid)
+        val sessionUid = user.uid
         Log.i(TAG, ">>> connectTo($url): User=${user.uid}, requesting ID token...")
 
         user.getIdToken(true).addOnSuccessListener { result ->
+            if (!sessionGate.isCurrent(sessionToken, FirebaseAuth.getInstance().currentUser?.uid)) {
+                isConnecting = false
+                return@addOnSuccessListener
+            }
             val token = result.token
             Log.i(TAG, ">>> connectTo($url): Got token, connecting socket to $url...")
             try {
                 val opts = IO.Options().apply {
                     reconnection = true
-                    reconnectionAttempts = 10
+                    reconnectionAttempts = Int.MAX_VALUE  // Unlimited built-in retries (no permanent give-up)
                     reconnectionDelay = 2000
                     reconnectionDelayMax = 5000
                     auth = mapOf("token" to token)
                 }
                 val socket = IO.socket(url, opts)
-                Log.i(TAG, ">>> connectTo($url): Socket.IO created. opts.reconnection=true, attempts=10, delay=2000ms")
+                Log.i(TAG, ">>> connectTo($url): Socket.IO created. opts.reconnection=true, attempts=unlimited, delay=2000ms")
 
                 socket.on(Socket.EVENT_CONNECT) {
                     Log.i(TAG, ">>> EVENT_CONNECT! $url → socket.id=${socket.id()}")
+                    isConnecting = false  // Socket fully connected — allow future reconnects
                     registerAllListenersOnSocket(socket)
                     offlineEmitted = false
                     val isTracking = isTrackingActive()
@@ -174,6 +190,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
 
                 socket.on(Socket.EVENT_DISCONNECT) {
                     Log.w(TAG, ">>> EVENT_DISCONNECT! $url → socket.id=${socket.id()}")
+                    isConnecting = false  // Allow reconnect attempts after disconnect
                     stopHeartbeat()
                     if (!offlineEmitted) {
                         offlineEmitted = true
@@ -183,6 +200,21 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
 
                 socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
                     Log.e(TAG, ">>> EVENT_CONNECT_ERROR! $url → ${args.joinToString()}")
+                    isConnecting = false  // Allow retry on connection error
+                }
+
+                // Safety net: fired when Socket.IO server actively disconnects us (e.g. expired token).
+                // In that case, the built-in reconnect retries with the SAME stale token and keeps failing.
+                // We catch "reconnect_failed" OR "disconnect" reason="io server disconnect" to force a full
+                // fresh connect() cycle (which calls getIdToken(true) to get a new Firebase token).
+                socket.on("reconnect_failed") { _ ->
+                    Log.w(TAG, ">>> RECONNECT_FAILED on $url — all built-in retries exhausted. Scheduling manual reconnect in 10s.")
+                    mSocketGo = null
+                    isConnecting = false
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        Log.i(TAG, ">>> Manual reconnect triggered after reconnect_failed on $url")
+                        connect()
+                    }, 10_000L)
                 }
 
                 socket.on("update_admin_map") { args ->
@@ -192,16 +224,19 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
                 }
 
                 Log.i(TAG, ">>> Calling socket.connect() for $url")
-                socket.connect()
                 onSocket(socket)
+                socket.connect()
                 Log.i(TAG, ">>> socket.connect() initiated for $url")
             } catch (e: URISyntaxException) {
                 Log.e(TAG, ">>> connectTo($url): URISyntaxException: ${e.message}")
+                isConnecting = false
             } catch (e: Exception) {
                 Log.e(TAG, ">>> connectTo($url): Exception: ${e.message}")
+                isConnecting = false
             }
         }.addOnFailureListener { e ->
             Log.e(TAG, ">>> connectTo($url): getIdToken FAILED: ${e.message}")
+            isConnecting = false
         }
     }
 
@@ -378,17 +413,21 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         }
     }
 
-    fun emitGo(event: String, json: JSONObject) {
+    fun emit(event: String, data: Any) {
         if (mSocketGo?.connected() != true) {
-            Log.w(TAG, "emitGo($event): go-socket not connected, skipping emit")
+            Log.w(TAG, "emit($event): socket not connected, skipping emit")
             return
         }
         try {
-            mSocketGo?.emit(event, json)
-            Log.d(TAG, "Emitted $event: $json")
+            mSocketGo?.emit(event, data)
+            Log.d(TAG, "Emitted $event: $data")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to emit $event: ${e.message}")
         }
+    }
+
+    fun emitGo(event: String, json: JSONObject) {
+        emit(event, json)
     }
 
     fun emitStatusChange(uid: String, status: String): Boolean {
@@ -458,13 +497,13 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         // Stop heartbeat
         stopHeartbeat()
 
+        sessionGate.invalidate()
         mSocketGo?.let { socket ->
-            if (socket.connected()) {
-                socket.disconnect()
-                Log.d(TAG, "[SOCKET] Disconnected from socket")
-            }
+            socket.disconnect()
+            Log.d(TAG, "[SOCKET] Disconnected from socket")
         }
         mSocketGo = null
+        isConnecting = false
         offlineEmitted = false
         listenersNotified = false
         registeredEvents.clear()
@@ -475,11 +514,10 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     private fun forceDisconnectSockets() {
         Log.w(TAG, "[DISCONNECT] Forcing Socket.IO disconnect due to network loss.")
         mSocketGo?.let { socket ->
-            if (socket.connected()) {
-                socket.disconnect()
-                Log.d(TAG, "[DISCONNECT] Forced disconnect for socket: ${socket.id()}")
-            }
+            socket.disconnect()
+            Log.d(TAG, "[DISCONNECT] Forced disconnect for socket: ${socket.id()}")
         }
+        sessionGate.invalidate()
         mSocketGo = null
         offlineEmitted = false
         listenersNotified = false
