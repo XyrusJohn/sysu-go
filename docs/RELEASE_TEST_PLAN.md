@@ -47,3 +47,14 @@ G-08/G-09/G-10: 42 backend unit/HTTP/packaging, 18 real Firestore QR + 4 trip, a
 Local isolation guards, 14 unit regression cases, 7 Kotlin configuration cases, actual Auth/Firestore SDK and both Android builds/lint are implemented and passing. See LOCAL_EMULATOR_SETUP.md for required deployment variables. Remaining: inspect merged debug/release resources/config on exact artifacts, verify pre-activity startup and unreachable-emulator behavior on device, provide reviewed staging variant and clean CI. Count repeated variant runs separately from unique cases.
 
 Next G-07/G-16: reproduce self-role escalation, public user/assignment reads and cross-driver queue/profile/assignment writes against the actual mobile rules in a demo emulator. Inventory Android user creation and owned driver/profile/location/assignment/OBD/POD/dropdown queries against web rules before changing rules. Use one reviewed canonical rule source and deploy workflow; preserve positive owned-driver operations while denying arbitrary role/status/assignment changes. Test multiple dispatches with distinct OBD items and canonical Firebase UID distinct from queue IDs. No permissive rule deployment; deployed shared project configuration requires separate read-only verification/owner evidence.
+
+
+## G-07/G-16 implemented scope and remaining acceptance
+
+Executed evidence is in RELEASE_FIXES_TDD.md; current statuses are in FIX_TRACKER.md. Shared rule exploit/positive tests and pending-account policy now exist. Run backend/scripts/check-shared-rules.cjs with the adjacent canonical sysu-app checkout; require the same reviewed version and verification in CI before any deployment.
+
+Next local critical work: G-11 canonical dispatch owner/state and bounded atomic progress; G-13 actual authenticated Socket.IO handshake/revocation/private recipients; G-14 bounded staff SAP/diagnostics. G-16 must test legacy profile/requirements, owned location/POD paths and truthful errors before strict rules deployment. Preserve multiple OBD line items and canonical UID distinct from queue document ID. Do not widen rules simply to make old writes succeed.
+
+G-09 requires combined HTTP/Auth, Android timeout-refresh and staged contention/soak. Known transaction closure has controlled read-only outcome recovery with no mutation retry; three local targeted concurrency rounds are not production stability/load acceptance. Validate canonical state under outages/ambiguous outcomes and ensure one queue with truthful client refresh.
+
+Owner-supplied staging/device/signing, load budgets and IAM key invalidation remain required release gates. Local build/test metrics cannot replace these.

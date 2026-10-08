@@ -28,3 +28,10 @@ For the next client-rule test, deliberately exercise the mobile backend/firestor
 The demo-project approach and explicit SDK routing follow [Firebase emulator guidance](https://firebase.google.com/docs/emulator-suite/connect_auth). This document is an index of executed checks and configuration requirements, not permission to deploy or launch against production.
 
 Artifact check completed: generated debug/release Firebase projects match expected values; actual release network resource has no cleartext domain exceptions. EnvironmentPolicy coverage is 100% lines/branches. Device startup/routing, safe staging variant and clean artifact/CI remain acceptance work.
+
+
+## Shared rule and account checks
+
+The mobile rule mirror must equal sysu-app/frontend/firestore.rules. From sysu-go/backend, node scripts/check-shared-rules.cjs requires that adjacent checkout and fails on drift; it never writes or deploys rules. Real client tests live at tests/integration/clientRules.spec.mjs and require demo-sysu-security with Firestore 127.0.0.1:8085. Optional RULES_TARGET=web selects the adjacent canonical file. All data is synthetic; the rules suite clears only its guarded disposable demo emulator.
+
+New registration creates a pending/inactive users profile. Synthetic approved-driver fixtures require explicit role=driver/status=active; missing-status profiles are denied. No automatic production migration or approval is performed. Strict rules still deny unimplemented legacy location/POD/profile contracts; do not deploy this batch as a complete mobile workflow release.
