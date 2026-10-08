@@ -68,6 +68,7 @@ app.use("/api/users", require("./routes/userRoutes.js"));
 app.use("/api/dispatch", require("./routes/dispatchRoutes.js"));
 app.use("/api/trip", require("./routes/tripRoute.js"));
 app.use("/api/driver", require("./routes/driverStatusRoutes.js"));
+app.use("/api/pod", require("./routes/podRoutes.js"));
 
 // ─── Diagnostic endpoint — test Firestore connectivity directly ─────────────
 // Production diagnostic route intentionally disabled.
