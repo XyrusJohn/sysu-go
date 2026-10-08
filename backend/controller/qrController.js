@@ -1,325 +1,102 @@
 const { getDb } = require("../config/firebaseAdmin.js");
-const { FieldValue } = require("firebase-admin/firestore");
-
-const SANITIZE = (str, max = 50) => {
-  if (!str) return "";
-  return str
-    .replace(/[<>$&""|;'\\\/]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .substring(0, max);
+const { FieldValue, Timestamp } = require("firebase-admin/firestore");
+const crypto = require("node:crypto");
+const TYPES = ["AUV", "4W", "6W", "10W", "20F", "40F"];
+const ACTIVE = ["waiting", "called", "assigned", "loading", "loaded", "fully_loaded", "in_transit", "unloading", "returning_to_base"];
+const KEYS = new Set(["token", "driverId", "driverName", "driverFN", "driverMI", "driverLN", "driverPhone", "truckType", "truckCompany", "plateNumber", "helperName"]);
+const safeText = (value, max, optional = false) => typeof value === "string" && value.length <= max && !/[\x00-\x1f]/.test(value) && (optional || value.trim().length > 0);
+const safeToken = token => typeof token === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(token);
+const clean = value => (value || "").replace(/[<>]/g, "").trim();
+const fail = (status, message) => Object.assign(new Error(message), { status });
+const expires = data => {
+  const value = data.expiresAt;
+  const millis = value && typeof value.toMillis === "function" ? value.toMillis() : typeof value === "string" ? Date.parse(value) : NaN;
+  return data.used === true || data.isUsed === true || !Number.isFinite(millis) || millis <= Date.now();
+};
+const errorResponse = (res, error) => {
+  const status = [401, 403, 404, 409, 410].includes(error.status) ? error.status : 500;
+  return res.status(status).json({ success: false, message: status === 500 ? "QR service unavailable" : error.message });
 };
 
-const SANITIZE_MI = (str) => {
-  if (!str) return "";
-  return str.charAt(0).toUpperCase().replace(/[^A-Z]/g, "");
-};
-
-const SANITIZE_PLATE_PREFIX = (str) => {
-  if (!str) return "";
-  return str.toUpperCase().replace(/[^A-Z0-9-]/g, "").replace(/-+/g, "-").trim("-").substring(0, 4);
-};
-
-const SANITIZE_PLATE_SUFFIX = (str) => {
-  if (!str) return "";
-  return str.replace(/\D/g, "").substring(0, 4);
-};
-
-let db;
-const getDatabase = () => {
-  if (!db) db = getDb();
-  return db;
-};
-
-// Generate a short alphanumeric token (e.g., SYS-A1B2C3)
-const generateToken = () => {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let token = "SYS-";
-  for (let i = 0; i < 6; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
-};
-
-// POST /api/qr/generate — TV screen calls this to get a fresh QR token
 const generateQR = async (req, res) => {
+  if (!req.user?.uid) return res.status(401).json({ success: false, message: "Unauthorized" });
   try {
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    const tokenRef = getDatabase().collection("qr_tokens").doc(token);
-    await tokenRef.set({
-      token,
-      expiresAt: expiresAt.toISOString(),
-      isUsed: false,
-      createdAt: new Date().toISOString(),
+    const origin = process.env.FRONTEND_URL;
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw fail(409, "QR frontend is not configured safely");
+    const db = getDb(), token = "SYS-" + crypto.randomBytes(16).toString("hex").toUpperCase();
+    const expiresAt = Timestamp.fromMillis(Date.now() + 5 * 60 * 1000);
+    await db.runTransaction(async tx => {
+      const actor = await tx.get(db.collection("users").doc(req.user.uid));
+      if (!actor.exists || actor.data().status !== "active" || !["qr_generator", "admin", "super_admin"].includes(actor.data().role)) throw fail(403, "Account not authorized");
+      tx.create(db.collection("qr_tokens").doc(token), { token, used: false, isUsed: false, expiresAt, createdAt: FieldValue.serverTimestamp() });
     });
-
-    return res.status(200).json({
-      success: true,
-      token,
-      expiresAt: expiresAt.toISOString(),
-      scanUrl: `${process.env.FRONTEND_URL}/scan?token=${token}`,
-    });
-  } catch (error) {
-    console.error("QR Generate Error:", error);
-    return res.status(500).json({ success: false, message: error.message });
-  }
+    return res.status(200).json({ success: true, token, expiresAt: expiresAt.toDate().toISOString(), scanUrl: url.origin + "/scan?token=" + encodeURIComponent(token) });
+  } catch (error) { return errorResponse(res, error); }
 };
 
-// GET /api/qr/verify — App checks if token is valid before scanning.
-// Does NOT mark token as used; that is the sole responsibility of scanQR.
 const verifyQR = async (req, res) => {
+  const token = req.query?.token;
+  if (!safeToken(token)) return res.status(400).json({ success: false, message: "Invalid QR token" });
   try {
-    const { token } = req.query;
-    if (!token) {
-      return res.status(400).json({ success: false, message: "Token is required." });
-    }
-
-    const tokenDoc = await getDatabase().collection("qr_tokens").doc(token).get();
-
-    if (!tokenDoc.exists) {
-      return res.status(404).json({ success: false, message: "Invalid or expired token." });
-    }
-
-    if (tokenDoc.data().isUsed) {
-      return res.status(410).json({ success: false, message: "Token already used." });
-    }
-
-    const expiresAt = new Date(tokenDoc.data().expiresAt);
-    if (new Date() > expiresAt) {
-      return res.status(410).json({ success: false, message: "Token has expired." });
-    }
-
+    const snapshot = await getDb().collection("qr_tokens").doc(token).get();
+    if (!snapshot.exists) throw fail(404, "Invalid QR token");
+    if (expires(snapshot.data())) throw fail(410, "QR token expired or already used");
     return res.status(200).json({ success: true, message: "Token verified", token });
-  } catch (error) {
-    console.error("QR Verify Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
+  } catch (error) { return errorResponse(res, error); }
 };
 
-// POST /api/qr/scan — App submits driver info after scanning.
-// Marks token as used and creates a queue entry.
-// Auth is handled by the route-level verifyToken middleware in auth.js.
-// NOTE: The Firebase ID token is verified at the route layer (qrRoutes.js).
-// req.user.uid is available for audit logging.
 const scanQR = async (req, res) => {
-  try {
-    const { token, driverName, helperName, truckCompany, truckType, plateNumber, driverId,
-        driverFN, driverMI, driverLN, driverPhone } = req.body;
-
-    if (!token || !driverId) {
-      return res.status(400).json({ success: false, message: "Missing token or driverId" });
-    }
-
-    if (!driverName || !truckType || !plateNumber) {
-      return res.status(400).json({ success: false, message: "Missing driverName, truckType, or plateNumber" });
-    }
-
-    const database = getDatabase();
-
-    // Validate token exists and is not expired or already used
-    const tokenDoc = await database.collection("qr_tokens").doc(token).get();
-    if (!tokenDoc.exists) {
-      return res.status(404).json({ success: false, message: "Invalid or expired token." });
-    }
-    if (tokenDoc.data().isUsed) {
-      return res.status(410).json({ success: false, message: "Token already used." });
-    }
-
-    const expiresAt = new Date(tokenDoc.data().expiresAt);
-    if (new Date() > expiresAt) {
-      return res.status(410).json({ success: false, message: "Token has expired." });
-    }
-
-    // Mark token as USED — this is the single authoritative mark.
-    // verifyQR only reads; scanQR is the sole writer of isUsed.
-    await database.collection("qr_tokens").doc(token).update({ isUsed: true });
-
-    // Sanitize all string inputs
-    const sDriverFN   = SANITIZE(driverFN, 50);
-    const sDriverMI   = SANITIZE_MI(driverMI);
-    const sDriverLN   = SANITIZE(driverLN, 50);
-    const sDriverName = SANITIZE(driverName, 100);
-    const sHelperName = SANITIZE(helperName, 100);
-    const sTruckComp  = SANITIZE(truckCompany, 100);
-    const sTruckType  = truckType ? truckType.toUpperCase().trim() : "";
-    const sPlateNum   = SANITIZE(plateNumber, 20);
-    const sDriverPhone = SANITIZE(driverPhone, 20);
-
-    // Add driver to queue.
-    // Status "waiting" is the initial state; "called" is assigned by dispatch.
-    const queueRef = database.collection("queue").doc();
-    const queueEntry = {
-      id: queueRef.id,
-      driverId,
-      driverName: sDriverName,
-      driverFN: sDriverFN || null,
-      driverMI: sDriverMI || null,
-      driverLN: sDriverLN || null,
-      driverPhone: sDriverPhone || null,
-      token,  // stored so registerTrip can emit qr_token_used for TV refresh
-      helper: sHelperName || null,
-      truckCompany: sTruckComp || null,
-      truckType: sTruckType,
-      plateNumber: sPlateNum,
-      entryTime: FieldValue.serverTimestamp(),
-      joinedAt: FieldValue.serverTimestamp(),
-      registrationComplete: false,
-      isAssigned: false,
-      status: "waiting",
-      notes: "",
-    };
-    await queueRef.set(queueEntry);
-
-    console.log(`[scanQR] Driver ${driverId} joined queue (entry ${queueRef.id})`);
-
-    // Emit qr_token_used so TV display auto-refreshes its QR
-    const io = req.app.get("io");
-    if (io) io.emit("qr_token_used", { token });
-
-    // Broadcast updated queue via Socket.IO
-    if (io) {
-      try {
-        const queueSnap = await database
-          .collection("queue")
-          .where("status", "in", ["waiting", "called"])
-          .orderBy("joinedAt", "asc")
-          .get();
-
-        const allQueued = [];
-        queueSnap.forEach((doc) => allQueued.push({ id: doc.id, ...doc.data() }));
-        io.emit("queue_update", { queue: allQueued });
-      } catch (e) {
-        console.warn("[scanQR] Socket broadcast query failed (likely missing index):", e.message);
-      }
-    }
-
-    // Compute queue position within truck type group
-    let position = 0;
-    try {
-      const posSnap = await database
-        .collection("queue")
-        .where("truckType", "==", truckType)
-        .where("status", "==", "waiting")
-        .orderBy("joinedAt", "asc")
-        .get();
-
-      const group = [];
-      posSnap.forEach((doc) => group.push({ id: doc.id, ...doc.data() }));
-
-      group.forEach((doc, idx) => {
-        if (doc.id === queueRef.id) position = idx + 1;
-      });
-    } catch (e) {
-      console.warn("[scanQR] Position query failed (likely missing index):", e.message);
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Successfully joined the queue",
-      queueId: queueRef.id,
-      queuePosition: position || null,
-    });
-  } catch (error) {
-    console.error("QR Scan Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+  if (!req.user?.uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+  const body = req.body;
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => !KEYS.has(key)) ||
+      !safeToken(body.token) || !safeText(body.driverId, 128) || !safeText(body.driverName, 100) ||
+      !safeText(body.truckType, 10) || !safeText(body.plateNumber, 20) ||
+      ["driverFN", "driverMI", "driverLN", "driverPhone", "truckCompany", "helperName"].some(key => body[key] != null && !safeText(body[key], key === "driverPhone" ? 20 : 100, true))) {
+    return res.status(400).json({ success: false, message: "Invalid QR registration fields" });
   }
+  if (body.driverId !== req.user.uid) return res.status(403).json({ success: false, message: "Cannot scan for another driver" });
+  const truckType = body.truckType.trim().toUpperCase();
+  if (!TYPES.includes(truckType)) return res.status(400).json({ success: false, message: "Invalid truck type" });
+  try {
+    const db = getDb(), tokenRef = db.collection("qr_tokens").doc(body.token);
+    const admission = db.collection("qr_admissions").doc(req.user.uid), queue = db.collection("queue").doc();
+    await db.runTransaction(async tx => {
+      const actor = await tx.get(db.collection("users").doc(req.user.uid));
+      const token = await tx.get(tokenRef);
+      await tx.get(admission);
+      const active = await tx.get(db.collection("queue").where("driverId", "==", req.user.uid).where("status", "in", ACTIVE).limit(1));
+      if (!actor.exists || actor.data().role !== "driver" || actor.data().status !== "active") throw fail(403, "Active driver required");
+      if (!token.exists) throw fail(404, "Invalid QR token");
+      if (expires(token.data())) throw fail(410, "QR token expired or already used");
+      if (!active.empty) throw fail(409, "Driver already has an active queue entry");
+      const now = FieldValue.serverTimestamp();
+      tx.set(queue, { id: queue.id, driverId: req.user.uid, driverName: clean(body.driverName),
+        driverFN: clean(body.driverFN), driverMI: clean(body.driverMI), driverLN: clean(body.driverLN), driverPhone: clean(body.driverPhone),
+        truckType, plateNumber: clean(body.plateNumber), truckCompany: clean(body.truckCompany), helperName: clean(body.helperName), helper: clean(body.helperName),
+        token: body.token, status: "waiting", registrationComplete: false, isAssigned: false, isFull: false, joinedAt: now, entryTime: now });
+      tx.set(admission, { queueId: queue.id, updatedAt: now });
+      tx.update(tokenRef, { used: true, isUsed: true, usedBy: req.user.uid, usedAt: now, queueId: queue.id });
+    });
+    const io = req.app.get("io");
+    if (io) { try { io.to("driver:" + req.user.uid).emit("queue_admitted", { queueId: queue.id }); } catch (_) {} }
+    return res.status(200).json({ success: true, message: "Successfully joined the queue", queueId: queue.id, queuePosition: null });
+  } catch (error) { return errorResponse(res, error); }
 };
 
-// GET /api/qr/queue — Returns current queue grouped by truck type.
-// Only shows entries where registrationComplete: true (the Fleet Manager gate).
-// Use ?all=1 to include incomplete entries (for dispatch/debugging only).
 const getQueue = async (req, res) => {
   try {
-    const database = getDatabase();
-    const showAll = req.query.all === "1";
-
-    // Default: only return entries where the driver completed Phase 2 registration.
-    // Incomplete entries (registrationComplete: false) are hidden from Fleet Manager.
-    let queueSnap;
-    if (showAll) {
-      queueSnap = await database
-        .collection("queue")
-        .where("status", "in", ["waiting", "called"])
-        .orderBy("joinedAt", "asc")
-        .get();
-    } else {
-      queueSnap = await database
-        .collection("queue")
-        .where("status", "in", ["waiting", "called"])
-        .where("registrationComplete", "==", true)
-        .orderBy("joinedAt", "asc")
-        .get();
+    const query = getDb().collection("queue").where("status", "in", ["waiting", "called"]);
+    const snapshot = await (req.query.all === "1" ? query : query.where("registrationComplete", "==", true)).orderBy("joinedAt", "asc").limit(101).get();
+    const queue = Object.fromEntries(TYPES.map(type => [type, []]));
+    for (const doc of snapshot.docs.slice(0, 100)) {
+      const data = doc.data();
+      if (queue[data.truckType]) queue[data.truckType].push({ id: doc.id, driverId: data.driverId, driverName: data.driverName, truckType: data.truckType, plateNumber: data.plateNumber, status: data.status, registrationComplete: data.registrationComplete === true });
     }
-
-    const truckTypes = ["AUV", "4W", "6W", "10W", "20F", "40F"];
-    const grouped = {};
-    truckTypes.forEach((t) => (grouped[t] = []));
-
-    queueSnap.forEach((doc) => {
-      const entry = { id: doc.id, ...doc.data() };
-      if (grouped[entry.truckType]) {
-        grouped[entry.truckType].push(entry);
-      }
-    });
-
-    return res.status(200).json({ success: true, queue: grouped, incompleteCount: showAll ? 0 : undefined });
-  } catch (error) {
-    console.error("Queue Fetch Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
+    return res.status(200).json({ success: true, queue, truncated: snapshot.size > 100 });
+  } catch (_) { return res.status(500).json({ success: false, message: "Queue unavailable" }); }
 };
 
-// PATCH /api/qr/queue-status — Admin updates queue entry status
-const updateQueueStatus = async (req, res) => {
-  try {
-    const { queueId, status } = req.body;
-    if (!queueId || !status) {
-      return res.status(400).json({ success: false, message: "queueId and status are required." });
-    }
-
-    // Support all status values used across mobile, web, and admin flows
-    const validStatuses = ["waiting", "called", "loading", "in_transit", "complete", "departed", "cancelled"];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
-      });
-    }
-
-    const database = getDatabase();
-    const queueRef = database.collection("queue").doc(queueId);
-    const doc = await queueRef.get();
-    if (!doc.exists) {
-      return res.status(404).json({ success: false, message: "Queue entry not found." });
-    }
-
-    await queueRef.update({
-      status,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-
-    console.log(`[updateQueueStatus] ${queueId} → ${status}`);
-
-    // Broadcast updated queue via Socket.IO
-    const io = req.app.get("io");
-    if (io) {
-      const queueSnap = await database
-        .collection("queue")
-        .where("status", "in", ["waiting", "called"])
-        .orderBy("joinedAt", "asc")
-        .get();
-
-      const allQueued = [];
-      queueSnap.forEach((d) => allQueued.push({ id: d.id, ...d.data() }));
-      io.emit("queue_update", { queue: allQueued });
-    }
-
-    return res.status(200).json({ success: true, message: "Status updated.", status });
-  } catch (error) {
-    console.error("Queue Status Update Error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-};
-
+// Legacy arbitrary state setter bypassed dispatch decisions. Use the web workflow.
+const updateQueueStatus = (_req, res) => res.status(410).json({ success: false, message: "Use the SYSU web queue workflow" });
 module.exports = { generateQR, verifyQR, scanQR, getQueue, updateQueueStatus };
