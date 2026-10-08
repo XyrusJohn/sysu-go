@@ -52,12 +52,6 @@ android {
         buildConfig = true
     }
 
-    signingConfigs.getByName("debug") {
-        storeFile = file("C:\\Users\\xyver\\OneDrive\\Documents\\sysu-go\\mobile\\android\\app\\debug.keystore")
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
-    }
 }
 
 dependencies {
