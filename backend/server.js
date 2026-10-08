@@ -111,6 +111,9 @@ app.use("/api/driver", require("./routes/driverStatusRoutes.js"));
 // authoritative "this driver is gone" signal.
 const onlineDriver = new Map();
 const { getFirebaseAuth } = require("./config/firebaseAdmin.js");
+const { createSocketAuth } = require("./middleware/socketAuth.js");
+const TRACKING_ROLES = new Set(["fleet_manager", "admin", "super_admin"]);
+io.use(createSocketAuth({ getFirebaseAuth, getDb }));
 
 /**
  * Touch the driver's lastSeen timestamp to "now". Called from every client
@@ -170,89 +173,24 @@ const DRIVER_LIFECYCLE_STATUSES = new Set([
   "returning_to_base",
 ]);
 
-// Helper: verify Firebase ID token from Socket.IO handshake and return decoded UID
-async function verifySocketToken(socket) {
-  const token = socket.handshake.auth?.token;
-  if (!token) return null;
-  try {
-    const auth = getFirebaseAuth();
-    const decoded = await auth.verifyIdToken(token);
-    return decoded.uid;
-  } catch (err) {
-    console.warn(`[${ts()}] [Socket] Token verify failed for ${socket.id}:`, err.message);
-    return null;
-  }
-}
-
 io.on("connection", async (socket) => {
-  console.log(`[${ts()}] System Connected: ${socket.id}`);
+  const verifiedUid = socket.data.uid;
+  const role = socket.data.role;
+  console.log("[" + ts() + "] Authenticated socket connected: " + socket.id + " (" + role + ")");
 
-  // Verify Firebase token and associate socket with verified UID
-  const verifiedUid = await verifySocketToken(socket);
-  if (verifiedUid) {
-    socket.data.uid = verifiedUid;
-    console.log(`[${ts()}] [Socket] Authenticated: socket ${socket.id} → uid ${verifiedUid}`);
-
-    // Join this driver's room so driver_status_change broadcasts are received
-    // by every Profile app instance for the same driver account.
-    socket.join(`driver:${verifiedUid}`);
-    console.log(`[${ts()}] [Socket] ${socket.id} joined room driver:${verifiedUid}`);
-
-    // On connect: if this driver was already in the map (page reload / reconnect),
-    // emit their current state to this socket so the marker reappears WITHOUT needing
-    // them to move first. This fixes the regression introduced by the multi-socket fix.
-    const existingEntry = onlineDriver.get(verifiedUid);
-    if (existingEntry) {
-      existingEntry.socketIds.add(socket.id);
-      existingEntry.lastSeen = Date.now();
-
-      const hasActive = await hasActiveShipment(verifiedUid);
-      if (hasActive && existingEntry.status !== "completed" && existingEntry.lat != null && existingEntry.lng != null && existingEntry.lat !== 0 && existingEntry.lng !== 0) {
-        socket.emit("vendor_status_update", {
-          driverId: verifiedUid,
-          status: "online",
-          name: existingEntry.name,
-          lat: existingEntry.lat,
-          lng: existingEntry.lng,
-        });
-        socket.emit("update_admin_map", {
-          driverId: verifiedUid,
-          lat: existingEntry.lat,
-          lng: existingEntry.lng,
-          name: existingEntry.name,
-          sapDocId: null,
-        });
-        console.log(`[${ts()}] [Socket] Emitted active driver state to reconnecting socket ${socket.id}`);
-      }
-    }
-
-    // Also emit full state of ALL OTHER active drivers to this new socket,
-    // so sysu-app rebuilds the full map on page reload (not just this driver).
+  if (role === "driver") {
+    socket.join("driver:" + verifiedUid);
+    const entry = onlineDriver.get(verifiedUid);
+    if (entry) { entry.socketIds.add(socket.id); entry.lastSeen = Date.now(); }
+  } else if (TRACKING_ROLES.has(role)) {
+    socket.join("staff:tracking");
     for (const [otherId, entry] of onlineDriver.entries()) {
-      if (otherId === verifiedUid) continue; // skip self (handled above)
       const hasLiveSocket = Array.from(entry.socketIds).some(sid => io.sockets.sockets.get(sid));
-      if (hasLiveSocket && entry.status !== "completed" && entry.lat != null && entry.lng != null && entry.lat !== 0 && entry.lng !== 0) {
-        const hasActive = await hasActiveShipment(otherId);
-        if (hasActive) {
-          socket.emit("vendor_status_update", {
-            driverId: otherId,
-            status: "online",
-            name: entry.name,
-            lat: entry.lat,
-            lng: entry.lng,
-          });
-          socket.emit("update_admin_map", {
-            driverId: otherId,
-            lat: entry.lat,
-            lng: entry.lng,
-            name: entry.name,
-            sapDocId: null,
-          });
-        }
-      }
+      if (!hasLiveSocket || entry.status === "completed" || entry.lat == null || entry.lng == null || entry.lat === 0 || entry.lng === 0) continue;
+      if (!(await hasActiveShipment(otherId))) continue;
+      socket.emit("vendor_status_update", { driverId: otherId, status: "online", name: entry.name, lat: entry.lat, lng: entry.lng });
+      socket.emit("update_admin_map", { driverId: otherId, lat: entry.lat, lng: entry.lng, name: entry.name, sapDocId: null });
     }
-  } else {
-    console.warn(`[${ts()}] [Socket] Unauthenticated connection from ${socket.id} — events will be ignored`);
   }
 
   socket.on("update_status", async (data) => {
@@ -290,8 +228,8 @@ io.on("connection", async (socket) => {
             entry.lng = lng;
           }
           if (hasActive && validCoords) {
-            io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
-            io.emit("update_admin_map", { driverId: verifiedUid, lat: entry.lat, lng: entry.lng, name: fullName, sapDocId: null });
+            io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat: entry.lat, lng: entry.lng });
+            io.to("staff:tracking").emit("update_admin_map", { driverId: verifiedUid, lat: entry.lat, lng: entry.lng, name: fullName, sapDocId: null });
           }
           console.log(`[${ts()}] Driver ${fullName} back ONLINE (${entry.socketIds.size} active sockets, hasActive=${hasActive})`);
         } else {
@@ -307,15 +245,21 @@ io.on("connection", async (socket) => {
           });
           console.log(`[${ts()}] Driver ${fullName} is now ONLINE (hasActive=${hasActive})`);
           if (hasActive && validCoords) {
-            io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat, lng });
-            io.emit("update_admin_map", { driverId: verifiedUid, lat, lng, name: fullName, sapDocId: null });
+            io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat, lng });
+            io.to("staff:tracking").emit("update_admin_map", { driverId: verifiedUid, lat, lng, name: fullName, sapDocId: null });
           }
         }
       } else if (status === "completed") {
         onlineDriver.delete(verifiedUid);
-        io.emit("update_status", { driverId: verifiedUid, status: "completed", name: fullName });
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: null, lng: null });
+        io.to("staff:tracking").emit("update_status", { driverId: verifiedUid, status: "completed", name: fullName });
+        io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "completed", name: fullName, lat: null, lng: null });
         console.log(`[${ts()}] Driver ${fullName} COMPLETED trip [marker removed from map]`);
+      } else if (status === "stopped") {
+        const entry = onlineDriver.get(verifiedUid);
+        if (!entry) return;
+        entry.status = "stopped";
+        entry.lastSeen = Date.now();
+        io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "stopped", name: entry.name, lat: entry.lat, lng: entry.lng });
       } else {
         const entry = onlineDriver.get(verifiedUid);
         const offlineLat = entry ? entry.lat : null;
@@ -328,8 +272,8 @@ io.on("connection", async (socket) => {
             entry.offlineSince = Date.now();
             entry.socketIds.clear();
           }
-          io.emit("update_status", { driverId: verifiedUid, status: "offline_in_transit", name: fullName });
-          io.emit("vendor_status_update", {
+          io.to("staff:tracking").emit("update_status", { driverId: verifiedUid, status: "offline_in_transit", name: fullName });
+          io.to("staff:tracking").emit("vendor_status_update", {
             driverId: verifiedUid,
             status: "offline_in_transit",
             name: fullName,
@@ -340,8 +284,8 @@ io.on("connection", async (socket) => {
           console.log(`[${ts()}] Driver ${fullName} OFFLINE — has active shipment, retaining last position [${offlineLat}, ${offlineLng}]`);
         } else {
           onlineDriver.delete(verifiedUid);
-          io.emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
-          io.emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
+          io.to("staff:tracking").emit("update_status", { driverId: verifiedUid, status: "offline", name: fullName });
+          io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "offline", name: fullName, lat: offlineLat, lng: offlineLng });
           console.log(`[${ts()}] Driver ${fullName} is now OFFLINE — no active shipment, marker removed`);
         }
       }
@@ -351,50 +295,81 @@ io.on("connection", async (socket) => {
   });
 
   /**
-   * Real-time GPS movement events from mobile app
+   * Real-time GPS movement events from mobile app.
+   * Auth required: driverId must match verifiedUid from Firebase token.
    */
   socket.on("driver_moving", async (data) => {
     try {
       if (!data) return;
-      const dId = data.driverId || verifiedUid;
-      if (!dId) return;
-      const { lat, lng, name, sapDocId, status } = data;
+      const { driverId, lat, lng, name, sapDocId, status } = data;
+
+      // Reject if not authenticated or if driverId doesn't match verified UID
+      if (!verifiedUid || driverId !== verifiedUid) {
+        console.warn(`[${ts()}] [Socket] driver_moving rejected: unauthorized (socket ${socket.id})`);
+        return;
+      }
       if (typeof lat !== "number" || typeof lng !== "number" || lat === 0 || lng === 0) return;
 
-      touchLastSeen(dId);
-      const fullName = name || (onlineDriver.get(dId)?.name) || "Driver";
-
-      const entry = onlineDriver.get(dId);
+      let fullName = "Unknown Driver";
+      const entry = onlineDriver.get(verifiedUid);
       if (entry) {
+        // Ensure this socket is tracked (may have reconnected before disconnect fired)
+        entry.socketIds.add(socket.id);
         entry.lat = lat;
         entry.lng = lng;
-        entry.name = fullName;
+        // FLEET TRACKING: driver_moving always means trip is active — mark in_transit
+        // so disconnect/offline handlers know to retain the last position.
+        entry.tripStatus = "in_transit";
         entry.status = "online";
         entry.isOffline = false;
-        entry.lastSeen = Date.now();
+        // If driver was previously marked offline_in_transit and is now moving again,
+        // they've reconnected — clear the offline flag and restore the green marker.
+        if (entry.isOffline) {
+          entry.offlineSince = null;
+          io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: entry.name, lat, lng });
+          console.log(`[${ts()}] Driver ${entry.name} RECONNECTED — back online at [${lat}, ${lng}]`);
+        }
+        fullName = entry.name;
+        // driver_moving is also a heartbeat signal — driver is alive and moving.
+        touchLastSeen(verifiedUid);
       } else {
-        onlineDriver.set(dId, {
-          name: fullName,
-          lat,
-          lng,
-          socketIds: new Set([socket.id]),
-          status: "online",
-          isOffline: false,
-          tripStatus: "in_transit",
-          lastSeen: Date.now(),
-        });
+        try {
+          const dbInfo = await Driver.findDriverById(verifiedUid);
+          if (dbInfo) fullName = `${dbInfo.first_name} ${dbInfo.last_name}`.trim();
+          // Create a new entry for first driver_moving before any update_status online
+          onlineDriver.set(verifiedUid, {
+            name: fullName,
+            lat,
+            lng,
+            socketIds: new Set([socket.id]),
+            status: "online",
+            tripStatus: "in_transit",
+            isOffline: false,
+            lastSeen: Date.now(),
+          });
+        } catch (e) {
+          console.log(`[${ts()}] Database Error in Socket:`, e.message);
+        }
       }
 
+      console.log(`[${ts()}] Live Driver ${fullName} moved to [${lat}, ${lng}]`);
+      let ownedSapDocId = null;
+      if (typeof sapDocId === "string" && sapDocId.length > 0) {
+        try {
+          const assignment = await getDb().collection("sap_assignments").doc(sapDocId).get();
+          if (assignment.exists && assignment.data().driverId === verifiedUid) ownedSapDocId = sapDocId;
+        } catch (_) { /* Tracking still works without an unverified assignment link. */ }
+      }
       const mapPayload = {
-        driverId: dId,
+        driverId: verifiedUid,
         lat,
         lng,
         name: fullName,
-        sapDocId: sapDocId || null,
-        status: status || "online",
+        sapDocId: ownedSapDocId,
+        status: "online",
       };
-      io.emit("update_admin_map", mapPayload);
-      io.emit("vendor_status_update", { driverId: dId, status: "online", name: fullName, lat, lng });
+      io.to("staff:tracking").emit("update_admin_map", mapPayload);
+      io.to("staff:tracking").emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: fullName, lat, lng });
     } catch (err) {
       console.error(`[${ts()}] Error in driver_moving:`, err);
     }
@@ -410,8 +385,8 @@ io.on("connection", async (socket) => {
       if (!dId) return;
       const { lat, lng, name } = data;
       touchLastSeen(dId);
-      const fullName = name || (onlineDriver.get(dId)?.name) || "Driver";
-      io.emit("vendor_status_update", { driverId: dId, status: "stopped", name: fullName, lat, lng });
+      const fullName = onlineDriver.get(verifiedUid)?.name || "Driver";
+      io.to("staff:tracking").emit("vendor_status_update", { driverId: dId, status: "stopped", name: fullName, lat, lng });
     } catch (err) {
       console.error(`[${ts()}] Error in driver_stopped:`, err);
     }
@@ -436,7 +411,10 @@ io.on("connection", async (socket) => {
         return;
       }
 
-      const fullName = name || (onlineDriver.get(verifiedUid)?.name) || "Driver";
+      const driverRef = getDb().collection("drivers").doc(verifiedUid);
+      const canonicalDriver = await driverRef.get();
+      if (!canonicalDriver.exists) return;
+      const fullName = canonicalDriver.data().name || "Driver";
       const driverName = fullName;
 
       try {
@@ -444,7 +422,8 @@ io.on("connection", async (socket) => {
         await db.collection("drivers").doc(verifiedUid)
           .set({ status }, { merge: true });
       } catch (err) {
-        console.error(`[${ts()}] [Socket] driver_status_change Firestore write failed for ${verifiedUid}:`, err.message);
+        console.error("[Socket] driver_status_change persistence failed");
+        return;
       }
 
       const entry = onlineDriver.get(verifiedUid);
@@ -472,10 +451,10 @@ io.on("connection", async (socket) => {
         driverId: verifiedUid,
         status,
         name: driverName,
-        timestamp: timestamp || Date.now(),
+        timestamp: Date.now(),
       };
       io.to(`driver:${verifiedUid}`).emit("driver_status_change", payload);
-      io.emit("driver_status_change", payload);
+      io.to("staff:tracking").emit("driver_status_change", payload);
       console.log(`[${ts()}] [Socket] driver_status_change → ${status} for ${driverName} (${verifiedUid})`);
     } catch (err) {
       console.error(`[${ts()}] Error in driver_status_change:`, err);
@@ -515,6 +494,15 @@ io.on("connection", async (socket) => {
     }
   });
 
+  socket.on("pod_updated", async (data) => {
+    try {
+      if (role !== "driver" || typeof data?.shipmentDocId !== "string") return;
+      const assignment = await getDb().collection("sap_assignments").doc(data.shipmentDocId).get();
+      if (!assignment.exists || assignment.data().driverId !== verifiedUid) return;
+      io.to("staff:tracking").emit("pod_updated", { shipmentDocId: data.shipmentDocId, driverId: verifiedUid, source: "driver_app" });
+    } catch (_) { /* Do not expose assignment or Firestore details to socket clients. */ }
+  });
+
   socket.on("disconnect", async (reason) => {
     console.log(`[${ts()}] System Disconnected: ${socket.id} (Reason: ${reason})`);
 
@@ -538,7 +526,7 @@ io.on("connection", async (socket) => {
         if (active && lastLat != null && lastLng != null) {
           entry.isOffline = true;
           entry.offlineSince = Date.now();
-          io.emit("vendor_status_update", {
+          io.to("staff:tracking").emit("vendor_status_update", {
             driverId: id,
             name: driverName,
             status: "offline_in_transit",
@@ -549,7 +537,7 @@ io.on("connection", async (socket) => {
           console.log(`[${ts()}] Driver ${driverName} OFFLINE — has active shipment, retaining last position [${lastLat}, ${lastLng}]`);
         } else {
           onlineDriver.delete(id);
-          io.emit("vendor_status_update", { driverId: id, name: driverName, status: "offline", lat: lastLat, lng: lastLng });
+          io.to("staff:tracking").emit("vendor_status_update", { driverId: id, name: driverName, status: "offline", lat: lastLat, lng: lastLng });
           console.log(`[${ts()}] Driver ${driverName} is now OFFLINE — no active shipment, marker removed`);
         }
       } else {
@@ -558,61 +546,6 @@ io.on("connection", async (socket) => {
       }
       break;
     }
-  });
-
-  socket.on("driver_moving", async (data) => {
-    const { driverId, lat, lng, sapDocId } = data;
-
-    // Reject if not authenticated or if driverId doesn't match verified UID
-    if (!verifiedUid || driverId !== verifiedUid) {
-      console.warn(`[${ts()}] [Socket] driver_moving rejected: unauthorized (socket ${socket.id})`);
-      return;
-    }
-    if (!driverId) return;
-
-    let fullName = "Unknown Driver";
-    const entry = onlineDriver.get(verifiedUid);
-    if (entry) {
-      // Ensure this socket is tracked (may have reconnected before disconnect fired)
-      entry.socketIds.add(socket.id);
-      entry.lat = lat;
-      entry.lng = lng;
-      // FLEET TRACKING: driver_moving always means trip is active — mark in_transit
-      // so disconnect/offline handlers know to retain the last position.
-      entry.tripStatus = "in_transit";
-      // If driver was previously marked offline_in_transit and is now moving again,
-      // they've reconnected — clear the offline flag and restore the green marker.
-      if (entry.isOffline) {
-        entry.isOffline = false;
-        entry.offlineSince = null;
-        io.emit("vendor_status_update", { driverId: verifiedUid, status: "online", name: entry.name, lat, lng });
-        console.log(`[${ts()}] Driver ${entry.name} RECONNECTED — back online at [${lat}, ${lng}]`);
-      }
-      fullName = entry.name;
-      // driver_moving is also a heartbeat signal — driver is alive and moving.
-      touchLastSeen(verifiedUid);
-    } else {
-      try {
-        const dbInfo = await Driver.findDriverById(verifiedUid);
-        if (dbInfo) fullName = `${dbInfo.first_name} ${dbInfo.last_name}`.trim();
-        // Create a new entry for first driver_moving before any update_status online
-        onlineDriver.set(verifiedUid, {
-          name: fullName,
-          lat,
-          lng,
-          socketIds: new Set([socket.id]),
-          status: "online",
-          tripStatus: "in_transit",
-          isOffline: false,
-          lastSeen: Date.now(),
-        });
-      } catch (e) {
-        console.log(`[${ts()}] Database Error in Socket:`, e.message);
-      }
-    }
-
-    console.log(`[${ts()}] Live Driver ${fullName} moved to [${lat}, ${lng}]`);
-    io.emit("update_admin_map", { driverId: verifiedUid, lat, lng, sapDocId, name: fullName, status: "online" });
   });
 
   /**

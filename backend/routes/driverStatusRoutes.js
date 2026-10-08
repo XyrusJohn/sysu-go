@@ -67,7 +67,7 @@ router.post("/status", verifyToken, async (req, res) => {
           source: "backend_proxy",
         };
         io.to(`driver:${uid}`).emit("driver_status_change", payload);
-        io.emit("driver_status_change", payload);
+        io.to("staff:tracking").emit("driver_status_change", payload);
         console.log(`[DriverStatusRoutes] fanned out to room driver:${uid} + global`);
       }
     } catch (ioErr) {

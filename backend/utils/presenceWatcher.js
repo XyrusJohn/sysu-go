@@ -124,8 +124,8 @@ async function tick(onlineDriver, io) {
           staleAgeMs: ageMs,
         };
         io.to(`driver:${uid}`).emit("driver_status_change", { ...payload, status: "offline" });
-        io.emit("driver_status_change", { ...payload, status: "offline" });
-        io.emit("vendor_status_update", payload);
+        io.to("staff:tracking").emit("driver_status_change", { ...payload, status: "offline" });
+        io.to("staff:tracking").emit("vendor_status_update", payload);
         console.log(`[${ts()}] [PRESENCE] ✓ Broadcast offline_in_transit for ${entry.name} — last pos [${entry.lat}, ${entry.lng}] retained`);
       }
     } else {
@@ -154,8 +154,8 @@ async function tick(onlineDriver, io) {
           staleAgeMs: ageMs,
         };
         io.to(`driver:${uid}`).emit("driver_status_change", payload);
-        io.emit("driver_status_change", payload);
-        io.emit("vendor_status_update", {
+        io.to("staff:tracking").emit("driver_status_change", payload);
+        io.to("staff:tracking").emit("vendor_status_update", {
           driverId: uid,
           name: entry.name,
           status: "offline",

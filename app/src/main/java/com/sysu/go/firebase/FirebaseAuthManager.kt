@@ -88,6 +88,7 @@ object FirebaseAuthManager {
 
     fun signOut(context: Context) {
         Log.d(TAG, "signOut called")
+        com.sysu.go.network.SocketManager.disconnect()
         getAuth().signOut()
         googleSignInClient?.signOut()
     }
