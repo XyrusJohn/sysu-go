@@ -39,6 +39,11 @@ android {
             buildConfigField("String", "SOCKET_URL", "\"https://sysu-go-production.up.railway.app\"")
             buildConfigField("String", "FRONTEND_URL", "\"https://sysu-web-5a25d.web.app\"")
         }
+        create("liveTest") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     compileOptions {
