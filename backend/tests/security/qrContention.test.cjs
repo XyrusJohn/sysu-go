@@ -1,8 +1,16 @@
 const test=require('node:test'),assert=require('node:assert/strict'),Module=require('node:module'),fs=require('node:fs'),path=require('node:path');
-let state;const db={collection:()=>({doc:()=>({id:'synthetic-q',get:async()=>({exists:true,data:()=>({used:state.used,isUsed:false,expiresAt:new Date(Date.now()+60000).toISOString()})})}),where(){return this;},limit(){return this;},get:async()=>({empty:!state.active})}),async runTransaction(){throw Object.assign(Error('synthetic private details'),{code:state.code});}};
+let state;const db={collection:()=>({doc:()=>({id:'synthetic-q',get:async()=>{if(state.readFailure)throw Error('synthetic private read failure');return {exists:true,data:()=>({used:state.used,isUsed:false,expiresAt:new Date(Date.now()+60000).toISOString()})};}}),where(){return this;},limit(){return this;},get:async()=>({empty:!state.active})}),async runTransaction(){throw Object.assign(Error('synthetic private details'),{code:state.code,details:state.details});}};
 const filename=path.resolve(__dirname,'../../controller/qrController.js'),mod=new Module(filename);mod.filename=filename;mod.require=name=>{if(name==='../config/firebaseAdmin.js')return {getDb:()=>db};if(name==='firebase-admin/firestore')return {};if(name==='node:crypto')return require('node:crypto');throw Error('Unexpected import '+name);};mod._compile(fs.readFileSync(filename,'utf8'),filename);
 async function scan(options){state=options;const res={code:200,status(code){this.code=code;return this;},json(body){this.body=body;return this;}};await mod.exports.scanQR({user:{uid:'a'},body:{token:'SYS-TEST',driverId:'a',driverName:'Synthetic',truckType:'AUV',plateNumber:'TEST'},app:{get:()=>null}},res);assert.ok(!JSON.stringify(res.body).includes('private'));return res.code;}
 test('G09 aborted same-token transaction resolves already-used state',async()=>assert.equal(await scan({code:10,used:true}),410));
 test('G09 aborted competing-token transaction resolves active queue',async()=>assert.equal(await scan({code:10,used:false,active:true}),409));
 test('G09 aborted transaction without committed state reports retry conflict',async()=>assert.equal(await scan({code:10,used:false,active:false}),409));
 test('G09 other database failures remain generic errors',async()=>assert.equal(await scan({code:14,used:false,active:false}),500));
+
+test('G09 conflict-state read failure stays generic and does not retry admission',async()=>assert.equal(await scan({code:10,readFailure:true}),500));
+
+for(const [label,options,expected] of [
+ ['closed replay',{used:true},410],['closed competing token',{active:true},409],
+ ['closed without authoritative winner',{},500],['closed state read failure',{readFailure:true},500]
+])test('G09 '+label,async()=>assert.equal(await scan({code:3,details:'Transaction is invalid or closed.',...options}),expected));
+test('G09 unrelated invalid argument stays generic',async()=>assert.equal(await scan({code:3,details:'Other invalid argument',used:true}),500));
