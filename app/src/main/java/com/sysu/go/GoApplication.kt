@@ -29,10 +29,10 @@ class GoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         val firebaseApp = com.google.firebase.FirebaseApp.getInstance()
-        com.sysu.go.config.EnvironmentPolicy.validate(BuildConfig.DEBUG, firebaseApp.options.projectId,
+        com.sysu.go.config.EnvironmentPolicy.validate(BuildConfig.USE_FIREBASE_EMULATORS, firebaseApp.options.projectId,
             BuildConfig.API_BASE_URL, BuildConfig.SOCKET_URL, BuildConfig.FRONTEND_URL)
         // Configure every SDK before AuthManager, activities or listeners can use it.
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.USE_FIREBASE_EMULATORS) {
             FirebaseAuth.getInstance().useEmulator("10.0.2.2", 9099)
             FirebaseFirestore.getInstance().useEmulator("10.0.2.2", 8085)
             com.google.firebase.storage.FirebaseStorage.getInstance().useEmulator("10.0.2.2", 9199)

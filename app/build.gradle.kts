@@ -13,6 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.sysu.go"
+        buildConfigField("boolean", "USE_FIREBASE_EMULATORS", "false")
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -23,6 +24,15 @@ android {
 
     buildTypes {
         debug {
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("String", "API_BASE_URL", "\"https://sysu-go-production.up.railway.app\"")
+            buildConfigField("String", "SOCKET_URL", "\"https://sysu-go-production.up.railway.app\"")
+            buildConfigField("String", "FRONTEND_URL", "\"https://sysu-web-5a25d.web.app\"")
+        }
+        create("emulator") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            buildConfigField("boolean", "USE_FIREBASE_EMULATORS", "true")
             applicationIdSuffix = ".debug"
             signingConfig = signingConfigs.getByName("debug")
             buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3000\"")
