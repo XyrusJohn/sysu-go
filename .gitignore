@@ -57,3 +57,9 @@ __pycache__/
 
 # Session summary markdown files
 *_SUMMARY.md
+# Service account credentials: never track private-key exports
+**/service-account*.json
+**/serviceAccount*.json
+**/*credentials*.json
+*.pem
+*.key
