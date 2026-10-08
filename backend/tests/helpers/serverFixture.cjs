@@ -20,7 +20,7 @@ async function serverFixture() {
     const query = {
       doc: uid => ({
         get: async () => {
-          if (state.readError) throw Error('private synthetic read failure');
+          if (state.readError || state.readCollectionError === collection) throw Error('private synthetic read failure');
           const data = collection === 'users' ? profiles.get(uid) : records.get(collection+'/'+uid);
           return {exists:!!data, data:()=>data};
         },

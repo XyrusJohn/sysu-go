@@ -67,22 +67,15 @@ app.use("/api/sap", sapRoutes);
 app.use("/api/users", require("./routes/userRoutes.js"));
 app.use("/api/dispatch", require("./routes/dispatchRoutes.js"));
 app.use("/api/trip", require("./routes/tripRoute.js"));
+app.use("/api/driver", require("./routes/driverStatusRoutes.js"));
 
 // ─── Diagnostic endpoint — test Firestore connectivity directly ─────────────
-app.get("/api/firestore-test", async (req, res) => {
-  try {
-    const db = getDb();
-    const snap = await db.collection("qr_tokens").limit(1).get();
-    return res.status(200).json({ success: true, firestore: "connected", docs: snap.size });
-  } catch (err) {
-    console.error("[firestore-test] Error:", err.message);
-    return res.status(500).json({ success: false, firestore: "error", message: err.message });
-  }
-});
+// Production diagnostic route intentionally disabled.
 
 app.use((err, req, res, next) => {
-  console.error("[SERVER ERROR]", err.stack);
-  res.status(500).json({ success: false, message: "Internal Server Error" });
+  const status = err.type === "entity.parse.failed" ? 400 : err.type === "entity.too.large" ? 413 : 500;
+  console.error("[SERVER ERROR]", status);
+  res.status(status).json({ success: false, message: status === 400 ? "Invalid request body" : status === 413 ? "Request too large" : "Internal Server Error" });
 });
 
 app.use("/api", (req, res) => {
@@ -90,12 +83,7 @@ app.use("/api", (req, res) => {
 });
 
 // ─── API routes ─────────────────────────────────────────────────────────────
-app.use("/api/qr", qrRoutes);
-app.use("/api/sap", sapRoutes);
-app.use("/api/users", require("./routes/userRoutes.js"));
-app.use("/api/dispatch", require("./routes/dispatchRoutes.js"));
-app.use("/api/trip", require("./routes/tripRoute.js"));
-app.use("/api/driver", require("./routes/driverStatusRoutes.js"));
+
 
 // ─── Socket.IO handshake logic ──────────────────────────────────────────────
 // onlineDriver tracks ALL live sockets per driver using a Set.
