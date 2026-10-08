@@ -109,3 +109,8 @@ Verification-loop: synthetic-config web Vite build PASS (76 modules); frontend 6
 Dependency lock refresh is non-breaking; full audit 16 alerts (8 high/8 moderate/0 critical), omit=dev audit 8 moderate/0 high/0 critical. Runtime @grpc/grpc-js resolves 1.14.5; old development Firebase gRPC and braces remain. No audit --force downgrade. [Maintainer gRPC advisory](https://github.com/grpc/grpc-node/security/advisories/GHSA-m9gg-hp2v-232j) identifies the certificate-context configuration; [maintainer uuid advisory](https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq) concerns buffer arguments in v3/v5/v6. Runtime reachability/update disposition is pending rather than accepted risk. Production config, credential rotation, deployed rules/versions, Android APK signing and real cross-app acceptance are not proved by these tests.
 
 Current distinct mobile/backend total is 186 (100 backend + 9 protocol + 38 mobile emulator + 39 Android), counting variants/reruns once. Unrelated dirty Android files remain preserved; overlapping server socket changes were reviewed/committed under G-13. No production data/rules/IAM/deployment or installed driver APK changed.
+
+
+## Android Studio Google sign-in recovery — 2026-10-09
+
+See [Google login recovery evidence](GOOGLE_LOGIN_RECOVERY_2026-10-09.md) for compiled Kotlin RED d25ad54 (2/8 failed), root APK-config RED 0dbedfb, GREEN 861391f and cloud signing/OAuth repair. 43 Kotlin cases pass per debug/liveTest/emulator variant (43 distinct, not 129); four actual APK-config checks pass per debug/liveTest variant (four distinct). Scoped EnvironmentPolicy coverage 100% lines/branches. G-04/G-25 remain IN PROGRESS for actual phone/staging/CI acceptance; no device login PASS is claimed.

@@ -1,3 +1,7 @@
+# Current routing correction — 2026-10-09
+
+Per the user instruction, default Android Studio **debug** and **liveTest** now use existing production Firebase/Railway. Isolated testing uses the explicitly selected **emulator** variant, `app/src/emulator/google-services.json`, `com.sysu.go.debug` and `USE_FIREBASE_EMULATORS=true`. Replace historical debug task names below with `testEmulatorUnitTest` / `assembleEmulator` for isolated work; `BuildConfig.DEBUG` no longer determines Firebase routing. Production SDK configuration and signing/OAuth recovery are documented in [Google login recovery](GOOGLE_LOGIN_RECOVERY_2026-10-09.md). No actual phone login has been verified.
+
 # SYSU-GO isolated testing configuration
 
 Debug now has application ID com.sysu.go.debug, synthetic demo-sysu-security Firebase resources, and Android Emulator host 10.0.2.2. API/socket port 3000, frontend 5173, Auth 9099, Firestore 8085, Storage 9199. GoApplication validates project and exact endpoint allowlists before AuthManager/listeners/activities, then attaches all three Firebase SDKs to emulators. Startup validation failure is fatal; it never silently falls back to production. Real-device host routing and Google sign-in/POD flows are not yet accepted. An emulator being unavailable causes errors, not production fallback.
