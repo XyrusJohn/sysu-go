@@ -11,6 +11,8 @@ import android.util.Base64
 import android.view.MotionEvent
 import android.view.View
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class SignaturePadView @JvmOverloads constructor(
     context: Context,
@@ -83,7 +85,7 @@ class SignaturePadView @JvmOverloads constructor(
 
     fun isEmpty(): Boolean = isEmpty
 
-    fun getSignatureBase64(): String? {
+    suspend fun getSignatureBase64(): String? {
         if (isEmpty) return null
         val w = width.takeIf { it > 0 } ?: return null
         val h = height.takeIf { it > 0 } ?: return null
@@ -93,9 +95,15 @@ class SignaturePadView @JvmOverloads constructor(
         canvas.drawColor(Color.WHITE) // white background
         draw(canvas)
 
-        val stream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-        val byteArray = stream.toByteArray()
-        return Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        return try {
+            withContext(Dispatchers.Default) {
+                ByteArrayOutputStream().use { stream ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) null
+                    else Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+                }
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 }

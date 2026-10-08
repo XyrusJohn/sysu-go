@@ -126,7 +126,9 @@ class ObdTripAdapter(
             oldItem: Map<String, Any?>,
             newItem: Map<String, Any?>
         ): Boolean {
-            return oldItem == newItem
+            return oldItem.size == newItem.size && oldItem.all { (key, value) ->
+                newItem.containsKey(key) && newItem[key] == value
+            }
         }
     }
 }

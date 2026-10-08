@@ -873,6 +873,12 @@ class QueueDetailsActivity : AppCompatActivity() {
             return
         }
 
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Location permission is required for POD capture", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
         // Try to get last known location first
         fusedLocationClient.lastLocation
             .addOnSuccessListener { location ->
@@ -904,6 +910,9 @@ class QueueDetailsActivity : AppCompatActivity() {
                     shipmentDocId
                 )
             }
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "Location permission is required for POD capture", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun proceedToCamera(

@@ -253,13 +253,19 @@ class GeneralTrackingActivity : AppCompatActivity() {
     }
 
     private fun startLocationUpdates() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         Log.d(TAG, "[GPS] Starting location updates")
         val locationRequest = LocationRequest.create().apply {
             interval = 5000
             fastestInterval = 2000
             priority = LocationRequest.PRIORITY_HIGH_ACCURACY
         }
-        fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
+        try {
+            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "Location permission is required for tracking", Toast.LENGTH_LONG).show()
+            return
+        }
         Log.d(TAG, "[GPS] Location updates started")
     }
 

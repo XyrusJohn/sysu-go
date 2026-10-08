@@ -145,6 +145,7 @@ class QRScanActivity : AppCompatActivity() {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 

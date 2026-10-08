@@ -1,6 +1,9 @@
 package com.sysu.go.activities
 
 import android.os.Bundle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -65,12 +68,25 @@ class SignaturePadBottomSheet : BottomSheetDialogFragment() {
                 Toast.makeText(requireContext(), "Paki-drawing ang iyong pirma", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val base64 = binding.signaturePad.getSignatureBase64()
-            if (base64 != null) {
-                onSignatureConfirmed?.invoke(base64)
-                dismiss()
-            } else {
-                Toast.makeText(requireContext(), "Pumalya ang pag-save ng signature. Subukan ulit.", Toast.LENGTH_SHORT).show()
+            binding.btnConfirm.isEnabled = false
+            binding.btnClear.isEnabled = false
+            viewLifecycleOwner.lifecycleScope.launch {
+                try {
+                val base64 = binding.signaturePad.getSignatureBase64()
+                if (base64 != null) {
+                    onSignatureConfirmed?.invoke(base64)
+                    dismiss()
+                } else {
+                    Toast.makeText(requireContext(), "Pumalya ang pag-save ng signature. Subukan ulit.", Toast.LENGTH_SHORT).show()
+                }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (isAdded) Toast.makeText(requireContext(), "Unable to save signature. Please retry.", Toast.LENGTH_SHORT).show()
+                } finally {
+                    _binding?.btnConfirm?.isEnabled = true
+                    _binding?.btnClear?.isEnabled = true
+                }
             }
         }
     }
