@@ -11,4 +11,7 @@ class AccountPolicyTest {
  @Test fun completionContainsNoAuthorizationOrDriverFields(){val fields=AccountPolicy.details("First","","Last","First Last","09123456789");assertEquals(setOf("fn","mi","ln","name","phone"),fields.keys)}
  @Test fun boundedFieldsRejectOversize(){assertThrows(IllegalArgumentException::class.java){AccountPolicy.details("x".repeat(51),"","Last","First Last","09")};assertThrows(IllegalArgumentException::class.java){AccountPolicy.details("First","","Last","x".repeat(101),"09")}}
  @Test fun signupRejectsOversizedEmail(){assertThrows(IllegalArgumentException::class.java){AccountPolicy.pending("u","x".repeat(255),"First","","Last","First Last","09","timestamp")}}
+
+ @Test fun allSplitNameAndPhoneBoundsEnforced(){for(fields in listOf(listOf("First","x".repeat(9),"Last","Name","09"),listOf("First","","x".repeat(51),"Name","09"),listOf("First","","Last","Name","x".repeat(31)))){assertThrows(IllegalArgumentException::class.java){AccountPolicy.details(fields[0],fields[1],fields[2],fields[3],fields[4])}}}
+ @Test fun signupRejectsEmptyOrOversizedUID(){for(uid in listOf(" ","x".repeat(129))){assertThrows(IllegalArgumentException::class.java){AccountPolicy.pending(uid,"email","First","","Last","Name","09","time")}}}
 }
