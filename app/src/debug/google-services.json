@@ -1,0 +1,23 @@
+{
+  "project_info": {
+    "project_number": "123456789012",
+    "project_id": "demo-sysu-security",
+    "storage_bucket": "demo-sysu-security.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123456789012:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.sysu.go.debug"
+        }
+      },
+      "api_key": [
+        {
+          "current_key": "AIzaSyDemoEmulatorOnly00000000000000000000"
+        }
+      ]
+    }
+  ],
+  "configuration_version": "1"
+}

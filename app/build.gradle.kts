@@ -23,10 +23,11 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
             signingConfig = signingConfigs.getByName("debug")
-            buildConfigField("String", "API_BASE_URL", "\"https://sysu-go-production.up.railway.app\"")
-            buildConfigField("String", "SOCKET_URL", "\"https://sysu-go-production.up.railway.app\"")
-            buildConfigField("String", "FRONTEND_URL", "\"https://sysu-web-5a25d.web.app\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3000\"")
+            buildConfigField("String", "SOCKET_URL", "\"http://10.0.2.2:3000\"")
+            buildConfigField("String", "FRONTEND_URL", "\"http://10.0.2.2:5173\"")
         }
         release {
             isMinifyEnabled = false
@@ -113,6 +114,14 @@ tasks.register<JacocoReport>("qrTransportCoverage") {
     classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
         include("com/sysu/go/network/QrHttpClient*.class")
     })
+    sourceDirectories.setFrom(files("src/main/java"))
+    reports { xml.required.set(true); html.required.set(true) }
+}
+
+tasks.register<JacocoReport>("environmentPolicyCoverage") {
+    dependsOn("testDebugUnitTest")
+    executionData(layout.buildDirectory.file("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec"))
+    classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) { include("com/sysu/go/config/EnvironmentPolicy*.class") })
     sourceDirectories.setFrom(files("src/main/java"))
     reports { xml.required.set(true); html.required.set(true) }
 }
