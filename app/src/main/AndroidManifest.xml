@@ -42,7 +42,7 @@
 
     <application
         android:name=".GoApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/main_logo"
@@ -97,6 +97,7 @@
 
         <activity
             android:name=".activities.QueueDetailsActivity"
+            android:launchMode="singleTop"
             android:exported="false"/>
 
         <activity
@@ -144,6 +145,7 @@
 
         <activity
             android:name=".activities.GeneralTrackingActivity"
+            android:launchMode="singleTop"
             android:exported="false" />
 
     </application>

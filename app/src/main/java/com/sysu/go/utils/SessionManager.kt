@@ -98,6 +98,10 @@ class SessionManager(context: Context) {
 
     fun getDriverCompany(): String = prefs.getString(KEY_DRIVER_COMPANY, "") ?: ""
 
+    fun saveDriverCompany(company: String) {
+        prefs.edit { putString(KEY_DRIVER_COMPANY, company) }
+    }
+
     /**
      * Returns Triple(driverFN, driverMI, driverLN).
      * Falls back to parsing getDriverName() if stored fields are blank.

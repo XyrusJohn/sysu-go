@@ -1,5 +1,42 @@
 # SYSU Go Mobile App — Integration Checklist
 
+Historical test totals below are scoped to their dated runs. Use [FIX_TRACKER.md](FIX_TRACKER.md) for canonical finding status; local automation does not establish phone or deployed acceptance.
+
+
+## Automation checkpoint — 2026-10-14
+
+- [x] Native UI/camera 16/16 includes real bundled QR decoding/registration, preview/zoom/cancel, dynamic Home/Details queue ranks, historical assignment exclusion and owned two-OBD loading progress.
+- [x] Mobile backend 140/140; both shared local Firestore policies 29/29; Android debug/release units 79/79 each.
+- [x] Disable sensitive app backup and verify source exclusions plus compiled `allowBackup=false`.
+- [x] Browser regression 16/16; liveTest build/lint, compiled network policy, signature and ZIP page alignment pass.
+- [x] Expanded paired native-to-web final run 4/4, zero failed/skipped/retries. [Canonical evidence](../../sysu-app/docs/automated-release-validation.md).
+- [x] G-30: user-approved CameraX/ML Kit updates, build/unit/lint/signature/ZIP checks and strict 16 KB camera/QR runtime smoke 2/2 pass.
+- [ ] G-30: three vendor-library static RELRO alignment failures remain on release/liveTest APKs.
+- [x] Matching own-position backend deployed as controlled beta (`5c2b152a-714d-46a8-9b33-6f6a3be41afd` SUCCESS); post-deploy health/queue/CORS/authenticated sockets and six availability observations pass. [Evidence and rollback](../../sysu-app/docs/controlled-beta-deployment-2026-10-14.md).
+- [ ] User installs matching tested APK and performs actual-trip acceptance. Broader strict-policy, signing, IAM, physical-device and G-30 static-alignment gates remain separate.
+
+## Current production recovery — 2026-10-09
+
+Follow the [workspace plan](../../production-recovery-plan.md); finding status is in [FIX_TRACKER.md](FIX_TRACKER.md). Historical DONE rows below do not establish that the current live cross-app trip works.
+
+- [x] G-29/W-08 tracking review and small implementation plan prepared. [Executed baseline and 31-scenario matrix](../../sysu-app/docs/live-location-optimization-plan.md).
+- [x] Implement one service GPS sender, fresh reconnect, ordered web markers and bounded guarded checkpoints; regression suites, build and signature pass. [Current evidence](../../sysu-app/docs/live-location-optimization-plan.md#implementation-checkpoint--2026-10-09).
+- [ ] Install the intended APK and perform phone-to-web GPS/background/reconnect/return/closure acceptance and battery/latency/write-count measurements.
+- [ ] G-26: registered-queue index and exact live query pass (verified); authorized read and actual registration still need acceptance.
+- [ ] W-03: hosted Queue displays the persisted registration and polls successfully.
+- [ ] G-27/W-05: old shipments stay out of the new queue; registered driver card and new assignment pass workspace plan Q01–Q10.
+- [x] G-27 implementation and 122/122 Android unit executions; liveTest APK build/lint/signature pass. Web card fix is deployed. [Executed evidence](../../sysu-app/docs/archive/queue-card-recovery-2026-10-09.md). APK installation and actual-device UI/return flow remain open.
+- [x] W-06 production kiosk access hotfix: user confirmed the registered AUV card appears after resolving the legacy super-admin 403. The reported installed phone counted unregistered waiting entries; G-28 fixes that behavior in the rebuilt APK, with S05 actual-device agreement pending installation.
+- [x] G-28 implemented: shared registered-position policy and live details snapshots; Android 138/138, mobile backend 119/119 and web backend 149/149 pass; updated APK build/lint/signature pass. [Evidence](queue-position-recovery-2026-10-09.md).
+- [ ] S05/G-28: install the updated APK and confirm both phone screens match web, including 3→2→1 assignment progression without reopening details.
+- [x] Run guarded QR/trip/POD integration cases and Android debug/release unit checks (47/47 and 106/106).
+- [ ] S01–S05: actual Android/web login, QR, trip registration, Queue group/order and duplicate prevention.
+- [ ] S06–S08: intended assignment/OBDs, loading/capacity, transit/location on web.
+- [ ] S09–S12: POD preview, delivery/return/next trip, cancellation/reassignment and recovery.
+- [ ] Record installed APK, service/index versions and sanitized expected/actual results.
+
+Current evidence: mobile backend 119/119, guarded integration 47/47 (earlier recovery) and Android debug/release unit tests 138/138 executions after G-28. Web backend 149/149 passes, including matching position progression. Latest web browser workflows remain the previous 14/14 run including legacy super-admin kiosk access; earlier W-04 disabled-session repeats passed 6/6, without automatic retries. [Browser evidence](../../sysu-app/docs/archive/queue-card-recovery-2026-10-09.md#w-06-production-super-admin-403). These are not actual Android device tests. Full phone-to-web acceptance remains unverified.
+
 > **Generated:** 2026-08-01  
 > **Branch:** `main`  
 > **Purpose:** Modular checklist for cross-team integration (Mobile ↔ Sysu Web App)  

@@ -413,6 +413,15 @@ class ReturnToBaseBottomSheet : DialogFragment() {
      *   - drivers.returnedToBaseAt = now
      */
     private fun performStartReturning() {
+        val docIds = getAllDocIds()
+        if (docIds.isEmpty()) {
+            Toast.makeText(requireContext(), "Walang shipment na naka-link sa biyahe.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!com.sysu.go.utils.PermissionHelper.hasLocationPermission(requireContext())) {
+            Toast.makeText(requireContext(), "Kailangan ng Location Permission para ma-track ang biyahe pabalik sa base.", Toast.LENGTH_LONG).show()
+            return
+        }
         showLoading("Saving return status...")
 
         val now = Timestamp.now()
@@ -430,18 +439,25 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         .await()
                 }
 
-                val docIds = getAllDocIds()
                 for (docId in docIds) {
-                    try {
-                        db.collection("sap_assignments").document(docId)
-                            .update(mapOf(
-                                "tripStatus" to "returning_to_base",
-                                "returnStatus" to "returning_to_base"
-                            ))
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error updating assignment $docId to returning_to_base: ${e.message}")
-                    }
+                    db.collection("sap_assignments").document(docId)
+                        .update(mapOf(
+                            "tripStatus" to "returning_to_base",
+                            "returnStatus" to "returning_to_base"
+                        ))
+                        .await()
                 }
+
+                // Restore an owned assignment anchor and GPS tracking for the return leg.
+                val trackingAnchor = docIds.first()
+                sessionManager.saveActiveSapDocId(trackingAnchor)
+                sessionManager.saveCurrentSapDocId(trackingAnchor)
+                sessionManager.setTripActive(true)
+                sessionManager.setTrackingActive(true)
+                ContextCompat.startForegroundService(
+                    requireContext(),
+                    Intent(requireContext(), LocationServices::class.java)
+                )
 
                 Log.d(TAG, "performStartReturning: driver → returning_to_base (isReturning=true)")
                 // Mark driver-level status for the Profile badge and Socket.IO broadcast
@@ -618,9 +634,8 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     }
                 }
 
-                // Strict presence & map marker drop:
-                // 1. Emit explicit 'completed' status so sysu-app Overview Map removes the truck marker immediately.
-                // 2. Clear tracking state so LocationServices GPS updates stop.
+                // Stop this trip's tracking before releasing the queue; a new QR session
+                // must not have its map marker or local session cleared by this completion.
                 sessionManager.setTrackingActive(false)
                 sessionManager.clearTripSession()
                 try {
@@ -630,7 +645,6 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     if (uid != null) {
                         SocketManager.emitCompletedStatus(uid, driverName)
                         SocketManager.emitStatusUpdate("completed", driverName)
-                        // Clean up live tracking collection in Firestore so overview map removes marker immediately
                         db.collection("driver_locations").document(uid).delete()
                     }
                     requireContext().stopService(Intent(requireContext(), LocationServices::class.java))
@@ -638,47 +652,31 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     Log.w(TAG, "performConfirmArrival: completed/offline emit skipped — ${e.message}")
                 }
 
-                // Clear queue doc ID from local session — releases driver from queue lookup
-                sessionManager.saveCurrentQueueDocId(null)
+                // Release only the captured queue session. Never close every active queue for this
+                // driver: a fresh QR scan may create the next session as soon as this one is closed.
+                val queueCompletion = mapOf(
+                    "status" to "completed",
+                    "overallTripStatus" to "completed",
+                    "completedAt" to FieldValue.serverTimestamp(),
+                    "isAssigned" to false
+                )
+                if (!queueDocId.isNullOrBlank()) {
+                    db.collection("queue").document(queueDocId).update(queueCompletion).await()
+                    Log.d(TAG, "performConfirmArrival: queue $queueDocId marked completed")
+                } else {
+                    val assignmentQueueIds = docIds.mapNotNull { docId ->
+                        db.collection("sap_assignments").document(docId).get().await().getString("queueId")
+                            ?.takeIf { it.isNotBlank() }
+                    }.distinct()
+                    val assignmentQueueId = assignmentQueueIds.singleOrNull()
+                        ?: throw IllegalStateException("Cannot identify the exact queue session to complete")
+                    db.collection("queue").document(assignmentQueueId).update(queueCompletion).await()
+                    Log.d(TAG, "performConfirmArrival: resolved queue $assignmentQueueId marked completed")
+                }
 
-                // Update Firestore queue documents to complete this trip cycle and remove from Queue Command Center
-                try {
-                    val currentDriverId = sessionManager.getDriverId() ?: FirebaseAuth.getInstance().currentUser?.uid
-
-                    // 1. Direct update if queueDocId was stored in session
-                    if (!queueDocId.isNullOrBlank()) {
-                        db.collection("queue").document(queueDocId)
-                            .update(mapOf(
-                                "status" to "completed",
-                                "overallTripStatus" to "completed",
-                                "completedAt" to FieldValue.serverTimestamp(),
-                                "isAssigned" to false
-                            ))
-                            .await()
-                        Log.d(TAG, "performConfirmArrival: queue $queueDocId marked completed")
-                    }
-
-                    // 2. Query and mark ALL active/waiting queue entries for this driver as completed
-                    if (!currentDriverId.isNullOrBlank()) {
-                        val activeQueueDocs = db.collection("queue")
-                            .whereEqualTo("driverId", currentDriverId)
-                            .whereIn("status", listOf("waiting", "called", "loading", "assigned", "in_transit"))
-                            .get()
-                            .await()
-                        for (qDoc in activeQueueDocs.documents) {
-                            db.collection("queue").document(qDoc.id)
-                                .update(mapOf(
-                                    "status" to "completed",
-                                    "overallTripStatus" to "completed",
-                                    "completedAt" to FieldValue.serverTimestamp(),
-                                    "isAssigned" to false
-                                ))
-                                .await()
-                            Log.d(TAG, "performConfirmArrival: active queue doc ${qDoc.id} marked completed")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "performConfirmArrival: queue doc update failed: ${e.message}")
+                // Do not erase a newly admitted queue ID if MainActivity already observed the next scan.
+                if (sessionManager.getCurrentQueueDocId() == queueDocId) {
+                    sessionManager.saveCurrentQueueDocId(null)
                 }
 
                 dismiss()

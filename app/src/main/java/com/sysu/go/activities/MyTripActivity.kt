@@ -1057,11 +1057,12 @@ class MyTripActivity : AppCompatActivity() {
                 }
                 if (isFinishing) return@addSnapshotListener
 
-                // Filter out terminal trip states; completed/delivered docs still exist
-                // for history but shouldn't render as active cards.
+                // Render active shipments from this QR queue session only; prior trips remain history.
+                val currentQueueId = sessionManager.getCurrentQueueDocId()
                 val active = snaps.documents.filter { doc ->
                     val s = doc.getString("tripStatus")
-                    s != "completed" && s != "delivered"
+                    s != "completed" && s != "delivered" &&
+                        (currentQueueId.isNullOrBlank() || doc.getString("queueId") == currentQueueId)
                 }
 
                 val list = active.mapNotNull { snap ->
@@ -1512,44 +1513,45 @@ class MyTripActivity : AppCompatActivity() {
 
                 Log.d(TAG, "endSingleShipment: $docId → completed")
 
-                // Update queue doc array entry if available
+                // Update the queue's shipment summary before advancing the tracking anchor.
                 val queueId = sessionManager.getCurrentQueueDocId()
                 if (!queueId.isNullOrBlank()) {
-                    db.collection("queue").document(queueId).get().addOnSuccessListener { qSnap ->
-                        val list = qSnap.get("assignedShipments") as? List<Map<String, Any?>>
-                        if (!list.isNullOrEmpty()) {
-                            val updatedList = list.map { item ->
-                                if (item["dispatchKey"] == docId || item["obdNumber"] == docId) {
-                                    item.toMutableMap().apply { this["tripStatus"] = "completed" }
-                                } else item
-                            }
-                            val allDone = updatedList.all { (it["tripStatus"] as? String) == "completed" }
-                            db.collection("queue").document(queueId).update(mapOf(
-                                "assignedShipments" to updatedList,
-                                "overallTripStatus" to if (allDone) "completed" else "in_transit"
-                            ))
+                    val queueRef = db.collection("queue").document(queueId)
+                    val queueSnapshot = queueRef.get().await()
+                    val assignedShipments = queueSnapshot.get("assignedShipments") as? List<Map<String, Any?>>
+                    if (!assignedShipments.isNullOrEmpty()) {
+                        val updatedShipments = assignedShipments.map { item ->
+                            if (item["dispatchKey"] == docId || item["obdNumber"] == docId) {
+                                item.toMutableMap().apply { this["tripStatus"] = "completed" }
+                            } else item
                         }
+                        val allDone = updatedShipments.all { (it["tripStatus"] as? String) == "completed" }
+                        queueRef.update(mapOf(
+                            "assignedShipments" to updatedShipments,
+                            "overallTripStatus" to if (allDone) "completed" else "in_transit"
+                        )).await()
                     }
-                }
-
-                // If this was the active session shipment, clear session
-                if (sessionManager.getActiveSapDocId() == docId) {
-                    sessionManager.clearTripSession()
                 }
 
                 // Check remaining active shipments in current adapter list
-                val remainingActive = shipmentAdapter.currentList.filter { 
+                val remainingActive = shipmentAdapter.currentList.filter {
                     it.docId != docId && it.tripStatus != "completed" && it.tripStatus != "delivered" 
                 }
 
+                // Keep one owned assignment as the location checkpoint anchor throughout this queue session.
+                // On the final delivery, retain this shipment as the anchor until return-to-base changes it
+                // to returning_to_base, so location updates can continue on the return leg.
+                if (sessionManager.getActiveSapDocId() == docId) {
+                    val trackingAnchor = remainingActive.firstOrNull()?.docId ?: docId
+                    sessionManager.saveActiveSapDocId(trackingAnchor)
+                    sessionManager.saveCurrentSapDocId(trackingAnchor)
+                    sessionManager.setTripActive(true)
+                    sessionManager.setTrackingActive(true)
+                }
+
                 if (remainingActive.isEmpty()) {
-                    // ALL shipments are completed — now emit completed status
+                    // Keep the overview marker and GPS session until base arrival is confirmed.
                     SocketManager.emitDriverFull(false)
-                    val uid = FirebaseAuth.getInstance().currentUser?.uid
-                    val driverName = sessionManager.getDriverName() ?: "Driver"
-                    if (uid != null) {
-                        SocketManager.emitCompletedStatus(uid, driverName)
-                    }
                     runOnUiThread {
                         Toast.makeText(this@MyTripActivity, "Lahat ng karga ay nai-deliver na! Maaari nang bumalik sa planta.", Toast.LENGTH_LONG).show()
                     }

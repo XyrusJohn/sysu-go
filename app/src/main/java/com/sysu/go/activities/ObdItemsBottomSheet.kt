@@ -19,6 +19,8 @@ import com.google.android.material.button.MaterialButton
 import android.util.Log
 import com.sysu.go.R
 import com.sysu.go.databinding.DialogObdItemsBinding
+import com.sysu.go.model.ObdDeliveryGroup
+import com.sysu.go.model.ObdDeliveryGroups
 
 /**
  * Which row layout to inflate per item.
@@ -64,6 +66,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
     var onItemClick: ((item: Map<String, Any?>) -> Unit)? = null
     var onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
+    var onGroupCameraTap: ((lineItems: List<Map<String, Any?>>, shipmentDocId: String) -> Unit)? = null
+    var onGroupUnloadTap: ((lineItems: List<Map<String, Any?>>, shipmentDocId: String) -> Unit)? = null
     /** Called when driver taps DONE UNLOADING — triggers POD capture */
     var onUnloadingDone: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null
     var onRefreshRequest: (() -> Unit)? = null
@@ -163,11 +167,22 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
         val rowInflater = LayoutInflater.from(requireContext())
 
-        lineItems.forEachIndexed { index, item ->
-            val rowView: View = when (rowLayoutType) {
-                RowLayoutType.POD    -> inflatePodRow(rowInflater, container, item)
-                RowLayoutType.DETAIL -> inflateDetailRow(rowInflater, container, item)
+        val rows: List<View> = if (rowLayoutType == RowLayoutType.POD
+            && onGroupCameraTap != null && onGroupUnloadTap != null) {
+            ObdDeliveryGroups.group(lineItems).map { group ->
+                if (group.lineItems.size > 1) inflatePodGroupRow(rowInflater, container, group)
+                else inflatePodRow(rowInflater, container, group.lineItems.single())
             }
+        } else {
+            lineItems.map { item ->
+                when (rowLayoutType) {
+                    RowLayoutType.POD -> inflatePodRow(rowInflater, container, item)
+                    RowLayoutType.DETAIL -> inflateDetailRow(rowInflater, container, item)
+                }
+            }
+        }
+
+        rows.forEachIndexed { index, rowView ->
 
             if (index % 2 == 1) {
                 rowView.findViewById<MaterialCardView>(R.id.cardRoot)?.setCardBackgroundColor(
@@ -181,7 +196,12 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
     // ─── POD row — item_my_trip_obd.xml ─────────────────────────────────────────
 
-    private fun inflatePodRow(inflater: LayoutInflater, container: ViewGroup, item: Map<String, Any?>): View {
+    private fun inflatePodRow(
+        inflater: LayoutInflater,
+        container: ViewGroup,
+        item: Map<String, Any?>,
+        podActionsEnabled: Boolean = podCaptureEnabled
+    ): View {
         Log.d(TAG, "inflatePodRow: obd=${item["obdNumber"]}, unloadStatus=[${item["unloadStatus"] as? String ?: ""}], isPodCompleted=${item["isPodCompleted"]}")
         val rowView = inflater.inflate(R.layout.item_my_trip_obd, container, false) as MaterialCardView
 
@@ -214,7 +234,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
         // Dim the indicator when this row is loading else configure normally
         if (!isLoading) {
-            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, obd, item, podImageUrl)
+            configureStatusPill(tvDeliveryStatus, ivPodIndicator, isPodCompleted, deliveryStatus, obd, item, podImageUrl, podActionsEnabled)
         } else {
             // Loading: keep status pill but dim the indicator
             tvDeliveryStatus.alpha = 1f
@@ -254,6 +274,72 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
         return rowView
     }
+
+    private fun inflatePodGroupRow(inflater: LayoutInflater, parent: ViewGroup, group: ObdDeliveryGroup): View {
+        val row = inflater.inflate(R.layout.item_obd_delivery_group, parent, false)
+        val first = group.lineItems.first()
+        val pendingItems = group.lineItems.filter { it["isPodCompleted"] != true }
+        val completedCount = group.lineItems.count { it["isPodCompleted"] == true }
+        val statuses = group.lineItems.mapNotNull { item ->
+            (item["deliveryStatus"] as? String)?.trim()?.takeIf(String::isNotEmpty)
+        }.distinct()
+        val tvCustomer = row.findViewById<TextView>(R.id.tvGroupCustomer)
+        val tvDestination = row.findViewById<TextView>(R.id.tvGroupDestination)
+        val tvMetrics = row.findViewById<TextView>(R.id.tvGroupMetrics)
+        val tvStatus = row.findViewById<TextView>(R.id.tvGroupStatus)
+        val tvAction = row.findViewById<TextView>(R.id.tvGroupAction)
+        val tvExpand = row.findViewById<TextView>(R.id.tvGroupExpand)
+        val details = row.findViewById<ViewGroup>(R.id.llGroupObdItems)
+
+        tvCustomer.text = first["customerName"] as? String ?: "—"
+        tvDestination.text = "Ship-To ${first["shipTo"] ?: "—"} • ${first["deliveryAddress"] ?: "—"}"
+        tvMetrics.text = "${group.lineItems.size} rows • ${group.obdNumbers.size} OBDs  •  Vol ${metric(group.volume)} m³  •  Wt ${metric(group.weight)} kg  •  Qty ${metric(group.quantity)}"
+        tvStatus.text = when {
+            group.allPendingComplete && statuses.size == 1 -> statuses.single().uppercase()
+            group.allPendingComplete -> "MIXED"
+            completedCount > 0 -> "$completedCount DONE • ${group.pendingObdNumbers.size} PENDING"
+            else -> "PENDING"
+        }
+        val statusColor = when {
+            group.allPendingComplete && statuses.size == 1 && statuses.single().equals("All Delivered", true) -> R.color.sysu_green
+            group.allPendingComplete && statuses.size == 1 && statuses.single().equals("Rejected", true) -> R.color.text_red
+            else -> R.color.text_amber
+        }
+        tvStatus.setBackgroundResource(R.drawable.bg_status_pill_amber)
+        tvStatus.setTextColor(ContextCompat.getColor(requireContext(), statusColor))
+
+        if (podCaptureEnabled && group.pendingObdNumbers.isNotEmpty()) {
+            tvAction.visibility = View.VISIBLE
+            val captureReady = group.allPendingUnloading
+            tvAction.text = if (captureReady) "CAPTURE GROUP" else "UNLOAD GROUP"
+            if (captureReady) {
+                tvAction.setBackgroundResource(R.drawable.bg_status_pill_orange)
+                tvAction.setTextColor(ContextCompat.getColor(requireContext(), R.color.white))
+            }
+            tvAction.setOnClickListener {
+                val targets = pendingItems.filter { (it["obdNumber"] as? String)?.trim() in group.pendingObdNumbers }
+                if (captureReady) onGroupCameraTap?.invoke(targets, shipmentDocId)
+                else onGroupUnloadTap?.invoke(targets, shipmentDocId)
+            }
+        } else {
+            tvAction.visibility = View.GONE
+        }
+
+        group.lineItems.forEachIndexed { index, item ->
+            val child = inflatePodRow(inflater, details, item)
+            if (index % 2 == 1) child.findViewById<MaterialCardView>(R.id.cardRoot)?.setCardBackgroundColor(
+                ContextCompat.getColor(requireContext(), R.color.surface2)
+            )
+            details.addView(child)
+        }
+        tvExpand.setOnClickListener {
+            details.isVisible = !details.isVisible
+            tvExpand.text = if (details.isVisible) "HIDE OBDs  ▲" else "VIEW OBDs  ▼"
+        }
+        return row
+    }
+
+    private fun metric(value: Double): String = String.format(java.util.Locale.US, "%.3f", value)
 
     // ─── DETAIL row — item_obd_detail.xml ──────────────────────────────────────
 
@@ -377,7 +463,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
         deliveryStatus: String,
         obdNumber: String = "",
         item: Map<String, Any?> = emptyMap(),
-        @Suppress("UNUSED_PARAMETER") podImageUrl: String = ""
+        @Suppress("UNUSED_PARAMETER") podImageUrl: String = "",
+        podActionsEnabled: Boolean = podCaptureEnabled
     ) {
         val ctx = requireContext()
 
@@ -410,7 +497,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
 
                     // ── Gate all action buttons behind podCaptureEnabled ──
                     // When trip is NOT in_transit, hide UNLOAD/CAPTURE/CANCEL — read-only view only
-                    if (!podCaptureEnabled) {
+                    if (!podActionsEnabled) {
                         tvUnloadAction?.visibility = View.GONE
                         tvCancelUnload?.visibility = View.GONE
                         return@let
@@ -509,7 +596,7 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 val tvRetake = rowCardView?.findViewById<TextView>(R.id.tvUnloadAction)
                 val tvCancelUnload = rowCardView?.findViewById<TextView>(R.id.tvCancelUnload)
                 tvCancelUnload?.visibility = View.GONE
-                if (podCaptureEnabled) {
+                if (podActionsEnabled) {
                     tvRetake?.visibility = View.VISIBLE
                     tvRetake?.text = "RETAKE"
                     tvRetake?.setBackgroundResource(R.drawable.bg_status_pill_outline_grey)
@@ -592,6 +679,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
             podCaptureEnabled: Boolean = true,
             onItemClick: ((item: Map<String, Any?>) -> Unit)? = null,
             onObdCameraTap: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
+            onGroupCameraTap: ((lineItems: List<Map<String, Any?>>, shipmentDocId: String) -> Unit)? = null,
+            onGroupUnloadTap: ((lineItems: List<Map<String, Any?>>, shipmentDocId: String) -> Unit)? = null,
             onUnloadingDone: ((lineItem: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
             onRetakeTap: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
             onUnloadConfirm: ((item: Map<String, Any?>, shipmentDocId: String) -> Unit)? = null,
@@ -604,6 +693,8 @@ class ObdItemsBottomSheet : BottomSheetDialogFragment() {
                 this.podCaptureEnabled = podCaptureEnabled
                 this.onItemClick = onItemClick
                 this.onObdCameraTap = onObdCameraTap
+                this.onGroupCameraTap = onGroupCameraTap
+                this.onGroupUnloadTap = onGroupUnloadTap
                 this.onUnloadingDone = onUnloadingDone
                 this.onRetakeTap = onRetakeTap
                 this.onUnloadConfirm = onUnloadConfirm

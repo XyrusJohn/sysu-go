@@ -34,6 +34,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.sysu.go.R
 import com.sysu.go.model.Assignment
+import com.sysu.go.model.TripSessionPolicy
 import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.SessionManager
 
@@ -143,7 +144,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let {
-                    Log.d(TAG, "[GPS] Location received: ${it.latitude}, ${it.longitude}, accuracy: ${it.accuracy}")
+
                     runOnUiThread {
                         tvCurrentLocation.text = "Location: ${String.format("%.6f", it.latitude)}, ${String.format("%.6f", it.longitude)}"
                         tvCurrentLocation.setTextColor(ContextCompat.getColor(this@GeneralTrackingActivity, R.color.sysu_red))
@@ -152,7 +153,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
                         updateGpsSignal(it.accuracy)
                     }
 
-                    pushLocationUpdate(it.latitude, it.longitude)
+
                 }
             }
         }
@@ -166,89 +167,6 @@ class GeneralTrackingActivity : AppCompatActivity() {
         // Check location permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
-        }
-    }
-
-    // Iniisa ang emit (Socket.IO) + dual-write (Firestore) logic para magamit
-    // parehas ng periodic locationCallback AT ng "push agad" sa startTracking().
-    private fun pushLocationUpdate(lat: Double, lng: Double) {
-        if (!isTrackingStarted) return
-
-        val session = SessionManager(this)
-
-        // Guard Clause: Halt if session was already closed by BottomSheet or other process
-        if (!session.isTrackingActive()) {
-            Log.w(TAG, "[GPS] Ghost tick detected! Session is inactive. Stopping tracker.")
-            stopTracking()
-            return
-        }
-
-        val sapDocId = session.getActiveSapDocId()
-        val currentUid = FirebaseAuth.getInstance().currentUser?.uid ?: session.getDriverId()
-
-        if (currentUid.isNullOrBlank()) return
-        val driverName = session.getDriverName() ?: "Driver"
-
-        // 1. Socket.IO: emit driver_moving (ito ang iniintay ng server.js para mag-emit ng update_admin_map sa overview map!)
-        SocketManager.emitDriverMoving(lat, lng, sapDocId, status = "online")
-        Log.d(TAG, "[SOCKET] Emitted driver_moving: lat=$lat, lng=$lng, sapDocId=$sapDocId")
-
-        // 2. Firestore: dual-write sa driver_locations para sa web overview map na naka-Firestore listener
-        val locData = hashMapOf(
-            "driverId" to currentUid,
-            "name" to driverName,
-            "lat" to lat,
-            "lng" to lng,
-            "status" to "online",
-            "sapDocId" to sapDocId,
-            "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-        )
-        db.collection("driver_locations")
-            .document(currentUid)
-            .set(locData, com.google.firebase.firestore.SetOptions.merge())
-
-        if (!sapDocId.isNullOrBlank()) {
-            db.collection("sap_assignments")
-                .document(sapDocId)
-                .update(
-                    mapOf(
-                        "lastLocation.lat" to lat,
-                        "lastLocation.lng" to lng,
-                        "lastLocation.at" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                    )
-                )
-        }
-    }
-
-    // Kunin agad ang pinaka-fresh na fix (hindi lang basta cached lastLocation, kasi
-    // pwedeng null/stale yun kung matagal nang hindi na-touch ang GPS ng OS) at i-push
-    // kaagad sa socket + Firestore. Ito yung "instant on click" na location bago pa man
-    // dumating yung unang periodic tick ng locationCallback — dahil dun sa dating code,
-    // kailangan pa munang gumalaw ng driver bago mag-fire ang unang onLocationResult,
-    // kaya blangko muna sa overview map hanggang sa gumalaw siya.
-    @Suppress("MissingPermission")
-    private fun pushImmediateLocation() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED) return
-
-        val cts = com.google.android.gms.tasks.CancellationTokenSource()
-        fusedLocationClient.getCurrentLocation(
-            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
-            cts.token
-        ).addOnSuccessListener { location ->
-            if (location == null) {
-                Log.w(TAG, "[GPS] getCurrentLocation returned null, waiting for first periodic tick instead")
-                return@addOnSuccessListener
-            }
-            Log.d(TAG, "[GPS] Immediate fix on Start Tracking: ${location.latitude}, ${location.longitude}")
-            runOnUiThread {
-                tvCurrentLocation.text = "Location: ${String.format("%.6f", location.latitude)}, ${String.format("%.6f", location.longitude)}"
-                tvCurrentLocation.setTextColor(ContextCompat.getColor(this, R.color.sysu_red))
-                updateGpsSignal(location.accuracy)
-            }
-            pushLocationUpdate(location.latitude, location.longitude)
-        }.addOnFailureListener { e ->
-            Log.w(TAG, "[GPS] Immediate fix failed: ${e.message}, waiting for first periodic tick instead")
         }
     }
 
@@ -285,16 +203,8 @@ class GeneralTrackingActivity : AppCompatActivity() {
             session.setTrackingActive(true)
             isTrackingStarted = true
 
-            SocketManager.disconnect()
             SocketManager.connect(this)
-            Log.d(TAG, "[SOCKET] Reconnecting socket before starting location updates...")
-
             startLocationUpdates()
-
-            // Huwag hintayin ang unang periodic tick (na kailangan pa munang gumalaw
-            // ang driver) — kumuha agad ng fresh fix at i-push kaagad papuntang
-            // overview map sa mismong sandaling na-click ang "Start Tracking".
-            pushImmediateLocation()
 
             val serviceIntent = Intent(this, com.sysu.go.services.LocationServices::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
@@ -372,23 +282,27 @@ class GeneralTrackingActivity : AppCompatActivity() {
         val activeDocId = session.getActiveSapDocId()
         val isReturningToBase = allAssignments.any { it.tripStatus == "returning_to_base" }
 
-        // ═══ ENTERPRISE GATE: Lock start button if no trip is selected ═══
+        // ═══ ENTERPRISE GATE: Lock start button if no trip is selected OR tracking is active ═══
         val canStartTracking = isTripActive && !activeDocId.isNullOrEmpty()
-        btnStartTracking.isEnabled = canStartTracking
+
         if (!canStartTracking) {
+            btnStartTracking.isEnabled = false
             btnStartTracking.alpha = 0.4f
             btnStartTracking.text = if (isReturningToBase) "Returning to Base" else "Select Trip First"
             btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
             btnStartTracking.setOnClickListener { /* Do nothing */ }
         } else {
-            btnStartTracking.alpha = 1.0f
             if (isTrackingStarted) {
-                // Gawing STOP button kapag nagta-track na
-                btnStartTracking.text = "Stop Tracking"
-                btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_amber)
-                btnStartTracking.setOnClickListener { stopTracking() }
+                // TANGGAL ANG "STOP TRACKING". Naka-lock na ang button as "Tracking in Progress"
+                btnStartTracking.isEnabled = false
+                btnStartTracking.alpha = 0.7f
+                btnStartTracking.text = "Tracking in Progress"
+                btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.transit_green)
+                btnStartTracking.setOnClickListener { /* Locked - walang mangyayari */ }
             } else {
-                // Gawing START button kapag naka-pause
+                // Gawing START button kapag hindi pa nag-uumpisa
+                btnStartTracking.isEnabled = true
+                btnStartTracking.alpha = 1.0f
                 btnStartTracking.text = "Start Tracking"
                 btnStartTracking.backgroundTintList = ContextCompat.getColorStateList(this, R.color.sysu_red)
                 btnStartTracking.setOnClickListener { startTracking() }
@@ -425,8 +339,8 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
     private fun updateSocketStatus() {
         val isConnected = SocketManager.isConnected()
-        val statusText = if (isConnected) "Socket: Connected" else "Socket: Disconnected"
-        val statusColor = if (isConnected) R.color.transit_green else R.color.text_secondary
+        val statusText = if (isConnected) "Socket: Connected" else "Socket: Reconnecting..."
+        val statusColor = if (isConnected) R.color.transit_green else R.color.sysu_amber
 
         tvSocketStatus.text = statusText
         tvSocketStatus.setTextColor(ContextCompat.getColor(this, statusColor))
@@ -570,17 +484,54 @@ class GeneralTrackingActivity : AppCompatActivity() {
             .whereEqualTo("driverId", driverId)
             .addSnapshotListener { snaps, error ->
                 if (error != null || snaps == null) return@addSnapshotListener
-                val allList = snaps.documents.mapNotNull { buildAssignmentFromSnap(it) }
+                val session = SessionManager(this)
+                val currentQueueId = session.getCurrentQueueDocId()
+                val fetchedAssignments = snaps.documents.mapNotNull { buildAssignmentFromSnap(it) }
+                val activeStatuses = setOf("assigned", "loading", "loaded", "fully_loaded", "in_transit", "returning_to_base")
+                val currentActiveDocId = session.getActiveSapDocId()
+                val activeAssignments = fetchedAssignments.filter { it.tripStatus in activeStatuses }
+                val assignmentQueueId = fetchedAssignments
+                    .firstOrNull { it.docId == currentActiveDocId }
+                    ?.queueId
+                    ?.takeIf { it.isNotBlank() }
+                val inferredQueueId = assignmentQueueId ?: activeAssignments
+                    .map { it.queueId }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .singleOrNull()
+                val scopedQueueId = currentQueueId?.takeIf { it.isNotBlank() } ?: inferredQueueId
+                val allList = if (scopedQueueId != null && scopedQueueId.isNotBlank()) {
+                    fetchedAssignments.filter { it.queueId == scopedQueueId }
+                } else {
+                    // Ambiguous legacy records must not combine separate queue sessions.
+                    fetchedAssignments.filter { it.queueId.isBlank() && it.tripStatus in activeStatuses }
+                }
                 allAssignments = allList
 
-                val session = SessionManager(this)
-                val currentActiveDocId = session.getActiveSapDocId()
-
-                // Source of truth for locking = Firestore tripStatus (in_transit or returning_to_base)
                 val inTransitAssignment = allList.firstOrNull { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }
+                val currentAnchor = allList.firstOrNull { it.docId == currentActiveDocId }
+                val sessionAnchor = currentAnchor ?: allList.firstOrNull()
+                val hasOpenShipment = allList.any { it.tripStatus in activeStatuses }
+                val allPODsComplete = allList.isNotEmpty() && allList.all {
+                    it.tripStatus == "completed" || it.tripStatus == "delivered" || isAssignmentPodComplete(it)
+                }
                 if (inTransitAssignment != null) {
                     session.saveActiveSapDocId(inTransitAssignment.docId)
                     session.setTripActive(true)
+                } else if (TripSessionPolicy.shouldPreserve(
+                        tripActive = session.isTripActive(),
+                        hasCurrentQueueAnchor = sessionAnchor != null,
+                        hasOpenShipment = hasOpenShipment,
+                        allDeliveriesComplete = allPODsComplete
+                    )) {
+                    // Keep the session alive between shipment PODs and while waiting to start the return leg.
+                    // The return action changes the checkpoint assignment to returning_to_base.
+                    sessionAnchor?.docId?.let { anchorId ->
+                        if (session.getActiveSapDocId() != anchorId) {
+                            session.saveActiveSapDocId(anchorId)
+                            session.saveCurrentSapDocId(anchorId)
+                        }
+                    }
                 } else if (!currentActiveDocId.isNullOrEmpty() || isTrackingStarted) {
                     // Stale session cleanup
                     session.saveActiveSapDocId(null)
@@ -609,7 +560,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
     }
 
     private fun buildAssignmentFromSnap(doc: DocumentSnapshot): Assignment? {
-        val queueId = doc.getString("driverId") ?: ""
+        val queueId = doc.getString("queueId") ?: ""
         val tripStatus = doc.getString("tripStatus")
         val guardVerified = doc.getBoolean("guardVerified") ?: false
         val driverConfirmed = doc.getBoolean("driverConfirmed") ?: false

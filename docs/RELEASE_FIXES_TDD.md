@@ -20,7 +20,7 @@ Android's two existing unit tests passed when executed by the successful rerun; 
 
 Auth and retired route source reviewed in full; strict status avoids treating missing/inactive/pending identities as approved. Endpoint retirement intentionally removes duplicate unsafe administration instead of approximating hierarchy/recovery. Mandatory Auth middleware does not authorize every operation by itself: dispatch/trip/socket/QR/rules issues remain explicit G-07 through G-15. Existing Android permission-method changes staged separately from other pre-existing activity changes; server/manifest/socket/other changes remain preserved. Lint is static evidence; signature and permission device behavior still require instrumentation. Entire app source/secret-history/dependency audit, backend emulator integration, release lint, clean artifact and staged metrics are not complete.
 
-Release verdict: **NOT READY**. See FIX_TRACKER.md and RELEASE_TEST_PLAN.md for remaining conditions. Prior TODO_BUGS/assessment claims are historical input; clearSession already clears all preferences and SocketManager already refreshes tokens, so these claims were corrected rather than blindly implemented.
+Release verdict at this evidence checkpoint: **NOT READY**. See [FIX_TRACKER.md](FIX_TRACKER.md) and [RELEASE_TEST_PLAN.md](RELEASE_TEST_PLAN.md) for current conditions. Prior TODO_BUGS/assessment reports are preserved as unverified history in [docs/archive/legacy-assessments](archive/legacy-assessments/); current code already clears all session preferences and refreshes Firebase tokens, so the old claims were not treated as implementation facts.
 
 ## Transactional trip registration and credential containment
 

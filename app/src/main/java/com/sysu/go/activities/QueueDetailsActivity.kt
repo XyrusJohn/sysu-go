@@ -63,6 +63,9 @@ class QueueDetailsActivity : AppCompatActivity() {
     private var currentLineItems: List<Map<String, Any?>> = emptyList()
     private var hasShipment: Boolean = false   // true only when sap_assignment doc is loaded
     private var queueDriverId: String = ""    // Firebase UID — used for requirements lookup
+    private var queueListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var positionJob: kotlinx.coroutines.Job? = null
+    private var currentQueueStatus: String = ""
 
     // Firestore instance
     private val firestoreDb = FirebaseFirestore.getInstance()
@@ -77,6 +80,7 @@ class QueueDetailsActivity : AppCompatActivity() {
 
     // POD State Variables
     private var pendingObdItem: Map<String, Any?>? = null
+    private var pendingObdGroupItems: List<Map<String, Any?>> = emptyList()
     private var pendingObdShipmentDocId: String? = null
     private var pendingCapturedAtMillis: Long = 0L
     private var pendingPodData: PendingPodData? = null
@@ -90,7 +94,9 @@ class QueueDetailsActivity : AppCompatActivity() {
         val shipmentDocId: String,
         val capturedAtMillis: Long,
         val latitude: Double? = null,
-        val longitude: Double? = null
+        val longitude: Double? = null,
+        val groupLineItems: List<Map<String, Any?>> = emptyList(),
+        val captureId: String? = null
     )
 
     // Circle animation tracking
@@ -257,6 +263,8 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        queueListener?.remove()
+        positionJob?.cancel()
         super.onDestroy()
         circleAnimators.forEach { it.cancel() }
         circleAnimators.clear()
@@ -270,7 +278,11 @@ class QueueDetailsActivity : AppCompatActivity() {
         binding.btnBack.setOnClickListener { finish() }
 
         binding.btnGoToTracking.setOnClickListener {
-            startActivity(Intent(this, GeneralTrackingActivity::class.java))
+            val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            startActivity(intent)
+            finish()
         }
 
         // OBD items
@@ -289,6 +301,10 @@ class QueueDetailsActivity : AppCompatActivity() {
                     Log.d("OBD", "onObdCameraTap FIRED: obd=$obd, shipmentDocId=$shipmentDocId")
                     showObdStatusSheet(lineItem, shipmentDocId)
                 },
+                onGroupCameraTap = { items, shipmentDocId ->
+                    items.firstOrNull()?.let { showObdStatusSheet(it, shipmentDocId, items) }
+                },
+                onGroupUnloadTap = { items, shipmentDocId -> startGroupUnload(items, shipmentDocId) },
                 onUnloadConfirm = { lineItem, shipmentDocId ->
                     // Handle unload confirmation - set unloadStatus to "UNLOADING" in Firestore
                     val obdNumber = lineItem["obdNumber"] as? String
@@ -401,7 +417,8 @@ class QueueDetailsActivity : AppCompatActivity() {
 
         // ── ATTEMPT 1 ── Primary query using SessionManager's driverId (Firebase UID).
         // Works because queue.driverId field = Firebase UID in Firestore.
-        db.collection("queue")
+        queueListener?.remove()
+        queueListener = db.collection("queue")
             .whereEqualTo("driverId", sessionDriverId)
             .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
             .addSnapshotListener { snapshots, error ->
@@ -621,13 +638,17 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     private fun processQueueDocument(doc: com.google.firebase.firestore.DocumentSnapshot, source: String) {
-        if (isFinishing) return
+        if (isFinishing || isDestroyed) return
         val status = doc.getString("status") ?: "unknown"
+        currentQueueStatus = status
+        positionJob?.cancel()
+        positionJob = null
         Log.d("OBD", ">>> processQueueDocument source=$source status='$status'")
 
         binding.tvQueueNumber.text = status.replaceFirstChar {
             if (it.isLowerCase()) it.titlecase() else it.toString()
         }
+        binding.tvQueueNumberLabel.visibility = View.GONE
 
         // Persist queue doc ID for later lookup
         currentQueueDocId = doc.id
@@ -647,22 +668,26 @@ class QueueDetailsActivity : AppCompatActivity() {
         binding.tvHelper.text     = doc.getString("helper")         ?: "—"
         Log.d("QUEUE_DETAILS", "Helper name from queue doc: ${binding.tvHelper.text}")
 
-        val joinedAt = doc.getTimestamp("joinedAt")
-        if (joinedAt != null) {
-            val truckType = doc.getString("truckType") ?: ""
-            db.collection("queue")
-                .whereEqualTo("truckType", truckType)
-                .whereIn("status", listOf("assigned", "waiting", "called"))
-                .whereEqualTo("registrationComplete", true)
-                .whereLessThan("joinedAt", joinedAt)
-                .get()
-                .addOnSuccessListener { posSnapshots ->
-                    // Only show position number if no shipment has been assigned yet
-                    if (!hasShipment) {
-                        binding.tvQueueNumber.text = (posSnapshots.size() + 1).toString()
-                        binding.tvQueueNumberLabel.visibility = View.VISIBLE
-                    }
+        if (status in listOf("waiting", "called") && doc.getBoolean("isAssigned") != true) {
+            hasShipment = false
+            currentSapDocId = ""
+            currentLineItems = emptyList()
+            binding.tvShipmentNumber.text = "—"
+            binding.tvObdCount.text = "0"
+            binding.btnGoToTracking.visibility = View.GONE
+            if (doc.getBoolean("registrationComplete") != true) {
+                binding.tvQueueNumber.text = "Complete Registration"
+                binding.tvQueueNumberLabel.visibility = View.GONE
+                return
+            }
+            positionJob = com.sysu.go.network.observeQueuePosition(this, doc.id) { position ->
+                    if (isFinishing || isDestroyed || currentQueueDocId != doc.id ||
+                        currentQueueStatus != status || hasShipment) return@observeQueuePosition
+                    binding.tvQueueNumber.text = position?.toString() ?: "Waiting"
+                    binding.tvQueueNumberLabel.visibility = if (position == null) View.GONE else View.VISIBLE
                 }
+            // Waiting admissions must not load historical UID assignments over the queue number.
+            return
         } else if (status == "loading") {
             binding.tvQueueNumber.text = "GO"
         }
@@ -674,6 +699,7 @@ class QueueDetailsActivity : AppCompatActivity() {
             .whereEqualTo("driverId", queueDriverId)
             .get()
             .addOnSuccessListener { assignSnaps ->
+                if (isFinishing || isDestroyed || currentQueueDocId != doc.id || currentQueueStatus != status) return@addOnSuccessListener
                 if (assignSnaps.isEmpty) {
                     Log.d("OBD", ">>> sap_assignments WALA")
                     hasShipment = false
@@ -835,11 +861,13 @@ class QueueDetailsActivity : AppCompatActivity() {
 
     private fun showObdStatusSheet(
         item: Map<String, Any?>,
-        shipmentDocId: String
+        shipmentDocId: String,
+        groupItems: List<Map<String, Any?>> = emptyList()
     ) {
         val capturedAtMillis = System.currentTimeMillis()
 
         pendingObdItem = item
+        pendingObdGroupItems = groupItems
         pendingObdShipmentDocId = shipmentDocId
         pendingCapturedAtMillis = capturedAtMillis
 
@@ -866,6 +894,7 @@ class QueueDetailsActivity : AppCompatActivity() {
     private fun requestFreshLocationAndProceed() {
         val capturedAtMillis = pendingCapturedAtMillis
         val item = pendingObdItem
+        val groupItems = pendingObdGroupItems
         val shipmentDocId = pendingObdShipmentDocId
 
         if (item == null || shipmentDocId == null) {
@@ -888,7 +917,8 @@ class QueueDetailsActivity : AppCompatActivity() {
                         location.longitude,
                         capturedAtMillis,
                         item,
-                        shipmentDocId
+                        shipmentDocId,
+                        groupItems
                     )
                 } else {
                     // Fallback if no cached location
@@ -897,7 +927,8 @@ class QueueDetailsActivity : AppCompatActivity() {
                         null,
                         capturedAtMillis,
                         item,
-                        shipmentDocId
+                        shipmentDocId,
+                        groupItems
                     )
                 }
             }
@@ -907,7 +938,8 @@ class QueueDetailsActivity : AppCompatActivity() {
                     null,
                     capturedAtMillis,
                     item,
-                    shipmentDocId
+                    shipmentDocId,
+                    groupItems
                 )
             }
         } catch (_: SecurityException) {
@@ -920,7 +952,8 @@ class QueueDetailsActivity : AppCompatActivity() {
         lng: Double?,
         capturedAtMillis: Long = pendingCapturedAtMillis,
         item: Map<String, Any?>? = pendingObdItem,
-        shipmentDocId: String? = pendingObdShipmentDocId
+        shipmentDocId: String? = pendingObdShipmentDocId,
+        groupItems: List<Map<String, Any?>> = pendingObdGroupItems
     ) {
         if (item == null || shipmentDocId == null) return
 
@@ -929,7 +962,8 @@ class QueueDetailsActivity : AppCompatActivity() {
             shipmentDocId,
             capturedAtMillis,
             lat,
-            lng
+            lng,
+            groupItems
         )
     }
 
@@ -938,7 +972,8 @@ class QueueDetailsActivity : AppCompatActivity() {
         shipmentDocId: String,
         capturedAtMillis: Long,
         lat: Double?,
-        lng: Double?
+        lng: Double?,
+        groupItems: List<Map<String, Any?>> = emptyList()
     ) {
         val sheet = ObdStatusBottomSheet.newInstance(
             item,
@@ -952,7 +987,10 @@ class QueueDetailsActivity : AppCompatActivity() {
                 shipmentDocId = docId,
                 capturedAtMillis = capturedAtMillis,
                 latitude = lat,
-                longitude = lng
+                longitude = lng,
+                groupLineItems = groupItems,
+                captureId = if (groupItems.mapNotNull { it["obdNumber"]?.toString() }.distinct().size > 1)
+                    java.util.UUID.randomUUID().toString() else null
             )
 
             if (
@@ -1028,21 +1066,40 @@ class QueueDetailsActivity : AppCompatActivity() {
             onSuccess = { base64DataUri ->
                 lifecycleScope.launch {
                     try {
-                        updateObdLineItemInFirestore(
-                            shipmentDocId = podData.shipmentDocId,
-                            lineItem = podData.lineItem,
-                            status = podData.status,
-                            podImageUrl = base64DataUri,
-                            capturedAtMillis = podData.capturedAtMillis
-                        )
+                        val groupObdNumbers = podData.groupLineItems.mapNotNull { it["obdNumber"]?.toString()?.trim()?.takeIf(String::isNotEmpty) }.distinct()
+                        val groupPodId = if (groupObdNumbers.size > 1) {
+                            val captureId = podData.captureId ?: error("Missing POD group capture ID")
+                            val result = com.sysu.go.network.PodApiService.updateGroup(podData.shipmentDocId, mapOf(
+                                "action" to "complete",
+                                "obdNumbers" to groupObdNumbers,
+                                "captureId" to captureId,
+                                "deliveryStatus" to podData.status,
+                                "base64Image" to base64DataUri,
+                                "capturedAtMillis" to podData.capturedAtMillis
+                            ))
+                            result["podGroupId"] as? String ?: error("Missing saved POD group reference")
+                        } else {
+                            updateObdLineItemInFirestore(
+                                shipmentDocId = podData.shipmentDocId,
+                                lineItem = podData.lineItem,
+                                status = podData.status,
+                                podImageUrl = base64DataUri,
+                                capturedAtMillis = podData.capturedAtMillis
+                            )
+                            null
+                        }
 
                         // ✅ UPDATE local state immediately
                         updateLineItemPodStatus(
                             obdNumber = (podData.lineItem["obdNumber"] as? String) ?: "",
-                            podImageUrl = base64DataUri,
+                            podImageUrl = "saved_in_subcollection", // Wag i-save sa local memory ang Base64 para iwas crash
                             status = podData.status,
-                            capturedAtMillis = podData.capturedAtMillis
+                            capturedAtMillis = podData.capturedAtMillis,
+                            groupPodId = groupPodId
                         )
+                        groupObdNumbers.drop(1).forEach { obd ->
+                            updateLineItemPodStatus(obd, "saved_in_subcollection", podData.status, podData.capturedAtMillis, groupPodId)
+                        }
                         // ✅ REFRESH the bottom sheet to reflect changes
                         refreshObdItemsSheet()
 
@@ -1081,147 +1138,51 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     private suspend fun updateObdLineItemInFirestore(
-        shipmentDocId: String,
-        lineItem: Map<String, Any?>,
-        status: String,
-        podImageUrl: String,
-        capturedAtMillis: Long
+        shipmentDocId: String, lineItem: Map<String, Any?>, status: String,
+        podImageUrl: String, capturedAtMillis: Long
     ) {
-        val obdNumber =
-            lineItem["obdNumber"] as? String
-                ?: throw IllegalArgumentException(
-                    "Missing obdNumber"
-                )
+        val obdNumber = lineItem["obdNumber"] as? String ?: error("Missing OBD")
+        com.sysu.go.network.PodApiService.update(shipmentDocId, obdNumber, mapOf(
+            "action" to "complete", "deliveryStatus" to status,
+            "base64Image" to podImageUrl, "capturedAtMillis" to capturedAtMillis
+        ))
+    }
 
-        val docRef = firestoreDb
-            .collection("sap_assignments")
-            .document(shipmentDocId)
-
-        firestoreDb.runTransaction { transaction ->
-            val snap = transaction.get(docRef)
-
-            if (!snap.exists()) {
-                throw IllegalStateException(
-                    "Shipment document not found"
-                )
+    private fun startGroupUnload(items: List<Map<String, Any?>>, shipmentDocId: String) {
+        val obdNumbers = items.mapNotNull { it["obdNumber"]?.toString()?.trim()?.takeIf(String::isNotEmpty) }.distinct()
+        if (obdNumbers.isEmpty()) return
+        lifecycleScope.launch {
+            try {
+                com.sysu.go.network.PodApiService.updateGroup(shipmentDocId, mapOf(
+                    "action" to "unload",
+                    "obdNumbers" to obdNumbers,
+                    "unloadStatus" to "UNLOADING"
+                ))
+                val selected = obdNumbers.toSet()
+                currentLineItems = currentLineItems.map { lineItem ->
+                    if ((lineItem["obdNumber"] as? String) in selected && lineItem["isPodCompleted"] != true) {
+                        lineItem.toMutableMap().apply { this["unloadStatus"] = "UNLOADING" }
+                    } else lineItem
+                }
+                refreshObdItemsSheet()
+                Toast.makeText(this@QueueDetailsActivity, "Unload started for ${obdNumbers.size} OBDs", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@QueueDetailsActivity, "Failed to start group unload. Please retry.", Toast.LENGTH_LONG).show()
             }
-
-            val lineItemsRaw =
-                snap.get("lineItems") as? List<*>
-                    ?: emptyList<Any>()
-
-            val lineItems =
-                lineItemsRaw
-                    .filterIsInstance<Map<String, Any?>>()
-                    .toMutableList()
-
-            val targetIndex = lineItems.indexOfFirst {
-                (it["obdNumber"] as? String) == obdNumber
-            }
-
-            if (targetIndex == -1) {
-                throw IllegalStateException(
-                    "OBD item not found"
-                )
-            }
-
-            val original =
-                lineItems[targetIndex].toMutableMap()
-
-            original["deliveryStatus"] = status
-            original["podImageUrl"] = podImageUrl
-            original["podCapturedAt"] =
-                Timestamp(java.util.Date(capturedAtMillis))
-            original["isPodCompleted"] = true
-            original["unloadStatus"] = null
-
-            lineItems[targetIndex] = original
-
-            transaction.update(
-                docRef,
-                "lineItems",
-                lineItems
-            )
-        }.await()
+        }
     }
 
     private suspend fun updateObdUnloadStatusInFirestore(
-        shipmentDocId: String,
-        lineItem: Map<String, Any?>,
-        unloadStatus: String
+        shipmentDocId: String, lineItem: Map<String, Any?>, unloadStatus: String
     ) {
-        val obdNumber =
-            lineItem["obdNumber"] as? String
-            ?: throw IllegalArgumentException(
-                "Missing obdNumber"
-            )
-
-        val docRef = firestoreDb
-            .collection("sap_assignments")
-            .document(shipmentDocId)
-
-        firestoreDb.runTransaction { transaction ->
-            val snap = transaction.get(docRef)
-
-            if (!snap.exists()) {
-                throw IllegalStateException(
-                    "Shipment document not found"
-                )
-            }
-
-            val lineItemsRaw =
-                snap.get("lineItems") as? List<*>
-                    ?: emptyList<Any>()
-
-            val lineItems =
-                lineItemsRaw
-                    .filterIsInstance<Map<String, Any?>>()
-                    .toMutableList()
-
-            val targetIndex = lineItems.indexOfFirst {
-                (it["obdNumber"] as? String) == obdNumber
-            }
-
-            if (targetIndex == -1) {
-                throw IllegalStateException(
-                    "OBD item not found"
-                )
-            }
-
-            val original =
-                lineItems[targetIndex].toMutableMap()
-
-            original["unloadStatus"] = unloadStatus
-
-            lineItems[targetIndex] = original
-
-            transaction.update(
-                docRef,
-                "lineItems",
-                lineItems
-            )
-        }.await()
+        val obdNumber = lineItem["obdNumber"] as? String ?: error("Missing OBD")
+        com.sysu.go.network.PodApiService.update(shipmentDocId, obdNumber,
+            mapOf("action" to "unload", "unloadStatus" to unloadStatus))
     }
 
     private suspend fun resetPodDataForRetake(shipmentDocId: String, lineItem: Map<String, Any?>) {
-        val obdNumber = lineItem["obdNumber"] as? String ?: throw IllegalArgumentException("Missing obdNumber")
-        val docRef = firestoreDb.collection("sap_assignments").document(shipmentDocId)
-        firestoreDb.runTransaction { transaction ->
-            val snap = transaction.get(docRef)
-            if (!snap.exists()) throw IllegalStateException("Shipment document not found")
-            val lineItemsRaw = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
-            val lineItems = lineItemsRaw.filterIsInstance<Map<String, Any?>>().toMutableList()
-            val targetIndex = lineItems.indexOfFirst { (it["obdNumber"] as? String) == obdNumber }
-            if (targetIndex == -1) throw IllegalStateException("OBD item not found")
-            val original = lineItems[targetIndex].toMutableMap()
-            original["isPodCompleted"] = false
-            original["podImageUrl"] = ""
-            original["deliveryStatus"] = ""
-            original["podCapturedAt"] = null
-            original["unloadStatus"] = "UNLOADING"
-            lineItems[targetIndex] = original
-            transaction.update(docRef, "lineItems", lineItems)
-        }.await()
+        val obdNumber = lineItem["obdNumber"] as? String ?: error("Missing OBD")
+        com.sysu.go.network.PodApiService.update(shipmentDocId, obdNumber, mapOf("action" to "retake"))
     }
 
     private fun showUploadProgress() {
@@ -1432,6 +1393,10 @@ class QueueDetailsActivity : AppCompatActivity() {
                 Log.d("OBD", "onObdCameraTap FIRED: obd=$obd, shipmentDocId=$shipmentDocId")
                 showObdStatusSheet(lineItem, shipmentDocId)
             },
+            onGroupCameraTap = { items, shipmentDocId ->
+                items.firstOrNull()?.let { showObdStatusSheet(it, shipmentDocId, items) }
+            },
+            onGroupUnloadTap = { items, shipmentDocId -> startGroupUnload(items, shipmentDocId) },
             onUnloadConfirm = { lineItem, shipmentDocId ->
                 val obdNumber = lineItem["obdNumber"] as? String
                 if (obdNumber != null) {
@@ -1535,7 +1500,8 @@ class QueueDetailsActivity : AppCompatActivity() {
         obdNumber: String,
         podImageUrl: String,
         status: String,
-        capturedAtMillis: Long
+        capturedAtMillis: Long,
+        groupPodId: String? = null
     ) {
         currentLineItems = currentLineItems.map { item ->
             if ((item["obdNumber"] as? String) == obdNumber) {
@@ -1545,6 +1511,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                     this["deliveryStatus"] = status
                     this["podCapturedAt"] = Timestamp(java.util.Date(capturedAtMillis))
                     this["unloadStatus"] = null
+                    if (groupPodId != null) this["podGroupId"] = groupPodId else remove("podGroupId")
                 }
             } else {
                 item
@@ -1565,6 +1532,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                     this["deliveryStatus"] = ""
                     this["podCapturedAt"] = null
                     this["unloadStatus"] = "UNLOADING"
+                    remove("podGroupId")
                 }
             } else {
                 item
@@ -1586,26 +1554,72 @@ class QueueDetailsActivity : AppCompatActivity() {
      */
     private fun showObdItemDetailsDialog(item: Map<String, Any?>) {
         val isCompleted = item["isPodCompleted"] as? Boolean ?: false
-        val dataUri = item["podImageUrl"] as? String ?: ""
+        val obdNumber = item["obdNumber"] as? String ?: return
 
-        if (!isCompleted || dataUri.isEmpty()) {
+        if (!isCompleted) {
             Toast.makeText(this, "No POD available for this OBD item", Toast.LENGTH_SHORT).show()
             return
         }
 
+        // 1. Magpakita ng Loading Dialog
+        val progressDialog = android.app.AlertDialog.Builder(this)
+            .setMessage("Loading POD image...")
+            .setCancelable(false)
+            .create()
+        progressDialog.show()
+
+        // 2. I-fetch ang Base64 string mula sa Subcollection
+        firestoreDb.collection("sap_assignments")
+            .document(currentSapDocId)
+            .collection("pod_images")
+            .document(obdNumber)
+            .get()
+            .addOnSuccessListener { doc ->
+                val image = doc.getString("base64Image")
+                if (!image.isNullOrEmpty()) {
+                    progressDialog.dismiss()
+                    showDialogWithFetchedImage(image)
+                    return@addOnSuccessListener
+                }
+                val groupId = doc.getString("groupPodId") ?: item["podGroupId"] as? String
+                if (groupId.isNullOrBlank()) {
+                    progressDialog.dismiss()
+                    Toast.makeText(this, "POD image not found in database", Toast.LENGTH_SHORT).show()
+                    return@addOnSuccessListener
+                }
+                firestoreDb.collection("sap_assignments").document(currentSapDocId)
+                    .collection("pod_groups").document(groupId).get()
+                    .addOnSuccessListener { groupDoc ->
+                        progressDialog.dismiss()
+                        val groupImage = groupDoc.getString("base64Image")
+                        if (groupImage.isNullOrEmpty()) {
+                            Toast.makeText(this, "POD image not found in database", Toast.LENGTH_SHORT).show()
+                        } else showDialogWithFetchedImage(groupImage)
+                    }
+                    .addOnFailureListener {
+                        progressDialog.dismiss()
+                        Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
+                    }
+            }
+            .addOnFailureListener {
+                progressDialog.dismiss()
+                Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    // Ito yung dati mong UI code na nilipat lang sa bagong function
+    private fun showDialogWithFetchedImage(dataUri: String) {
         val bitmap = decodeBase64ToBitmap(dataUri)
         if (bitmap == null) {
             Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Use a transparent background for the Dialog window so our rounded layout shows correctly
         val dialog = Dialog(this, android.R.style.Theme_DeviceDefault_Light_Dialog_NoActionBar)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
 
         val cornerRadius = 24f * resources.displayMetrics.density
 
-        // ── Root Container with rounded white background ──
         val rootView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -1616,7 +1630,6 @@ class QueueDetailsActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 0)
         }
 
-        // ─ 1. Header Section ──
         val headerLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -1643,14 +1656,12 @@ class QueueDetailsActivity : AppCompatActivity() {
         headerLayout.addView(closeIconBtn)
         rootView.addView(headerLayout)
 
-        // ── 2. Divider ──
         val divider = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(1))
             setBackgroundColor(Color.parseColor("#E0E0E0"))
         }
         rootView.addView(divider)
 
-        // ── 3. Image Container ──
         val imageContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1676,7 +1687,6 @@ class QueueDetailsActivity : AppCompatActivity() {
         imageContainer.addView(imageView)
         rootView.addView(imageContainer)
 
-        // ── 4. Action Buttons ──
         val buttonContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1684,7 +1694,6 @@ class QueueDetailsActivity : AppCompatActivity() {
             }
         }
 
-        // Primary Button 1: VIEW PROOF OF DELIVERY (Full Image)
         val viewPodBtn = Button(this).apply {
             text = "VIEW PROOF OF DELIVERY"
             textSize = 14f
@@ -1698,7 +1707,6 @@ class QueueDetailsActivity : AppCompatActivity() {
         }
         buttonContainer.addView(viewPodBtn)
 
-        // Secondary Button: CLOSE
         val closeBtn = Button(this).apply {
             text = "CLOSE"
             textSize = 14f

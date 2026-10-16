@@ -2,7 +2,28 @@
 
 Per the user instruction, default Android Studio **debug** and **liveTest** now use existing production Firebase/Railway. Isolated testing uses the explicitly selected **emulator** variant, `app/src/emulator/google-services.json`, `com.sysu.go.debug` and `USE_FIREBASE_EMULATORS=true`. Replace historical debug task names below with `testEmulatorUnitTest` / `assembleEmulator` for isolated work; `BuildConfig.DEBUG` no longer determines Firebase routing. Production SDK configuration and signing/OAuth recovery are documented in [Google login recovery](GOOGLE_LOGIN_RECOVERY_2026-10-09.md). No actual phone login has been verified.
 
-# SYSU-GO isolated testing configuration
+## Native automation — 2026-10-14
+
+Use the versioned runners in `sysu-app/frontend/tests/e2e/`. They require Node 24, Java 21+, loopback demo Firebase and a dedicated Android emulator; physical devices and production fallback are rejected. Build instrumentation with `assembleEmulator assembleEmulatorAndroidTest -PsysuTestBuildType=emulator`. From `sysu-app`, run:
+
+```powershell
+& .\.tools\node24\node-v24.21.0-win-x64\node.exe frontend/tests/e2e/runNativeAutomation.cjs native
+& .\.tools\node24\node-v24.21.0-win-x64\node.exe frontend/tests/e2e/runNativeAutomation.cjs bridge
+```
+
+The final strict 16 KB smoke uses a dedicated Android 15 16 KB image, verifies reported `PAGE_SIZE=16384`, and selects the two SDK-sensitive cases:
+
+```powershell
+$env:SYSU_NATIVE_CLASS='com.sysu.go.NativeCameraTest,com.sysu.go.NativeWorkflowTest#scannedQrRegistersOnceThroughNativeForm'
+& .\.tools\node24\node-v24.21.0-win-x64\node.exe frontend/tests/e2e/runNativeAutomation.cjs native16k
+Remove-Item Env:SYSU_NATIVE_CLASS
+```
+
+Use a 2,048 MB guest for this 16 KB image and avoid concurrent Gradle builds. The runner caps its local Firestore JVM at 384 MB. Android 15 has no later compatibility fallback; API 36+ strict mode additionally requires verified disabled fallback settings. Final native UI 16/16, paired native-to-web 4/4 and 16 KB smoke 2/2 pass. Three static RELRO checks remain failed; see [canonical evidence and limitations](../../sysu-app/docs/automated-release-validation.md).
+
+# Historical initial isolated testing configuration
+
+> The configuration details in this section describe an earlier setup. Current isolated Android tests use the `emulator` variant; `debug` and `liveTest` use hosted endpoints. Confirm `app/build.gradle.kts` and the selected variant before running any command.
 
 Debug now has application ID com.sysu.go.debug, synthetic demo-sysu-security Firebase resources, and Android Emulator host 10.0.2.2. API/socket port 3000, frontend 5173, Auth 9099, Firestore 8085, Storage 9199. GoApplication validates project and exact endpoint allowlists before AuthManager/listeners/activities, then attaches all three Firebase SDKs to emulators. Startup validation failure is fatal; it never silently falls back to production. Real-device host routing and Google sign-in/POD flows are not yet accepted. An emulator being unavailable causes errors, not production fallback.
 

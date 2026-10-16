@@ -20,6 +20,7 @@ async function serverFixture() {
     const query = {
       doc: uid => ({
         get: async () => {
+          if (state.beforeDocRead) await state.beforeDocRead(collection, uid);
           if (state.readError || state.readCollectionError === collection) throw Error('private synthetic read failure');
           const data = collection === 'users' ? profiles.get(uid) : records.get(collection+'/'+uid);
           return {exists:!!data, data:()=>data};
@@ -33,6 +34,7 @@ async function serverFixture() {
       where: (field,op,value) => {constraints.push([field,op,value]); return query;},
       limit: () => query,
       get: async () => {
+        if(state.beforeQueryRead) await state.beforeQueryRead(collection);
         if(state.readError) throw Error('private synthetic query failure');
         const docs = [...records].filter(([key,data])=>key.startsWith(collection+'/')&&constraints.every(([field,op,value])=>op==='=='?data[field]===value:op==='not-in'?!value.includes(data[field]):true)).map(([key,data])=>({id:key.split('/')[1],exists:true,data:()=>data}));
         return {empty:!docs.length,docs,size:docs.length};

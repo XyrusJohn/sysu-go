@@ -46,8 +46,7 @@ object TripApiService {
     fun registerTrip(request: TripRegisterRequest, idToken: String? = null): Result<TripRegisterResponse> {
         return try {
             val urlString = "$BASE_URL/register"
-            val tokenSnippet = if (!idToken.isNullOrEmpty() && idToken.length > 20) "${idToken.take(10)}...${idToken.takeLast(6)}" else (idToken ?: "none")
-            Log.d(TAG, "--> POST $urlString (queueId: ${request.queueId}, token: $tokenSnippet)")
+            Log.d(TAG, "Sending trip registration")
             val url = URL(urlString)
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
@@ -61,7 +60,6 @@ object TripApiService {
             conn.readTimeout = 15000
 
             val jsonBody = gson.toJson(request)
-            Log.d(TAG, "registerTrip request body: $jsonBody")
             OutputStreamWriter(conn.outputStream).use { w ->
                 w.write(jsonBody)
             }
@@ -70,12 +68,12 @@ object TripApiService {
             val inputStream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
             val body = inputStream?.bufferedReader()?.readText() ?: "{}"
 
-            Log.d(TAG, "<-- Register Response ($responseCode): $body")
+            Log.d(TAG, "Registration HTTP status: $responseCode")
 
             val parsed = gson.fromJson(body, TripRegisterResponse::class.java)
 
             if (responseCode == 200 && parsed.success) {
-                Log.d(TAG, "registerTrip SUCCESS: tripId=${parsed.tripId}")
+                Log.d(TAG, "Trip registration confirmed")
                 Result.Success(parsed)
             } else {
                 Log.w(TAG, "registerTrip FAILED ($responseCode): ${parsed.message}")

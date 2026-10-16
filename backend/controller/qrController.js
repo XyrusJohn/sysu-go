@@ -114,4 +114,49 @@ const getQueue = async (req, res) => {
 
 // Legacy arbitrary state setter bypassed dispatch decisions. Use the web workflow.
 const updateQueueStatus = (_req, res) => res.status(410).json({ success: false, message: "Use the SYSU web queue workflow" });
-module.exports = { generateQR, verifyQR, scanQR, getQueue, updateQueueStatus };
+let positionSnapshot, positionSnapshotAt = 0, positionRead;
+const positionRequests = new Map();
+async function waitingPositions(db) {
+  if (positionSnapshot && Date.now() - positionSnapshotAt < 1000) return positionSnapshot;
+  if (!positionRead) positionRead = db.collection('queue').where('status','in',['waiting','called']).limit(2001).get()
+    .then(snapshot => { positionSnapshot = snapshot; positionSnapshotAt = Date.now(); return snapshot; })
+    .finally(() => { positionRead = null; });
+  return positionRead;
+}
+const getOwnPosition = async (req, res) => {
+  const queueId = req.query.queueId;
+  if (typeof queueId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(queueId)) {
+    return res.status(400).json({success:false,message:'Invalid queue reference'});
+  }
+  const now = Date.now();
+  let budget = positionRequests.get(req.user.uid);
+  if (!budget || now - budget.started >= 60000) {
+    budget = {started:now,count:0};
+    positionRequests.delete(req.user.uid);
+    positionRequests.set(req.user.uid,budget);
+    if (positionRequests.size > 1000) positionRequests.delete(positionRequests.keys().next().value);
+  }
+  if (++budget.count > 120) return res.status(429).json({success:false,message:'Queue temporarily unavailable'});
+  try {
+    const db = getDb();
+    const own = await db.collection('queue').doc(queueId).get();
+    if (!own.exists || own.data().driverId !== req.user.uid) {
+      return res.status(404).json({success:false,message:'Queue unavailable'});
+    }
+    const data = own.data(), type = String(data.truckType || '').toUpperCase();
+    let position = null;
+    if (data.registrationComplete === true && data.isAssigned !== true
+        && ['waiting','called'].includes(data.status) && TYPES.includes(type)) {
+      const snapshot = await waitingPositions(db);
+      if (snapshot.size > 2000) return res.status(503).json({success:false,message:'Queue unavailable'});
+      const ranked = snapshot.docs.map(doc => ({...doc.data(),id:doc.id})).filter(entry =>
+        entry.registrationComplete === true && entry.isAssigned !== true && ['waiting','called'].includes(entry.status)
+        && String(entry.truckType || '').toUpperCase() === type && Number.isFinite(entry.entryTime?.toMillis?.()))
+        .sort((left,right) => left.entryTime.toMillis()-right.entryTime.toMillis() || left.id.localeCompare(right.id));
+      const index = ranked.findIndex(entry => entry.id === queueId);
+      if (index >= 0) position = index+1;
+    }
+    return res.json({success:true,queueId,position});
+  } catch (_) { return res.status(503).json({success:false,message:'Queue unavailable'}); }
+};
+module.exports = { generateQR, verifyQR, scanQR, getQueue, updateQueueStatus, getOwnPosition };

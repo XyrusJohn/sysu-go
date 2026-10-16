@@ -15,11 +15,13 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
+import android.os.SystemClock
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
 import com.google.firebase.auth.FirebaseAuth
+import com.sysu.go.model.LocationSendPolicy
 import com.sysu.go.R
 import com.sysu.go.activities.MainActivity
 import com.sysu.go.network.SocketManager
@@ -59,19 +61,25 @@ class LocationServices : Service() {
         getSharedPreferences("driver_session", Context.MODE_PRIVATE)
     }
 
+    private val sendPolicy = LocationSendPolicy()
     private var lastEmitLocation: android.location.Location? = null
-    private var lastEmitTime: Long = 0
-
-    // Stopped timer: if driver is stationary for 60s, emit driver_stopped (traffic signal)
-    // Cancelled and reset on every valid movement (≥10m GPS step)
-    private val stoppedHandler = Handler(Looper.getMainLooper())
-    private var stoppedRunnable: Runnable? = null
-    private var lastStoppedLat: Double? = null
-    private var lastStoppedLng: Double? = null
-    private var lastStoppedSapDocId: String? = null
-    private var wasStoppedEmitted = false  // guard: only emit stopped once per stop event
-
-    private val sapDocIdKey = "sap_doc_id"
+    private var latestFix: android.location.Location? = null
+    private var locationUpdatesStarted = false
+    private var destroyed = false
+    private var fixRequest: com.google.android.gms.tasks.CancellationTokenSource? = null
+    private var persistInFlight = false
+    private var lastPersistMs: Long? = null
+    private var persistTripKey: String? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val onConnected: () -> Unit = {
+        mainHandler.post {
+            if (!destroyed && sessionManager.isTrackingActive()) {
+                sendPolicy.reset()
+                latestFix?.let { handleLocation(it) }
+                requestImmediateFix()
+            }
+        }
+    }
 
     // Battery critical receiver — emit offline when battery is critically low (<5%)
     // This is a "truly unreachable" signal for dispatch safety
@@ -107,212 +115,96 @@ class LocationServices : Service() {
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
-                for (location in locationResult.locations) {
-                    Log.d(TAG, "LocationCallback received location: [${
-                        location.latitude}, ${location.longitude}] tracking_active=${sessionManager.isTrackingActive()}")
-                    handleLocation(location)
-                }
+                locationResult.lastLocation?.let { handleLocation(it) }
             }
         }
+        SocketManager.addOnConnectListener(onConnected)
     }
 
     private fun handleLocation(location: android.location.Location) {
-        val lat = location.latitude
-        val lng = location.longitude
-        val accuracy = location.accuracy
-
-        // Update shared static cache for POD timestamp overlay
-        lastKnownLat = lat
-        lastKnownLng = lng
-
-        // STRICT GEOFENCE GUARD: re-validate tracking flag on every GPS callback.
-        // Catches the case where the trip ended (returning_to_base / completed) but
-        // the service was already in the middle of dispatching a callback.
-        // Without this check we'd get one stray emit between trip end and the
-        // removeLocationUpdates() call, polluting the sysu-app map.
-        val isTracking = sessionManager.isTrackingActive()
-        if (!isTracking) {
-            Log.w(TAG, "[STRICT] handleLocation called but tracking_active=FALSE — dropping emit. lat=$lat, lng=$lng")
+        if (destroyed || !sessionManager.isTrackingActive()) return
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        if (sessionManager.getDriverId() != null && sessionManager.getDriverId() != uid) return
+        val sapDocId = sessionManager.getActiveSapDocId() ?: sessionManager.getCurrentSapDocId() ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        val fix = LocationSendPolicy.Fix(location.latitude, location.longitude,
+            if (location.hasAccuracy()) location.accuracy else Float.POSITIVE_INFINITY,
+            location.elapsedRealtimeNanos / 1_000_000)
+        if (!sendPolicy.eligible(fix, nowMs)) {
+            lastAccuracy = location.accuracy
+            updateNotification()
             return
         }
-
-        Log.d(TAG, "[GPS] Handling location update: lat=$lat, lng=$lng, accuracy=$accuracy m, tracking_active=$isTracking")
-
-        val currentTime = System.currentTimeMillis()
-
-        // Throttle: emit at most every 5 seconds during transit
-        if (currentTime - lastEmitTime < 5000) {
-            Log.d(TAG, "[THROTTLE] Skipping emit - last emit was ${currentTime - lastEmitTime}ms ago")
+        val key = "$uid:$sapDocId"
+        if (persistTripKey != key) {
+            persistTripKey = key
+            lastPersistMs = null
+            lastEmitLocation = null
+        }
+        latestFix = android.location.Location(location)
+        lastKnownLat = fix.lat
+        lastKnownLng = fix.lng
+        lastUpdateTime = nowMs
+        lastAccuracy = fix.accuracy
+        val distance = lastEmitLocation?.distanceTo(location) ?: 0f
+        if (!sendPolicy.shouldSend(fix, nowMs, distance, key, SocketManager.isConnected())) {
+            updateNotification()
             return
         }
-
-        val newLocation = android.location.Location("GPS").apply {
-            latitude = lat
-            longitude = lng
-        }
-
-        // Filter noise: 10m minimum movement (tightened from 30m for transit use)
-        lastEmitLocation?.let { last ->
-            val distance = last.distanceTo(newLocation)
-            if (distance < 10.0) {
-                Log.d(TAG, "[FILTER] Filtering stationary/drift - distance=$distance m, lat=$lat, lng=$lng")
-                return
-            }
-        }
-
-        lastEmitTime = currentTime
-        lastEmitLocation = newLocation
-
-        // Read active SAP doc ID from SessionManager
-        val sapDocId = sessionManager.getActiveSapDocId() ?: sessionManager.getCurrentSapDocId() ?: prefs?.getString(sapDocIdKey, null)
-
-        // Persist coords BEFORE emit — used for session restore on app reopen
-        prefs.edit()
-            .putFloat("last_emit_lat", lat.toFloat())
-            .putFloat("last_emit_lng", lng.toFloat())
-            .apply()
-
-        // Any valid movement cancels the stopped timer and clears the stopped state.
-        // This ensures driver_stopped only fires after a FULL 60s of no ≥10m movement.
-        cancelStoppedTimer()
-
-        // Normalize stopped state to ONLINE on any valid movement
-        if (wasStoppedEmitted) {
-            TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
-            Log.d(TAG, "[STATE] Stopped state reset to ONLINE due to movement")
-        }
-
-        // Emit via Socket.IO for real-time admin map
-        SocketManager.emitDriverMoving(lat, lng, sapDocId, status = "online")
-        Log.d(TAG, "[EMIT] driver_moving: [$lat, $lng], sapDocId=$sapDocId")
-
-        // ── Direct Firestore Real-Time Location Dual-Channel ───────────────────
-        val currentUid = FirebaseAuth.getInstance().currentUser?.uid
-            ?: sessionManager.getDriverId()
-        if (!currentUid.isNullOrBlank()) {
-            val driverName = sessionManager.getDriverName() ?: "Driver"
-            val locData = hashMapOf(
-                "driverId" to currentUid,
-                "name" to driverName,
-                "lat" to lat,
-                "lng" to lng,
-                "status" to "online",
-                "sapDocId" to sapDocId,
-                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-            )
-            com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("driver_locations")
-                .document(currentUid)
-                .set(locData, com.google.firebase.firestore.SetOptions.merge())
-
-            if (!sapDocId.isNullOrBlank()) {
-                com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("sap_assignments")
-                    .document(sapDocId)
-                    .update(
-                        mapOf(
-                            "lastLocation.lat" to lat,
-                            "lastLocation.lng" to lng,
-                            "lastLocation.at" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                        )
-                    )
-            }
-        }
-
-        wasStoppedEmitted = false
-
-        // Capture this position as the "last known stopped position" for potential
-        // driver_stopped emit. Store it BEFORE starting the timer so that when the
-        // timer fires at 60s, we emit the position at the time of stopping — not a
-        // GPS-lost or stale coordinate.
-        lastStoppedLat = lat
-        lastStoppedLng = lng
-        lastStoppedSapDocId = sapDocId
-
-        // Start/update the 60s stopped timer.
-        // Resets on every subsequent valid movement event.
-        postStoppedTimer()
-
-        // Update notification with latest GPS accuracy and time
-        lastUpdateTime = currentTime
-        lastAccuracy = accuracy
+        val status = if (distance < 10f && sendPolicy.isStopped(nowMs)) "stopped" else "online"
+        val ageMs = nowMs - fix.elapsedMs
+        if (!SocketManager.emitDriverMoving(fix.lat, fix.lng, sapDocId, status,
+                System.currentTimeMillis() - ageMs, fix.accuracy)) return
+        sendPolicy.sent(fix, nowMs, distance)
+        lastEmitLocation = android.location.Location(location)
+        prefs.edit().putFloat("last_emit_lat", fix.lat.toFloat()).putFloat("last_emit_lng", fix.lng.toFloat()).apply()
+        TrackingStateMonitor.setState(if (status == "stopped") TrackingStateMonitor.State.STOPPED else TrackingStateMonitor.State.ONLINE)
+        persistLocation(uid, sapDocId, fix, status, key, nowMs)
         updateNotification()
     }
 
-    /**
-     * Emits driver_stopped (yellow) after driver has been stationary for 60s.
-     * Uses the position captured at the moment the driver stopped — not a stale GPS coord.
-     * Guard ensures it fires at most once per stop event (reset by movement).
-     */
-    private fun emitDriverStopped() {
-        // If driver is moving again, skip — driver_moving takes precedence
-        if (wasStoppedEmitted) {
-            Log.d(TAG, "[STOP] emitDriverStopped skipped - wasStoppedEmitted=true")
-            return
-        }
-
-        val lat = lastStoppedLat ?: return
-        val lng = lastStoppedLng ?: return
-        val sapDocId = lastStoppedSapDocId
-
-        wasStoppedEmitted = true
-        SocketManager.emitDriverStopped(lat, lng, sapDocId)
-        Log.d(TAG, "[EMIT] driver_stopped: [$lat, $lng], sapDocId=$sapDocId")
-
-        val currentUid = FirebaseAuth.getInstance().currentUser?.uid
-            ?: sessionManager.getDriverId()
-        if (!currentUid.isNullOrBlank()) {
-            com.google.firebase.firestore.FirebaseFirestore.getInstance().collection("driver_locations")
-                .document(currentUid)
-                .update(
-                    mapOf(
-                        "status" to "stopped",
-                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                    )
-                )
-        }
-    }
-
-    /**
-     * Posts a 60-second delayed runnable.
-     * If [postStoppedTimer] is called again before it fires, the previous pending
-     * runnable is cancelled first — ensuring the timer always reflects the MOST
-     * RECENT stop (not the oldest in the queue).
-     */
-    private fun postStoppedTimer() {
-        // Capture current position at timer start for use when runnable fires
-        val emitLat = lastStoppedLat ?: return
-        val emitLng = lastStoppedLng ?: return
-        val emitSapDocId = lastStoppedSapDocId
-
-        Log.d(TAG, "[TIMER] Starting stopped timer with position: [$emitLat, $emitLng], sapDocId=$emitSapDocId")
-
-        stoppedRunnable?.let { stoppedHandler.removeCallbacks(it) }
-
-        val runnable = Runnable {
-            val isTracking = sessionManager.isTrackingActive()
-            Log.d(TAG, "[TIMER] Timer fired - tracking_active=$isTracking")
-            if (isTracking) {
-                // Re-fetch from captured vals — they may have been updated by a later
-                // handleLocation call if the timer was re-posted; emit from latest
-                SocketManager.emitDriverStopped(emitLat, emitLng, emitSapDocId)
-                TrackingStateMonitor.setState(TrackingStateMonitor.State.STOPPED)
-                wasStoppedEmitted = true
-                Log.d(TAG, "[EMIT] driver_stopped timer fired at last position: [$emitLat, $emitLng]")
+    private fun persistLocation(uid: String, sapDocId: String, fix: LocationSendPolicy.Fix,
+                                status: String, key: String, nowMs: Long) {
+        if (persistInFlight || lastPersistMs?.let { nowMs - it < 30_000 } == true) return
+        persistInFlight = true
+        val db = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+        val capturedAt = System.currentTimeMillis() - (SystemClock.elapsedRealtime() - fix.elapsedMs)
+        val stamp = com.google.firebase.Timestamp(java.util.Date(capturedAt))
+        val data = mapOf("driverId" to uid, "name" to (sessionManager.getDriverName() ?: "Driver"),
+            "lat" to fix.lat, "lng" to fix.lng, "status" to status, "sapDocId" to sapDocId, "updatedAt" to stamp)
+        val shipmentRef = db.collection("sap_assignments").document(sapDocId)
+        // Transactions do not queue offline writes and recheck ownership/trip closure before committing.
+        db.runTransaction { transaction ->
+            val shipment = transaction.get(shipmentRef)
+            if (!LocationSendPolicy.canCheckpoint(uid, shipment.getString("driverId"), shipment.getString("tripStatus"))) {
+                false
             } else {
-                Log.d(TAG, "[TIMER] Timer fired but tracking_active=FALSE - skipping emit")
+                transaction.set(db.collection("driver_locations").document(uid), data,
+                    com.google.firebase.firestore.SetOptions.merge())
+                transaction.update(shipmentRef, mapOf("lastLocation.lat" to fix.lat,
+                    "lastLocation.lng" to fix.lng, "lastLocation.at" to stamp))
+                true
             }
+        }.addOnCompleteListener { result ->
+            persistInFlight = false
+            if (persistTripKey != key || FirebaseAuth.getInstance().currentUser?.uid != uid || destroyed) return@addOnCompleteListener
+            if (result.isSuccessful && result.result == true) lastPersistMs = nowMs
+            else if (!result.isSuccessful) Log.w(TAG, "Location checkpoint failed; next valid fix will retry")
         }
-        stoppedRunnable = runnable
-        stoppedHandler.postDelayed(runnable, 60_000L) // 60 seconds
-        Log.d(TAG, "[TIMER] Stopped timer started — will emit driver_stopped in 60s if no ≥10m movement")
     }
 
-    private fun cancelStoppedTimer() {
-        stoppedRunnable?.let {
-            stoppedHandler.removeCallbacks(it)
-            stoppedRunnable = null
-            wasStoppedEmitted = false
-            TrackingStateMonitor.setState(TrackingStateMonitor.State.ONLINE)
-            Log.d(TAG, "[TIMER] Stopped timer cancelled — movement detected")
+    @SuppressLint("MissingPermission")
+    private fun requestImmediateFix() {
+        if (destroyed || !sessionManager.isTrackingActive()) return
+        fixRequest?.cancel()
+        val request = com.google.android.gms.tasks.CancellationTokenSource()
+        fixRequest = request
+        try {
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, request.token)
+                .addOnSuccessListener { location -> if (!destroyed && fixRequest === request && location != null) handleLocation(location) }
+                .addOnFailureListener { Log.w(TAG, "Fresh GPS request unavailable") }
+        } catch (_: SecurityException) {
+            Log.w(TAG, "Location permission unavailable")
         }
     }
 
@@ -321,7 +213,7 @@ class LocationServices : Service() {
         Log.d(TAG, "onStartCommand called - tracking_active=${sessionManager.isTrackingActive()}")
         createNotificationChannel()
         // Initialize notification update timers
-        lastUpdateTime = System.currentTimeMillis()
+        lastUpdateTime = SystemClock.elapsedRealtime()
         lastAccuracy = null
         startForeground(NOTIFICATION_ID, buildNotification("Initializing GPS..."))
 
@@ -359,23 +251,14 @@ class LocationServices : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
-        Log.d(TAG, "[GPS] Starting location updates")
-        lastEmitLocation = null
-        lastEmitTime = 0
-
-        val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            5000  // 5 second interval for smooth transit tracking
-        ).setMinUpdateIntervalMillis(3000)
-          .setMinUpdateDistanceMeters(10f)
-          .build()
-
-        Log.d(TAG, "[GPS] Requesting location updates with request: $locationRequest")
-        fusedLocationClient.requestLocationUpdates(
-            locationRequest,
-            locationCallback,
-            mainLooper
-        )
+        if (locationUpdatesStarted) return
+        locationUpdatesStarted = true
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
+            .setMinUpdateIntervalMillis(5000).build()
+        fusedLocationClient.requestLocationUpdates(request, locationCallback, mainLooper)
+            .addOnSuccessListener { locationUpdatesStarted = true }
+            .addOnFailureListener { locationUpdatesStarted = false; Log.w(TAG, "GPS subscription unavailable") }
+        requestImmediateFix()
     }
 
     private fun buildNotification(contentText: String): Notification {
@@ -397,7 +280,7 @@ class LocationServices : Service() {
     }
 
     private fun updateNotification() {
-        val secondsAgo = ((System.currentTimeMillis() - lastUpdateTime) / 1000).toInt()
+        val secondsAgo = ((SystemClock.elapsedRealtime() - lastUpdateTime) / 1000).toInt()
         val accuracy = lastAccuracy
         val accuracyLabel = when {
             accuracy == null -> "GPS: Waiting..."
@@ -431,7 +314,14 @@ class LocationServices : Service() {
         // Remove the foreground notification
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
-        cancelStoppedTimer()
+        destroyed = true
+        sendPolicy.reset()
+        latestFix = null
+        fixRequest?.cancel()
+        SocketManager.removeOnConnectListener(onConnected)
+        mainHandler.removeCallbacksAndMessages(null)
+        lastKnownLat = null
+        lastKnownLng = null
         try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
         fusedLocationClient.removeLocationUpdates(locationCallback)
         serviceScope.cancel()

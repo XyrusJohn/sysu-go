@@ -283,9 +283,9 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         }
     }
 
-    fun emitDriverMoving(lat: Double, lng: Double, sapDocId: String?, status: String = "online") {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        Log.d(TAG, "[EMIT] emitDriverMoving called: lat=$lat, lng=$lng, sapDocId=$sapDocId, status=$status")
+    fun emitDriverMoving(lat: Double, lng: Double, sapDocId: String?, status: String = "online",
+                         timestamp: Long? = null, accuracyMeters: Float? = null): Boolean {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return false
 
         val json = JSONObject().apply {
             put("driverId", uid)
@@ -294,22 +294,24 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
             put("lng", lng)
             put("status", status)
             put("name", getDriverName())
+            timestamp?.let { put("timestamp", it) }
+            accuracyMeters?.let { put("accuracyMeters", it) }
         }
 
-        emitDriverMovingOnSocket(mSocketGo, json, lat, lng, sapDocId)
+        return emitDriverMovingOnSocket(mSocketGo, json)
     }
 
-    private fun emitDriverMovingOnSocket(socket: Socket?, json: JSONObject, lat: Double, lng: Double, sapDocId: String?) {
+    private fun emitDriverMovingOnSocket(socket: Socket?, json: JSONObject): Boolean {
         if (socket?.connected() != true) {
             Log.w(TAG, "[SOCKET] emitDriverMovingOnSocket skipped - socket not connected")
-            return
+            return false
         }
         try {
             socket.emit("driver_moving", json)
-            val name = json.optString("name", "?")
-            Log.d(TAG, "[EMIT] driver_moving emitted: lat=$lat, lng=$lng, sapDocId=$sapDocId, name=$name")
+            return true
         } catch (e: Exception) {
-            Log.e(TAG, "[ERROR] Failed to emit driver_moving: ${e.message}")
+            Log.e(TAG, "Location socket send failed")
+            return false
         }
     }
 

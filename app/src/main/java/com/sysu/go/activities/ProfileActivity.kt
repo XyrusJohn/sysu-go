@@ -593,7 +593,9 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             try {
                 val doc = db.collection("drivers").document(uid).get().await()
                 if (doc.exists()) {
-                    val company = doc.getString("truckingCompany") ?: doc.getString("company") ?: ""
+                    val company = doc.getString("truckingCompany")?.takeIf { it.isNotBlank() }
+                        ?: doc.getString("company")?.takeIf { it.isNotBlank() }
+                        ?: session.getDriverCompany()
                     val phone = doc.getString("phone") ?: ""
 
                     // Update SessionManager with fresh data from Firestore.

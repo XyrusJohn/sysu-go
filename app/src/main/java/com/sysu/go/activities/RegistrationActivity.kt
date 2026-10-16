@@ -424,17 +424,22 @@ class RegistrationActivity : AppCompatActivity() {
 
                         val ref = db.collection("users").document(uid)
                         val existing = ref.get(com.google.firebase.firestore.Source.SERVER).await()
-                        val details = com.sysu.go.firebase.AccountPolicy.details(firstName, middleInitial, lastName, displayName, phone)
+                        val details = com.sysu.go.firebase.AccountPolicy.details(firstName, middleInitial, lastName, displayName, phone) +
+                            mapOf("truckingCompany" to truckCompany)
                         if (existing.exists()) {
                             // Preserve canonical approval/identity on profile completion.
                             ref.update(details).await()
                         } else {
                             ref.set(com.sysu.go.firebase.AccountPolicy.pending(uid, email, firstName, middleInitial, lastName,
-                                displayName, phone, com.google.firebase.firestore.FieldValue.serverTimestamp())).await()
+                                displayName, phone, com.google.firebase.firestore.FieldValue.serverTimestamp()) +
+                                mapOf("truckingCompany" to truckCompany)).await()
                         }
                         if (!existing.exists() || !com.sysu.go.firebase.AccountPolicy.approved(existing.data ?: emptyMap())) {
                             FirebaseAuth.getInstance().signOut()
-                            SessionManager(this@RegistrationActivity).clearSession()
+                            val session = SessionManager(this@RegistrationActivity)
+                            session.clearSession()
+                            // Re-persist company so it's available after admin approval.
+                            session.saveDriverCompany(truckCompany)
                             setLoading(false)
                             Toast.makeText(this@RegistrationActivity, "Profile saved. An administrator must approve your driver account.", Toast.LENGTH_LONG).show()
                             val login = Intent(this@RegistrationActivity, LoginActivity::class.java)

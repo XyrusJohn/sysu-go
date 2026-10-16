@@ -9,6 +9,73 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 
 class QrHttpClientTest {
+    @Test fun unauthorizedUsesForcedProviderOnlyOnce() {
+        var cachedCalls = 0
+        var refreshCalls = 0
+        var requests = 0
+        val denied = Connection(401, "{}")
+        val accepted = Connection(200, "{\"success\":true,\"queueId\":\"queue-a\"}")
+        val client = QrHttpClient("https://synthetic.invalid/api/qr",
+            { cachedCalls++; "cached-token" },
+            { if (requests++ == 0) denied else accepted },
+            { refreshCalls++; "fresh-token" })
+        assertTrue(client.scanToken(request) is QrResult.Success)
+        assertEquals(1, cachedCalls)
+        assertEquals(1, refreshCalls)
+        assertEquals(2, requests)
+        assertEquals("Bearer fresh-token", accepted.getRequestProperty("Authorization"))
+        assertArrayEquals(denied.sent.toByteArray(), accepted.sent.toByteArray())
+    }
+
+    @Test fun secondUnauthorizedCannotRetryForever() {
+        var requests = 0
+        var refreshCalls = 0
+        val client = QrHttpClient("https://synthetic.invalid/api/qr", { "cached-token" },
+            { requests++; Connection(401, "{}") }, { refreshCalls++; "fresh-token" })
+        assertEquals(401, (client.scanToken(request) as QrResult.Error).code)
+        assertEquals(2, requests)
+        assertEquals(1, refreshCalls)
+    }
+
+    @Test fun unavailableRefreshCannotSendAnotherAdmission() {
+        for (throws in listOf(false, true)) {
+            var requests = 0
+            val client = QrHttpClient("https://synthetic.invalid/api/qr", { "cached-token" },
+                { requests++; Connection(401, "{}") },
+                { if (throws) throw IllegalStateException("private details") else null })
+            val result = client.scanToken(request) as QrResult.Error
+            assertEquals(401, result.code)
+            assertEquals(1, requests)
+            assertFalse(result.message.contains("private"))
+        }
+    }
+
+    @Test fun unauthorizedAdmissionRefreshesIdentityAndRetriesOnce() {
+        val denied = Connection(401, "{}")
+        val accepted = Connection(200, "{\"success\":true,\"queueId\":\"queue-a\",\"queuePosition\":2}")
+        var requests = 0
+        var tokens = 0
+        val client = QrHttpClient("https://synthetic.invalid/api/qr",
+            { if (tokens++ == 0) "stale-token" else "refreshed-token" },
+            { if (requests++ == 0) denied else accepted })
+
+        assertTrue(client.scanToken(request) is QrResult.Success)
+        assertEquals(2, requests)
+        assertEquals("Bearer refreshed-token", accepted.getRequestProperty("Authorization"))
+        assertTrue(denied.closed)
+        assertTrue(accepted.closed)
+    }
+    @Test fun nonAuthenticationErrorsDoNotRetryAdmission() {
+        for (status in listOf(403, 409, 410, 500)) {
+            var requests = 0
+            val denied = Connection(status, "private details")
+            val client = QrHttpClient("https://synthetic.invalid/api/qr", { "token" },
+                { requests++; denied })
+            assertEquals(status, (client.scanToken(request) as QrResult.Error).code)
+            assertEquals(1, requests)
+            assertTrue(denied.closed)
+        }
+    }
     private val request = ScanRequest("SYS-TEST", "driver-a", "Driver", "Driver", "", "Test", "AUV", "Synthetic", "ABC-123", "Helper")
     private class Connection(val status: Int, val body: String): HttpURLConnection(URL("https://synthetic.invalid")) {
         val sent=ByteArrayOutputStream()

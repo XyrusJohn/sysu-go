@@ -27,14 +27,19 @@ import com.sysu.go.databinding.ItemHelperInputBinding
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.QRApiService
 import com.sysu.go.network.TripApiService
+import com.sysu.go.network.TripRegistrationFlow
 import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.Sanitizer
 import com.sysu.go.utils.SessionManager
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 class TripRegistrationActivity : AppCompatActivity() {
 
@@ -55,6 +60,30 @@ class TripRegistrationActivity : AppCompatActivity() {
     private var requirementsDone = true  // checkbox-only, default true
 
     private val truckTypes = arrayOf("Select Truck Type", "AUV", "4W", "6W", "10W", "20F", "40F")
+
+    private suspend fun recoverAdmission(driverId: String, token: String): String? {
+        return try {
+            withTimeout(8000) {
+                repeat(2) { attempt ->
+                    val entries = withContext(Dispatchers.IO) {
+                        FirebaseFirestore.getInstance().collection("queue")
+                            .whereEqualTo("driverId", driverId)
+                            .whereIn("status", listOf("waiting", "called"))
+                            .limit(20).get(com.google.firebase.firestore.Source.SERVER).await()
+                    }
+                    val matched = entries.documents.firstOrNull { entry ->
+                        entry.getString("driverId") == driverId && entry.getString("token") == token &&
+                            entry.getBoolean("registrationComplete") == false && entry.getBoolean("isAssigned") != true
+                    }
+                    if (matched != null && FirebaseAuthManager.getCurrentUser()?.uid == driverId) return@withTimeout matched.id
+                    if (attempt == 0) delay(1200)
+                }
+                null
+            }
+        } catch (_: TimeoutCancellationException) { null }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { null }
+    }
     private val platePrefixInputFilter = InputFilter { source, start, end, dest, dstart, dend ->
         val filtered = StringBuilder()
         for (i in start until end) {
@@ -91,7 +120,7 @@ class TripRegistrationActivity : AppCompatActivity() {
             insets
         }
 
-        queueId = intent.getStringExtra("queueId")
+        queueId = savedInstanceState?.getString("queueId") ?: intent.getStringExtra("queueId")
         currentToken = intent.getStringExtra("token")
 
         if (queueId == null && currentToken == null) {
@@ -133,7 +162,10 @@ class TripRegistrationActivity : AppCompatActivity() {
                 val db = FirebaseFirestore.getInstance()
                 val doc = db.collection("drivers").document(uid).get().await()
                 if (doc.exists()) {
-                    val company = doc.getString("truckingCompany") ?: doc.getString("company") ?: ""
+                    val company = doc.getString("truckingCompany")?.takeIf { it.isNotBlank() }
+                        ?: doc.getString("truckCompany")?.takeIf { it.isNotBlank() }
+                        ?: doc.getString("company")?.takeIf { it.isNotBlank() }
+                        ?: session.getDriverCompany()
                     val truckType = doc.getString("truckType") ?: ""
                     val plateNumber = doc.getString("plateNumber") ?: ""
 
@@ -168,9 +200,11 @@ class TripRegistrationActivity : AppCompatActivity() {
                         if (helperBindings.isEmpty()) addHelperView()
                     }
                 } else {
+                    binding.etCompany.setText(session.getDriverCompany())
                     if (helperBindings.isEmpty()) addHelperView()
                 }
             } catch (e: Exception) {
+                binding.etCompany.setText(session.getDriverCompany())
                 if (helperBindings.isEmpty()) addHelperView()
             } finally {
                 setLoading(false)
@@ -189,7 +223,9 @@ class TripRegistrationActivity : AppCompatActivity() {
                 val db = FirebaseFirestore.getInstance()
                 val doc = db.collection("queue").document(qid).get().await()
                 if (doc.exists()) {
-                    val company = doc.getString("truckCompany") ?: doc.getString("company") ?: ""
+                    val company = doc.getString("truckCompany")?.takeIf { it.isNotBlank() }
+                        ?: doc.getString("company")?.takeIf { it.isNotBlank() }
+                        ?: SessionManager(this@TripRegistrationActivity).getDriverCompany()
                     val truckType = doc.getString("truckType") ?: ""
                     val plateNumber = doc.getString("plateNumber") ?: ""
                     
@@ -336,10 +372,7 @@ class TripRegistrationActivity : AppCompatActivity() {
         // Spinner validation watcher — only reacts to USER changes, not programmatic setSelection()
         binding.spTruckType.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, pos: Int, id: Long) {
-                val fromUser = (parent?.selectedItem != null)
-                // Only update truckDone from user interaction
-                // Profile/setSelection calls come from adapter init (pos=1=first real item),
-                // we skip those since truckDone is pre-set to true for pre-filled screens
+                truckDone = pos > 0   // index 0 = "Select Truck Type" placeholder
                 updateValidationUI()
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
@@ -416,12 +449,21 @@ class TripRegistrationActivity : AppCompatActivity() {
 
         var hasError = false
 
+        if (company.isBlank()) {
+            binding.etCompany.error = "Trucking company is required"
+            hasError = true
+        }
+
         if (platePrefix.length != 3) {
             binding.tilPlatePrefix.error = "Exactly 3 letters"
             hasError = true
         }
         if (plateSuffix.length !in 3..4) {
             binding.tilPlateSuffix.error = "3-4 digits required"
+            hasError = true
+        }
+        if (truckType.isEmpty() || truckType == "Select Truck Type") {
+            Toast.makeText(this, "Pumili ng Truck Type", Toast.LENGTH_SHORT).show()
             hasError = true
         }
 
@@ -453,166 +495,142 @@ class TripRegistrationActivity : AppCompatActivity() {
         setLoading(true)
 
         lifecycleScope.launch {
-            Log.d(TAG, "[SUBMIT] Starting registration flow")
-
-            // Attempt to get a fresh Firebase ID token if user is signed in
-            var idToken = FirebaseAuthManager.getIdToken(forceRefresh = false)
-            if (idToken == null) {
-                Log.d(TAG, "[SUBMIT] Initial token was null, attempting force refresh...")
-                idToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
-            }
-            if (idToken != null) {
-                Log.d(TAG, "[SUBMIT] Auth token ready (length=${idToken.length})")
-            } else {
-                Log.w(TAG, "[SUBMIT] Proceeding without Firebase ID token (using session/driverId auth)")
-            }
-
             val session = SessionManager(this@TripRegistrationActivity)
-            val driverId = session.getDriverId() ?: run {
-                Log.e(TAG, "[SUBMIT] driverId is null — session not set up properly")
+            val driverId = session.getDriverId()
+            if (driverId == null || FirebaseAuthManager.getCurrentUser()?.uid != driverId) {
+                setLoading(false)
+                Toast.makeText(this@TripRegistrationActivity, "Mag-sign in muli bago kumpirmahin ang biyahe.", Toast.LENGTH_LONG).show()
                 return@launch
             }
             val driverPhone = session.getDriverPhone()
-            val driverName = session.getDriverName()
             val (driverFN, driverMI, driverLN) = session.getDriverNameParts()
-            Log.d(TAG, "[SUBMIT] driverId=$driverId, driverName=$driverName, queueId=$queueId, currentToken=$currentToken")
-
-            // Prepare helper names for the backend
-            val firstHelper = helpersList.first()
+            val firstHelper = helpersList.firstOrNull()
+            if (firstHelper == null) {
+                setLoading(false)
+                Toast.makeText(this@TripRegistrationActivity, "Maglagay ng helper bago magpatuloy.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
             val otherHelpers = if (helpersList.size > 1) {
                 ", " + helpersList.drop(1).joinToString(", ") { (f, m, l) ->
-                    buildString {
-                        append(f)
-                        if (m.isNotEmpty()) append(" $m")
-                        append(" $l")
-                    }
+                    listOf(f, m, l).filter { it.isNotEmpty() }.joinToString(" ")
                 }
             } else ""
+            val helperNameJoined = listOf(firstHelper.first, firstHelper.second, firstHelper.third)
+                .filter { it.isNotEmpty() }.joinToString(" ") + otherHelpers
 
-            val helperNameJoined = buildString {
-                append(firstHelper.first)
-                if (firstHelper.second.isNotEmpty()) append(" ${firstHelper.second}")
-                append(" ${firstHelper.third}")
-                if (otherHelpers.isNotEmpty()) append(otherHelpers)
-            }
-            Log.d(TAG, "[SUBMIT] helperNameJoined=$helperNameJoined")
-
-            // PHASE 1: Join Queue if we only have a token
-            if (queueId == null && currentToken != null) {
-                val fullPlate = "$platePrefix-$plateSuffix"
-                Log.d(TAG, "[PHASE 1] Joining queue with token=$currentToken, plate=$fullPlate")
-                val scanRequest = com.sysu.go.model.ScanRequest(
-                    token = currentToken!!,
-                    driverId = driverId,
-                    driverName = driverName,
-                    driverFN = driverFN,
-                    driverMI = driverMI,
-                    driverLN = driverLN,
-                    truckType = truckType,
-                    truckCompany = company,
-                    plateNumber = fullPlate,
-                    helperName = helperNameJoined,
-                    driverPhone = driverPhone
-                )
-
-                val scanResult = withContext(Dispatchers.IO) {
-                    QRApiService.scanToken(scanRequest)
-                }
-
-                when (scanResult) {
-                    is QRApiService.Result.Success -> {
-                        queueId = scanResult.data.queueId
-                        Log.d(TAG, "[PHASE 1] Queue joined successfully: queueId=$queueId")
-                        // Save queue doc id to session
-                        if (queueId != null) {
-                            session.saveCurrentQueueDocId(queueId)
-                        }
-                        saveRequirementsToProfile()
-                        setLoading(false)
-                        Toast.makeText(this@TripRegistrationActivity, "Nakasali na sa pila!", Toast.LENGTH_SHORT).show()
-                        navigateToHome()
-                        return@launch
-                    }
-                    is QRApiService.Result.Error -> {
-                        Log.w(TAG, "[PHASE 1] scanToken error (code ${scanResult.code}): ${scanResult.message}")
-                        if (scanResult.code != 400) {
-                            setLoading(false)
-                            Toast.makeText(this@TripRegistrationActivity, "Queue Error: ${scanResult.message}", Toast.LENGTH_LONG).show()
-                            return@launch
-                        }
-                        // 400 = already in queue — proceed to update via Phase 2
-                        Log.d(TAG, "[PHASE 1] 400 received (already in queue), continuing to Phase 2")
-                    }
-                }
+            // Validate both API contracts before admission consumes the QR token.
+            if ((firstHelper.third + otherHelpers).length > 50 || helperNameJoined.length > 100 || driverPhone.orEmpty().length > 20) {
+                setLoading(false)
+                Toast.makeText(this@TripRegistrationActivity,
+                    "Masyadong mahaba ang helper details o phone number. Paikliin muna bago kumpirmahin.",
+                    Toast.LENGTH_LONG).show()
+                return@launch
             }
 
-            // PHASE 2: Register Trip / Update Existing Details
-            if (queueId != null) {
-                Log.d(TAG, "[PHASE 2] Updating trip details for queueId=$queueId")
-                // Flush any pending requirements save before registering
-                saveRequirementsToProfile()
+            fun committedText(value: String): String = value.trim()
+                .replace(Regex("""[<>$&"|;'\\/]"""), "")
+                .replace(Regex("""\s+"""), " ")
 
-                val request = TripApiService.TripRegisterRequest(
-                    queueId = queueId!!,
-                    helperFN = firstHelper.first,
-                    helperMI = firstHelper.second,
-                    helperLN = firstHelper.third + otherHelpers,
-                    company = company,
-                    truckType = truckType,
-                    platePrefix = platePrefix,
-                    plateSuffix = plateSuffix,
-                    driverPhone = driverPhone
-                )
-
-                var result = withContext(Dispatchers.IO) {
-                    TripApiService.registerTrip(request, idToken)
-                }
-
-                // Auto-retry once with a fresh token if 401 Unauthorized
-                if (result is TripApiService.Result.Error && result.code == 401) {
-                    Log.w(TAG, "[PHASE 2] Got 401 — refreshing token and retrying registerTrip...")
-                    val freshToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
-                    if (freshToken != null) {
-                        Log.d(TAG, "[PHASE 2] Fresh token acquired, retrying...")
-                        result = withContext(Dispatchers.IO) {
-                            TripApiService.registerTrip(request, freshToken)
-                        }
+            val result = TripRegistrationFlow.run(queueId,
+                admit = {
+                    val token = currentToken
+                    if (token == null) {
+                        TripRegistrationFlow.Result.Error(400, "Hindi makita ang QR token. Mag-scan muli.")
                     } else {
-                        Log.w(TAG, "[PHASE 2] No Firebase token available for retry; proceeding with saved queue entry")
-                    }
-                }
-
-                setLoading(false)
-
-                when (result) {
-                    is TripApiService.Result.Success -> {
-                        Log.i(TAG, "[PHASE 2] Trip details registered successfully: tripId=${result.data.tripId}")
-                        Toast.makeText(this@TripRegistrationActivity, "Na-update ang biyahe!", Toast.LENGTH_SHORT).show()
-                        navigateToHome()
-                    }
-                    is TripApiService.Result.Error -> {
-                        Log.w(TAG, "[PHASE 2] registerTrip response (code ${result.code}): ${result.message}")
-                        if (result.code == 500 || result.code == 409 || result.code == 401) {
-                            // Queue entry is already saved in Phase 1 / Firestore, navigate smoothly
-                            Toast.makeText(this@TripRegistrationActivity, "Nakasali na sa pila!", Toast.LENGTH_SHORT).show()
-                            navigateToHome()
-                        } else {
-                            val dlgView2 = LayoutInflater.from(this@TripRegistrationActivity).inflate(R.layout.dialog_sysu_info, null)
-                            dlgView2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
-                            dlgView2.findViewById<TextView>(R.id.tvDialogTitle).text = "Failed"
-                            dlgView2.findViewById<TextView>(R.id.tvDialogMessage).text = result.message
-                            val dialog2 = AlertDialog.Builder(this@TripRegistrationActivity).setView(dlgView2).create()
-                            dlgView2.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog2.dismiss() }
-                            dialog2.show()
+                        val scanRequest = com.sysu.go.model.ScanRequest(
+                            token = token, driverId = driverId, driverName = session.getDriverName(),
+                            driverFN = driverFN, driverMI = driverMI, driverLN = driverLN,
+                            truckType = truckType, truckCompany = company,
+                            plateNumber = "$platePrefix-$plateSuffix", helperName = helperNameJoined,
+                            driverPhone = driverPhone
+                        )
+                        when (val scan = withContext(Dispatchers.IO) { QRApiService.scanToken(scanRequest) }) {
+                            is QRApiService.Result.Success -> TripRegistrationFlow.Result.Success(scan.data.queueId.orEmpty())
+                            is QRApiService.Result.Error -> {
+                                val recovered = if (scan.code == -1 || scan.code in listOf(409, 410, 500, 502, 503))
+                                    recoverAdmission(driverId, token) else null
+                                if (recovered != null) TripRegistrationFlow.Result.Success(recovered)
+                                else TripRegistrationFlow.Result.Error(scan.code, scan.message)
+                            }
                         }
                     }
+                },
+                onAdmitted = { admittedId ->
+                    queueId = admittedId
+                    session.saveCurrentQueueDocId(admittedId)
+                },
+                register = { admittedId ->
+                    val request = TripApiService.TripRegisterRequest(
+                        queueId = admittedId, helperFN = firstHelper.first, helperMI = firstHelper.second,
+                        helperLN = firstHelper.third + otherHelpers, company = company,
+                        truckType = truckType, platePrefix = platePrefix, plateSuffix = plateSuffix,
+                        driverPhone = driverPhone
+                    )
+                    var idToken = FirebaseAuthManager.getIdToken()
+                    if (idToken.isNullOrBlank()) idToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
+                    if (idToken.isNullOrBlank() || FirebaseAuthManager.getCurrentUser()?.uid != driverId) {
+                        TripRegistrationFlow.Result.Error(401, "Mag-sign in muli bago kumpirmahin ang biyahe.")
+                    } else {
+                        var registration = withContext(Dispatchers.IO) { TripApiService.registerTrip(request, idToken) }
+                        if (registration is TripApiService.Result.Error && registration.code == 401) {
+                            val freshToken = FirebaseAuthManager.getIdToken(forceRefresh = true)
+                            if (!freshToken.isNullOrBlank() && FirebaseAuthManager.getCurrentUser()?.uid == driverId) {
+                                registration = withContext(Dispatchers.IO) { TripApiService.registerTrip(request, freshToken) }
+                            }
+                        }
+                        when (val response = registration) {
+                            is TripApiService.Result.Success -> TripRegistrationFlow.Result.Success(admittedId)
+                            is TripApiService.Result.Error -> TripRegistrationFlow.Result.Error(response.code, response.message)
+                        }
+                    }
+                },
+                confirmCommitted = { admittedId ->
+                    try {
+                        val entry = kotlinx.coroutines.withTimeout(8000) {
+                            FirebaseFirestore.getInstance().collection("queue").document(admittedId)
+                                .get(com.google.firebase.firestore.Source.SERVER).await()
+                        }
+                        FirebaseAuthManager.getCurrentUser()?.uid == driverId &&
+                            entry.getString("driverId") == driverId && entry.getBoolean("registrationComplete") == true &&
+                            entry.getString("helperFN") == committedText(firstHelper.first) &&
+                            entry.getString("helperMI") == committedText(firstHelper.second).replace(Regex("""[^a-zA-Z]"""), "").take(1).uppercase() &&
+                            entry.getString("helperLN") == committedText(firstHelper.third + otherHelpers) &&
+                            entry.getString("company") == committedText(company) &&
+                            entry.getString("truckType") == truckType &&
+                            entry.getString("plateNumber") == "$platePrefix-$plateSuffix" &&
+                            entry.getString("status") in listOf("waiting", "called", "assigned", "loading", "fully_loaded", "in_transit")
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        if (error is kotlinx.coroutines.TimeoutCancellationException) false else throw error
+                    } catch (_: Exception) { false }
+                })
+            setLoading(false)
+            when (result) {
+                is TripRegistrationFlow.Result.Success -> {
+                    session.saveDriverCompany(company)
+                    saveRequirementsToProfile()
+                    Toast.makeText(this@TripRegistrationActivity, "Nakumpirma na ang biyahe!", Toast.LENGTH_SHORT).show()
+                    navigateToHome()
                 }
-            } else {
-                setLoading(false)
-                Log.e(TAG, "[SUBMIT] queueId is null after Phase 1 — cannot proceed to registration")
-                Toast.makeText(this@TripRegistrationActivity, "Hindi makita ang queue entry", Toast.LENGTH_LONG).show()
+                is TripRegistrationFlow.Result.Error -> {
+                    Log.w(TAG, "Trip confirmation failed (code ${result.code})")
+                    val message = if (result.code == 401) {
+                        "Hindi ma-verify ang session. Mag-sign in muli; kung tuloy ang error, kailangan suriin ang server."
+                    } else result.message
+                    val dlgView = LayoutInflater.from(this@TripRegistrationActivity).inflate(R.layout.dialog_sysu_info, null)
+                    dlgView.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
+                    dlgView.findViewById<TextView>(R.id.tvDialogTitle).text = "Hindi nakumpirma ang biyahe"
+                    dlgView.findViewById<TextView>(R.id.tvDialogMessage).text = message
+                    val dialog = AlertDialog.Builder(this@TripRegistrationActivity).setView(dlgView).create()
+                    dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss() }
+                    dialog.show()
+                }
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("queueId", queueId)
+        super.onSaveInstanceState(outState)
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
@@ -631,7 +649,7 @@ class TripRegistrationActivity : AppCompatActivity() {
         binding.progressBar.visibility = if (loading) View.VISIBLE else View.GONE
         binding.btnSubmit.isEnabled = !loading
         binding.btnAddHelper.isEnabled = !loading
-        // etCompany is a TextView (read-only) — no need to toggle, always static
+        binding.etCompany.isEnabled = !loading
         binding.etPlatePrefix.isEnabled = !loading
         binding.etPlateSuffix.isEnabled = !loading
         binding.spTruckType.isEnabled = !loading

@@ -1,6 +1,6 @@
 # SYSU-GO release test plan
 
-2026-10-08. ECC Android architecture, TDD, code/security review and verification loop. This plan is authorized local work; no live environment writes or publication. Public readiness is blocked until tracker conditions are met, not until an arbitrary test count is reached.
+Historical plan dated 2026-10-08. Check the current [fix tracker](FIX_TRACKER.md) and [emulator setup](LOCAL_EMULATOR_SETUP.md) before execution. This plan does not authorize live environment writes or publication. Use isolated emulator configuration for integration tests; public readiness depends on the listed gates, not an arbitrary test count.
 
 ## Ordered execution
 

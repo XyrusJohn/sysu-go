@@ -22,6 +22,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Explicit emulator instrumentation leaves the default production build unchanged.
+    testBuildType = providers.gradleProperty("sysuTestBuildType").orElse("debug").get()
+
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
@@ -55,6 +58,8 @@ android {
             matchingFallbacks += listOf("release")
         }
     }
+
+    sourceSets.getByName("liveTest").res.srcDir("src/release/res")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

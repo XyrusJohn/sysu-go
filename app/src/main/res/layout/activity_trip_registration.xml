@@ -439,11 +439,11 @@
                     android:layout_marginTop="2dp"
                     android:layout_marginBottom="14dp"
                     android:fontFamily="@font/atkinson_hyperlegible_regular"
-                    android:text="From your registration"
+                    android:text="Confirm your trucking company"
                     android:textColor="@color/text_secondary"
                     android:textSize="@dimen/text_size_body" />
 
-                <!-- Read-only company display -->
+                <!-- Company can be corrected before registration. -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -453,21 +453,18 @@
                     android:paddingHorizontal="16dp"
                     android:paddingVertical="18dp">
 
-                    <TextView
+                    <EditText
                         android:id="@+id/etCompany"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:fontFamily="@font/atkinson_hyperlegible_regular"
-                        android:textColor="@color/text_secondary"
+                        android:hint="Enter trucking company"
+                        android:inputType="textCapWords"
+                        android:maxLength="100"
+                        android:singleLine="true"
+                        android:textColor="@color/text_primary"
                         android:textSize="@dimen/text_size_body" />
-
-                    <ImageView
-                        android:layout_width="18dp"
-                        android:layout_height="18dp"
-                        android:contentDescription="Locked"
-                        android:src="@drawable/ic_lock"
-                        app:tint="@color/text_muted" />
                 </LinearLayout>
 
             </LinearLayout>

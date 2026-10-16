@@ -35,7 +35,7 @@ router.post("/status", verifyToken, driverOnly, async (req, res) => {
   }
 });
 
-router.get("/status", verifyToken, driverOnly, async (req, res) => {
+router.get("/status" , verifyToken, driverOnly, async (req, res) => {
   try {
     const snapshot = await getDb().collection("drivers").doc(req.user.uid).get();
     if (!snapshot.exists) return res.status(404).json({ success: false, message: "Driver profile unavailable" });

@@ -8,6 +8,46 @@ const target=process.env.RULES_TARGET||'mobile';assert.ok(['mobile','web'].inclu
 const source=target==='mobile'?new URL('../../firestore.rules',import.meta.url):new URL('../../../../sysu-app/frontend/firestore.rules',import.meta.url);
 env=await initializeTestEnvironment({projectId:'demo-sysu-security',firestore:{host:'127.0.0.1',port:8085,rules:await readFile(source,'utf8')}});});
 after(async()=>{await env?.cleanup()});
+
+test('registration company persists for pending accounts without granting approval',async()=>{
+  const ref=doc(db('new-driver'),'users','new-driver');
+  await assertSucceeds(setDoc(ref,{uid:'new-driver',role:'pending',status:'inactive',truckingCompany:'Synthetic Transport'}));
+  await assertSucceeds(updateDoc(ref,{truckingCompany:'Updated Transport'}));
+  assert.equal((await getDoc(ref)).data().truckingCompany,'Updated Transport');
+  await assertFails(updateDoc(ref,{role:'driver',status:'active'}));
+  await assertFails(updateDoc(ref,{truckingCompany:'x'.repeat(101)}));
+  await assertFails(updateDoc(doc(db('other-driver'),'users','new-driver'),{truckingCompany:'Foreign'}));
+});
+
+test('AUTOMATION owned native loading metadata persists with the state transition',async()=>{
+  await assertSucceeds(updateDoc(doc(db('a'),'sap_assignments','shipment'),{tripStatus:'loading',loadingStartedAt:new Date()}));
+});
+test('AUTOMATION owned native fully-loaded metadata persists with the state transition',async()=>{
+  await env.withSecurityRulesDisabled(ctx=>updateDoc(doc(ctx.firestore(),'sap_assignments','shipment'),{tripStatus:'loading'}));
+  await assertSucceeds(updateDoc(doc(db('a'),'sap_assignments','shipment'),{tripStatus:'fully_loaded',fullyLoadedAt:new Date()}));
+});
+test('AUTOMATION fresh captured GPS timestamp is accepted without inventing commit time',async()=>{
+  await assertSucceeds(setDoc(doc(db('a'),'driver_locations','a'),{driverId:'a',name:'Synthetic',lat:14.5,lng:121,
+    status:'online',sapDocId:'shipment',updatedAt:new Date(Date.now()-1000)}));
+  await assertSucceeds(updateDoc(doc(db('a'),'sap_assignments','shipment'),{lastLocation:{lat:14.5,lng:121,at:new Date(Date.now()-1000)}}));
+});
+test('AUTOMATION return-to-base GPS remains owned and active until closure',async()=>{
+  await env.withSecurityRulesDisabled(ctx=>updateDoc(doc(ctx.firestore(),'sap_assignments','shipment'),{tripStatus:'returning_to_base'}));
+  await assertSucceeds(setDoc(doc(db('a'),'driver_locations','a'),{driverId:'a',name:'Synthetic',lat:14.5,lng:121,
+    status:'online',sapDocId:'shipment',updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(doc(db('a'),'sap_assignments','shipment'),{lastLocation:{lat:14.5,lng:121,at:serverTimestamp()}}));
+});
+test('AUTOMATION foreign progress, unexpected cargo and stale/future GPS stay denied',async()=>{
+  for(const change of [{tripStatus:'loading',driverId:'b'},{tripStatus:'loading',loadingStartedAt:new Date(0)},
+    {tripStatus:'loading',loadingStartedAt:new Date(),lineItems:[]}]){
+    await assertFails(updateDoc(doc(db('a'),'sap_assignments','shipment'),change));
+  }
+  await assertFails(updateDoc(doc(db('b'),'sap_assignments','shipment'),{tripStatus:'loading',loadingStartedAt:new Date()}));
+  for(const at of [new Date(0),new Date(Date.now()+60000)]){
+    await assertFails(setDoc(doc(db('a'),'driver_locations','a'),{driverId:'a',name:'Synthetic',lat:14.5,lng:121,
+      status:'online',sapDocId:'shipment',updatedAt:at}));
+  }
+});
 beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisabled(async ctx=>{
 const admin=ctx.firestore();for(const [id,role,status] of [['a','driver','active'],['b','driver','active'],['staff','fleet_manager','active'],['pending','pending','inactive'],['disabled','driver','disabled']])await setDoc(doc(admin,'users',id),{name:id,role,status});
 await setDoc(doc(admin,'users','missing-status'),{role:'driver'});await setDoc(doc(admin,'users','unknown-role'),{role:'unknown',status:'active'});

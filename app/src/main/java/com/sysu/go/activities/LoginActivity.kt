@@ -316,6 +316,18 @@ class LoginActivity : AppCompatActivity() {
                         if (storedLN.isNotEmpty()) append(" $storedLN")
                     }.trim().ifEmpty { storedName }
 
+                    // Approved accounts retain the company submitted during registration.
+                    var storedCompany = doc.getString("truckingCompany") ?: ""
+                    try {
+                        val driverDoc = db.collection("drivers").document(uid)
+                            .get(com.google.firebase.firestore.Source.SERVER).await()
+                        if (driverDoc.exists()) {
+                            storedCompany = driverDoc.getString("truckingCompany")?.takeIf { it.isNotBlank() }
+                                ?: driverDoc.getString("truckCompany")?.takeIf { it.isNotBlank() }
+                                ?: storedCompany
+                        }
+                    } catch (_: Exception) {}
+
                     SessionManager(this@LoginActivity).saveDriverSessionWithSplit(
                         uid = uid,
                         fn = storedFN,
@@ -323,7 +335,8 @@ class LoginActivity : AppCompatActivity() {
                         ln = storedLN,
                         displayName = cleanName,
                         email = email,
-                        phone = storedPhone
+                        phone = storedPhone,
+                        company = storedCompany
                     )
                     setLoading(false)
                     navigateToMain()

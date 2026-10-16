@@ -744,7 +744,11 @@ class AssignmentActivity : AppCompatActivity() {
                 // as active cards. (Completed/delivered docs still exist for history.)
                 val active = snaps.documents.filter { doc ->
                     val s = doc.getString("tripStatus")
-                    s != "completed" && s != "delivered"
+                    s != "completed" && s != "delivered" &&
+                        com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
+                            s, doc.getString("returnStatus"), doc.getString("queueId"),
+                            sessionManager.getCurrentQueueDocId(), "assigned"
+                        )
                 }
 
                 val list = active.mapNotNull { snap -> buildAssignment(snap) }

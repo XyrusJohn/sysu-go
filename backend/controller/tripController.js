@@ -31,22 +31,42 @@ const registerTrip = async (req, res) => {
     const db = getDb();
     const queue = db.collection("queue").doc(body.queueId);
     const actor = db.collection("users").doc(req.user.uid);
+    const driver = db.collection("drivers").doc(req.user.uid);
     const helper = [helperFN, helperMI ? helperMI + "." : "", helperLN].filter(Boolean).join(" ");
     const plateNumber = platePrefix + "-" + plateSuffix;
     await db.runTransaction(async tx => {
       const profile = await tx.get(actor);
       const entry = await tx.get(queue);
+      const driverProfile = await tx.get(driver);
       if (!profile.exists || profile.data().role !== "driver" || profile.data().status !== "active") throw fail(403, "Account not authorized");
       if (!entry.exists) throw fail(404, "Queue entry not found");
       const existing = entry.data();
       if (existing.driverId !== req.user.uid) throw fail(403, "Queue entry not owned by this driver");
-      if (existing.status !== "waiting" || existing.registrationComplete === true) throw fail(409, "Queue entry cannot be registered");
+      if (existing.registrationComplete === true) {
+        if (["waiting", "called", "assigned", "loading", "fully_loaded", "in_transit"].includes(existing.status) && existing.helperFN === helperFN &&
+            existing.helperMI === helperMI && existing.helperLN === helperLN && existing.company === company &&
+            existing.truckType === truckType && existing.plateNumber === plateNumber &&
+            (body.driverPhone == null || existing.driverPhone === clean(body.driverPhone))) {
+          if (!driverProfile.exists || !driverProfile.data().truckingCompany?.trim() || !driverProfile.data().truckCompany?.trim()) {
+            tx.set(driver, { driverId: req.user.uid, driverName: existing.driverName || "", truckingCompany: company, truckCompany: company,
+              updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          }
+          return;
+        }
+        throw fail(409, "Queue entry cannot be registered");
+      }
+      if (existing.status !== "waiting") throw fail(409, "Queue entry cannot be registered");
       tx.update(queue, {
         helperFN, helperMI, helperLN, helper, company, truckCompany: company,
         truckType, platePrefix, plateSuffix, plateNumber, registrationComplete: true,
         ...(body.driverPhone != null ? { driverPhone: clean(body.driverPhone) } : {}),
         updatedAt: FieldValue.serverTimestamp(),
       });
+      const companyUpdate = { truckingCompany: company, truckCompany: company };
+      if (!driverProfile.exists || driverProfile.data().truckingCompany !== company || driverProfile.data().truckCompany !== company) {
+        tx.set(driver, { driverId: req.user.uid, driverName: existing.driverName || "", ...companyUpdate,
+          updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      }
     });
     // Owned notification only; Firestore listeners observe authoritative state.
     const io = req.app.get("io");

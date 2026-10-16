@@ -20,7 +20,8 @@ sealed class QrResult<out T> {
 class QrHttpClient(
     private val baseUrl: String,
     private val tokenProvider: () -> String?,
-    private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+    private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+    private val forceRefreshTokenProvider: () -> String? = tokenProvider
 ) {
     private val gson = Gson()
     private fun validToken(token: String) = token.matches(Regex("[A-Za-z0-9_-]{1,128}"))
@@ -40,8 +41,13 @@ class QrHttpClient(
         if (bearer.isNullOrBlank()) return QrResult.Error(401, "Please sign in again")
         val body = gson.toJson(request).toByteArray(Charsets.UTF_8)
         if (body.size > 8192) return QrResult.Error(400, "QR registration is too large")
-        // A timeout can follow a committed admission. Leave retries to an explicit user action.
-        val result = exchange("/scan", "POST", bearer, body, ScanResponse::class.java)
+        var result = exchange("/scan", "POST", bearer, body, ScanResponse::class.java)
+        // Only an explicit authentication denial is safe to retry; a timeout may follow a committed admission.
+        if (result is QrResult.Error && result.code == 401) {
+            val refreshed = try { forceRefreshTokenProvider() } catch (_: Exception) { null }
+            if (refreshed.isNullOrBlank()) return QrResult.Error(401, "Please sign in again")
+            result = exchange("/scan", "POST", refreshed, body, ScanResponse::class.java)
+        }
         return when (result) {
             is QrResult.Success -> if (result.data.success && !result.data.queueId.isNullOrBlank()) result else QrResult.Error(502, "Invalid admission response")
             is QrResult.Error -> result
