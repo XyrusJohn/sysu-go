@@ -1,6 +1,6 @@
 # SYSU Go
 
-**Stanley University Transportation - Driver Tracking System**
+*Sysu International - Driver Tracking System**
 
 SYSU Go is the Android driver application and supporting Node.js/Firebase backend. The web dashboard, kiosk, SAP assignment view, and maps are maintained in the sibling `sysu-app` project.
 
