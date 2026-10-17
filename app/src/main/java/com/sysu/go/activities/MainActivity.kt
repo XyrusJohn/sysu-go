@@ -1,4 +1,4 @@
-// MainActivity
+﻿// MainActivity
 package com.sysu.go.activities
 
 import android.annotation.SuppressLint
@@ -65,9 +65,10 @@ class MainActivity : AppCompatActivity() {
     private val db = FirebaseFirestore.getInstance()
     private var isInQueue = false
     private var hasShipment = false  // true when driver has an assigned shipment
-    private var queueListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var queueListener: (() -> Unit)? = null
+    private var hasLoadedQueueState = false
     private var positionJob: kotlinx.coroutines.Job? = null
-    private var assignmentListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var assignmentListener: (() -> Unit)? = null
     private var pulseAnimator1: ObjectAnimator? = null
     private var pulseAnimator2: ObjectAnimator? = null
     private val pulseHandler = Handler(Looper.getMainLooper())
@@ -107,27 +108,27 @@ class MainActivity : AppCompatActivity() {
     private val circleAnimators = mutableListOf<android.animation.Animator>()
     /** Tracks views injected into circleContainer so they can be removed onDestroy */
     private val circleViews = mutableListOf<View>()
-    /** Tracks My Trip tab's own circle animators — separate from home banner */
+    /** Tracks My Trip tab's own circle animators â€” separate from home banner */
     private val myTripCircleAnimators = mutableListOf<android.animation.Animator>()
-    /** Tracks My Trip tab's own circle views — separate from home banner */
+    /** Tracks My Trip tab's own circle views â€” separate from home banner */
     private val myTripCircleViews = mutableListOf<View>()
     /** Prevents double-init of My Trip circle animations */
     private var myTripCirclesInitialized = false
     /** Tracks the bounce arrow animator so it can be cancelled onDestroy */
     private var bounceArrowAnimator: ObjectAnimator? = null
-    /** Connection loss popup guard — prevents double-dialog if network flaps */
+    /** Connection loss popup guard â€” prevents double-dialog if network flaps */
     private var isOfflineDialogShowing = false
-    /** BroadcastReceiver for connectivity changes — registered in onResume, unregistered in onPause */
+    /** BroadcastReceiver for connectivity changes â€” registered in onResume, unregistered in onPause */
     private var connectionReceiver: BroadcastReceiver? = null
     /** Adapter driving rvShipmentCards.
         * Phase 1 (0-1 shipments): ShipmentCardAdapter (vertical, shown in cardMyQueue).
         * Phase 2 (2+ shipments): ShipmentCardHorizontalAdapter (horizontal scroll carousel).
         * Kept as ShipmentCardAdapter? but a local horizontal adapter is cast and assigned
-        * here at runtime — only submitList is called on this field, which both types share. */
+        * here at runtime â€” only submitList is called on this field, which both types share. */
     private var shipmentCardAdapter: com.sysu.go.adapter.ShipmentCardAdapter? = null
-    /** In-memory list of queue tabs — used to determine 0 / 1 / 2+ shipment visibility */
+    /** In-memory list of queue tabs â€” used to determine 0 / 1 / 2+ shipment visibility */
     private val currentQueueEntries = mutableListOf<com.sysu.go.adapter.QueueTab>()
-    /** In-memory list of loaded Assignment objects — used to populate vertical shipment cards */
+    /** In-memory list of loaded Assignment objects â€” used to populate vertical shipment cards */
     private val currentShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
     companion object {
@@ -144,14 +145,14 @@ class MainActivity : AppCompatActivity() {
 
     // Runtime permission request for POST_NOTIFICATIONS (Android 13+).
     // Without this, the foreground service notification is silently dropped.
-    // On Android < 13 this is NO-OP — permission is auto-granted at manifest install.
+    // On Android < 13 this is NO-OP â€” permission is auto-granted at manifest install.
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            Log.i(TAG, "POST_NOTIFICATIONS granted — foreground notification will show")
+            Log.i(TAG, "POST_NOTIFICATIONS granted â€” foreground notification will show")
         } else {
-            Log.w(TAG, "POST_NOTIFICATIONS denied — notification may not appear. Please enable in Settings.")
+            Log.w(TAG, "POST_NOTIFICATIONS denied â€” notification may not appear. Please enable in Settings.")
         }
         safeStartLocationServices()
     }
@@ -161,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        // ── Permission setup gate ─────────────────────────────────────────
+        // â”€â”€ Permission setup gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // If driver hasn't completed the permission wizard or is missing required
         // permissions (location / notification / battery), show the setup screen
         // instead of the dashboard. Mark as seen immediately so a back-press
@@ -169,10 +170,10 @@ class MainActivity : AppCompatActivity() {
         if (PermissionHelper.needsSetup(this)) {
             PermissionHelper.markSetupCompleted(this)
             startActivity(Intent(this, PermissionSetupActivity::class.java))
-            // Do NOT call finish() — let the system manage the back stack
+            // Do NOT call finish() â€” let the system manage the back stack
             return
         }
-        // ─────────────────────────────────────────────────────────────────
+        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -193,6 +194,7 @@ class MainActivity : AppCompatActivity() {
         setupUI()
         setupBottomNav()
         setupTutorial()
+        SocketManager.connect(this)
         listenToQueueStatus()
         startCircleAnimation()
         startPulseAnimation()
@@ -200,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupTutorial() {
-        // Always show tutorials every app load — never skip based on "seen" flags
+        // Always show tutorials every app load â€” never skip based on "seen" flags
         if (binding.qrTutorialOverlay.visibility == View.VISIBLE ||
             binding.navTutorialOverlay.visibility == View.VISIBLE) return
 
@@ -476,33 +478,33 @@ class MainActivity : AppCompatActivity() {
      *
      * Phase 1 (0 or 1 shipment): cardMyQueue shows. rvShipmentCards stays GONE.
      * Phase 2+ (2+ shipments): cardMyQueue hidden. rvShipmentCards shows vertical list
-     * of full-width shipment cards, each tappable → QueueDetailsActivity for that shipment.
+     * of full-width shipment cards, each tappable â†’ QueueDetailsActivity for that shipment.
      */
     private fun updateQueueTabs() {
         when {
             currentShipments.isEmpty() -> {
-                // No shipments — hide both shipment displays
+                // No shipments â€” hide both shipment displays
                 binding.rvShipmentCards.visibility = View.GONE
                 binding.cardMyQueue.visibility = View.GONE
                 binding.myQueueSection.root.visibility = View.GONE
                 return
             }
             else -> {
-                // 1 OR MORE shipments — always show rvShipmentCards with cards
+                // 1 OR MORE shipments â€” always show rvShipmentCards with cards
                 binding.cardMyQueue.visibility = View.GONE
                 binding.myQueueSection.root.visibility = View.GONE
                 binding.rvShipmentCards.visibility = View.VISIBLE
             }
         }
-        // ── Vertical stacking: one full-width card per shipment, scrollable ──
+        // â”€â”€ Vertical stacking: one full-width card per shipment, scrollable â”€â”€
         binding.rvShipmentCards.layoutManager =
             androidx.recyclerview.widget.LinearLayoutManager(this)
 
-        // Re-create adapter — uses ShipmentCardAdapter (vertical layout, item_shipment_card.xml)
+        // Re-create adapter â€” uses ShipmentCardAdapter (vertical layout, item_shipment_card.xml)
         shipmentCardAdapter = com.sysu.go.adapter.ShipmentCardAdapter(
             sessionActiveDocId = SessionManager(this).getActiveSapDocId()
         ) { assignment ->
-            // Card tapped → navigate to QueueDetailsActivity for POD execution / review
+            // Card tapped â†’ navigate to QueueDetailsActivity for POD execution / review
             val intent = Intent(this, QueueDetailsActivity::class.java)
             intent.putExtra("shipment_doc_id", assignment.docId)
             startActivity(intent)
@@ -514,7 +516,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateScanButtonState() {
         val tripStatus = currentShipments.firstOrNull()?.tripStatus
         when {
-            // ── IN TRANSIT — active trip in progress, map icon shows live tracking ──
+            // â”€â”€ IN TRANSIT â€” active trip in progress, map icon shows live tracking â”€â”€
             tripStatus == "in_transit" -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
                 binding.tvStatusPill?.text = "IN TRANSIT"
@@ -526,7 +528,7 @@ class MainActivity : AppCompatActivity() {
 
                 updateReadyBadge("IN TRANSIT", R.color.white, R.color.frosted_green)
             }
-            // ── LOADED — verified, ready to start trip ──
+            // â”€â”€ LOADED â€” verified, ready to start trip â”€â”€
             tripStatus == "loaded" -> {
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "LOADED (START TRIP)"
@@ -539,7 +541,7 @@ class MainActivity : AppCompatActivity() {
 
                 updateReadyBadge("LOADED (START TRIP)", R.color.white, R.color.frosted_green)
             }
-            // ── LOADING — cargo is being loaded at bay ──
+            // â”€â”€ LOADING â€” cargo is being loaded at bay â”€â”€
             tripStatus == "loading" -> {
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "LOADING CARGO"
@@ -552,7 +554,7 @@ class MainActivity : AppCompatActivity() {
 
                 updateReadyBadge("LOADING CARGO", R.color.white, R.color.frosted_amber)
             }
-            // ── FULLY LOADED — guard verification needed before trip ──
+            // â”€â”€ FULLY LOADED â€” guard verification needed before trip â”€â”€
             tripStatus == "fully_loaded" -> {
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "GUARD VERIFICATION"
@@ -565,13 +567,13 @@ class MainActivity : AppCompatActivity() {
 
                 updateReadyBadge("GUARD VERIFICATION", R.color.white, R.color.frosted_red)
             }
-            // ── Guard verified, awaiting driver confirmation ──
+            // â”€â”€ Guard verified, awaiting driver confirmation â”€â”€
             currentShipments.any { it.guardVerified } &&
                 !currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = "GUARD VERIFIED"
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
-                binding.tvCTAHeader?.text = "Guard Verified — Confirm Shipment"
+                binding.tvCTAHeader?.text = "Guard Verified â€” Confirm Shipment"
                 binding.tvCTABody?.text = "Guard has signed off. Confirm your shipment to start the trip."
                 binding.statusPill?.setBackgroundResource(R.drawable.bg_status_pill_green)
                 startStatusDotPulse()
@@ -579,7 +581,7 @@ class MainActivity : AppCompatActivity() {
 
                 updateReadyBadge("GUARD VERIFIED", R.color.white, R.color.frosted_green)
             }
-            // ── All shipments verified AND confirmed — START TRIP ready ──
+            // â”€â”€ All shipments verified AND confirmed â€” START TRIP ready â”€â”€
             currentShipments.isNotEmpty() &&
                 currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                 binding.btnScanQR.setImageResource(R.drawable.map)
@@ -605,7 +607,7 @@ class MainActivity : AppCompatActivity() {
                 updateReadyBadge("START TRIP", R.color.white, R.color.frosted_green)
             }
             hasShipment -> {
-                // ASSIGNED — shipment assigned, guard verification happens in AssignmentActivity
+                // ASSIGNED â€” shipment assigned, guard verification happens in AssignmentActivity
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_assigned)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.white))
@@ -618,7 +620,7 @@ class MainActivity : AppCompatActivity() {
                 updateReadyBadge("ASSIGNED", R.color.white, R.color.frosted_blue)
             }
             isInQueue -> {
-                // IN QUEUE — waiting in queue to be called by booth
+                // IN QUEUE â€” waiting in queue to be called by booth
                 binding.btnScanQR.setImageResource(R.drawable.ticket_1)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_queue)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_gold))
@@ -631,7 +633,7 @@ class MainActivity : AppCompatActivity() {
                 updateReadyBadge("ON QUEUE", R.color.white, R.color.frosted_gold)
             }
             else -> {
-                // NOT ON QUEUE — scan QR to join queue
+                // NOT ON QUEUE â€” scan QR to join queue
                 binding.btnScanQR.setImageResource(R.drawable.qr_icon)
                 binding.tvStatusPill?.text = getString(R.string.cta_status_scan)
                 binding.tvStatusPill?.setTextColor(ContextCompat.getColor(this, R.color.sysu_red))
@@ -682,7 +684,7 @@ class MainActivity : AppCompatActivity() {
         statusDotHandler.postDelayed(statusDotRunnable!!, 0L)
     }
 
-    // ─── My Trip Tab Animations ────────────────────────────────────────────────
+    // â”€â”€â”€ My Trip Tab Animations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /**
      * Starts bouncing circles + pulse rings inside the My Trip tab's red banner.
@@ -868,7 +870,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Shipment assigned → open AssignmentActivity (shows all assignments with live guard status)
+        // Shipment assigned â†’ open AssignmentActivity (shows all assignments with live guard status)
         if (hasShipment) {
             startActivity(Intent(this, AssignmentActivity::class.java))
             return
@@ -886,7 +888,7 @@ class MainActivity : AppCompatActivity() {
         registerConnectionMonitor()
         startHeartbeatMonitoring()
         updateTrackingBadge(TrackingStateMonitor.getCurrentState())
-        // Re-check tutorials — user may have re-enabled them in Profile
+        // Re-check tutorials â€” user may have re-enabled them in Profile
         setupTutorial()
     }
 
@@ -909,7 +911,7 @@ class MainActivity : AppCompatActivity() {
             val isReturning = currentShipments.any { it.tripStatus == "returning_to_base" }
             val allCompleted = currentShipments.isNotEmpty() && currentShipments.all { it.isCompleted }
 
-            // ── Priority 1: If there is an active trip, returning to base, or completed shipments -> GeneralTrackingActivity ──
+            // â”€â”€ Priority 1: If there is an active trip, returning to base, or completed shipments -> GeneralTrackingActivity â”€â”€
             if (hasActiveTrip || isReturning || allCompleted) {
                 val activeDocId = sessionMgr.getActiveSapDocId()
                     ?: currentShipments.firstOrNull { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }?.docId
@@ -925,7 +927,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             when {
-                // ── Route 3: all shipments guardVerified && driverConfirmed → GeneralTrackingActivity ──
+                // â”€â”€ Route 3: all shipments guardVerified && driverConfirmed â†’ GeneralTrackingActivity â”€â”€
                 currentShipments.isNotEmpty() &&
                     currentShipments.all { it.guardVerified && it.driverConfirmed } -> {
                     val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
@@ -933,23 +935,23 @@ class MainActivity : AppCompatActivity() {
                     }
                     startActivity(intent)
                 }
-                // ── Route 4: hasShipment → AssignmentActivity ──
+                // â”€â”€ Route 4: hasShipment â†’ AssignmentActivity â”€â”€
                 hasShipment -> {
                     startActivity(Intent(this, AssignmentActivity::class.java))
                 }
-                // ── Route 5: isInQueue → queue details ──
+                // â”€â”€ Route 5: isInQueue â†’ queue details â”€â”€
                 isInQueue -> {
                     openQueueDetails()
                 }
                 else -> {
-                    // Else → QRScanActivity
+                    // Else â†’ QRScanActivity
                     openQRScan()
                 }
             }
         }
 
         binding.cardMyQueue.setOnClickListener {
-            // Tapping the home card → show per-shipment detail (banner + card stack).
+            // Tapping the home card â†’ show per-shipment detail (banner + card stack).
             // Pass the first shipment's docId so QueueDetailsActivity loads correctly.
             if (currentShipments.isNotEmpty()) {
                 val intent = Intent(this, com.sysu.go.activities.QueueDetailsActivity::class.java)
@@ -966,7 +968,7 @@ class MainActivity : AppCompatActivity() {
         // Initialize My Trip tab as hidden (Home tab is shown at startup)
         binding.myTripTabContainer.visibility = View.GONE
 
-        // Bottom nav — Home icon: shows home content, hides My Trip tab
+        // Bottom nav â€” Home icon: shows home content, hides My Trip tab
         binding.btnHome.setOnClickListener {
             updateBottomNavSelectionForTab(isHomeTab = true)
             // Show home content
@@ -975,12 +977,12 @@ class MainActivity : AppCompatActivity() {
             binding.myTripTabContainer.visibility = View.GONE
         }
 
-        // Bottom nav — Profile icon: opens ProfileActivity (driver info, requirements, logout)
+        // Bottom nav â€” Profile icon: opens ProfileActivity (driver info, requirements, logout)
         binding.btnProfile.setOnClickListener {
             startActivity(Intent(this, ProfileActivity::class.java))
         }
 
-        // Back button inside My Trip tab — returns to Home tab
+        // Back button inside My Trip tab â€” returns to Home tab
         // (kept for backwards compatibility; actual back navigation is now in MyTripActivity)
         binding.myTripTabContainer.findViewById<ImageButton>(R.id.btnBack)?.setOnClickListener {
             updateBottomNavSelectionForTab(isHomeTab = true)
@@ -996,17 +998,17 @@ class MainActivity : AppCompatActivity() {
             binding.cardScanCTA.visibility = View.GONE
         }
 
-        // ── Vertical Shipment Cards RecyclerView — one full-width card per shipment.
+        // â”€â”€ Vertical Shipment Cards RecyclerView â€” one full-width card per shipment.
         // Phase 1: hidden (cardMyQueue handles display).
         // Phase 2 (2+ shipments): visible. LayoutManager set via updateQueueTabs().
-        // default canScrollVertically=true — scroll works via constraintHeight_max in XML.
+        // default canScrollVertically=true â€” scroll works via constraintHeight_max in XML.
         binding.rvShipmentCards.layoutManager =
             androidx.recyclerview.widget.LinearLayoutManager(this)
 
-        // ── Scroll quality: rubber-band over-scroll ──
+        // â”€â”€ Scroll quality: rubber-band over-scroll â”€â”€
         binding.rvShipmentCards.overScrollMode = androidx.recyclerview.widget.RecyclerView.OVER_SCROLL_ALWAYS
 
-        // ── Scroll quality: smooth item animations ──
+        // â”€â”€ Scroll quality: smooth item animations â”€â”€
         binding.rvShipmentCards.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
             addDuration = 200
             removeDuration = 200
@@ -1014,7 +1016,7 @@ class MainActivity : AppCompatActivity() {
             changeDuration = 200
         }
 
-        // ── Scroll quality: uniform 8dp vertical spacing between cards ──
+        // â”€â”€ Scroll quality: uniform 8dp vertical spacing between cards â”€â”€
         binding.rvShipmentCards.addItemDecoration(object : androidx.recyclerview.widget.RecyclerView.ItemDecoration() {
             override fun getItemOffsets(
                 outRect: android.graphics.Rect,
@@ -1075,7 +1077,7 @@ class MainActivity : AppCompatActivity() {
             // Update text
             binding.tvStatusBadgeText.text = labelText
         } else {
-            // No active trip — show default "Ready to Scan", hide pill
+            // No active trip â€” show default "Ready to Scan", hide pill
             binding.statusBadge.visibility = View.GONE
             binding.readyBadge.visibility = View.VISIBLE
         }
@@ -1099,7 +1101,7 @@ class MainActivity : AppCompatActivity() {
                     val storedMI = doc.getString("mi") ?: ""
                     val storedLN = doc.getString("ln") ?: ""
 
-                    // Rebuild clean display name from parts — Firestore "name" field
+                    // Rebuild clean display name from parts â€” Firestore "name" field
                     // may still carry the old double-dot MI from before the sanitizer fix.
                     val cleanName = buildString {
                         append(storedFN)
@@ -1133,94 +1135,74 @@ class MainActivity : AppCompatActivity() {
     private fun listenToQueueStatus() {
         val session = SessionManager(this)
         val driverId = session.getDriverId() ?: return
-
-        queueListener?.remove()
-        queueListener = db.collection("queue")
-            .whereEqualTo("driverId", driverId)
-            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit"))
-            .addSnapshotListener { snapshots, error ->
-                if (error != null) return@addSnapshotListener
-
-                if (snapshots != null && !snapshots.isEmpty) {
-                    val entry = snapshots.documents[0]
-                    val data = entry.data ?: return@addSnapshotListener
-                    val truckType = data["truckType"] as? String ?: ""
-                    val storedStatus = data["status"] as? String ?: ""
-                    val status = if (storedStatus in listOf("waiting", "called") && data["registrationComplete"] != true)
-                        "registration_pending" else storedStatus
+        if (!hasLoadedQueueState) {
+            binding.queueLoadingContainer.visibility = View.VISIBLE
+            binding.queueLoadingSkeleton.root.visibility = View.VISIBLE
+            binding.tvQueueLoadError.visibility = View.GONE
+        }
+        queueListener?.invoke()
+        queueListener = SocketManager.subscribeRealtime("queue", onData = { payload ->
+            val records = payload as? List<*> ?: return@subscribeRealtime
+            val queues = records.mapNotNull { it as? Map<String, Any?> }
+            val preferredQueueId = currentQueueDocId ?: session.getCurrentQueueDocId()
+            val activeStatuses = listOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit")
+            val entry = queues.firstOrNull { it["id"] == preferredQueueId &&
+                (it["status"] as? String) in activeStatuses
+            } ?: queues.firstOrNull {
+                (it["status"] as? String) in listOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit")
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                hasLoadedQueueState = true
+                binding.queueLoadingContainer.visibility = View.GONE
+                if (entry != null) {
+                    val queueId = entry["id"] as? String ?: return@runOnUiThread
+                    val previousQueueId = currentQueueDocId
+                    val previousQueueStatus = currentQueueStatus
+                    val truckType = entry["truckType"] as? String ?: ""
+                    val storedStatus = entry["status"] as? String ?: ""
+                    val status = if (storedStatus in listOf("waiting", "called") && entry["registrationComplete"] != true) "registration_pending" else storedStatus
                     isInQueue = true
-                    if (currentQueueDocId != entry.id) currentShipments.clear()
-                    currentQueueDocId = entry.id
+                    if (currentQueueDocId != queueId) currentShipments.clear()
+                    currentQueueDocId = queueId
                     currentQueueStatus = status
-                    currentQueueEnteredAtMillis = (entry.getTimestamp("entryTime") ?: entry.getTimestamp("joinedAt"))?.toDate()?.time
-                    currentQueueShipmentIds = ((entry.get("assignedShipments") as? List<*>)
-                        ?.mapNotNull { item ->
-                            val fields = item as? Map<*, *> ?: return@mapNotNull null
-                            (fields["dispatchKey"] ?: fields["obdNumber"]) as? String
-                        }.orEmpty() + listOfNotNull(entry.getString("assignedShipment"))).toSet()
-                    session.saveCurrentQueueDocId(entry.id)
-                    // ── Queue Tabs: add entry immediately, hasShipment updated later in listenToAssignment ──
-                    val tab = com.sysu.go.adapter.QueueTab(
-                        queueDocId = entry.id,
-                        status = status,
-                        hasShipment = false      // updated to true in listenToAssignment when sap doc found
-                    )
+                    currentQueueEnteredAtMillis = timestampMillis(entry["entryTime"]) ?: timestampMillis(entry["joinedAt"])
+                    currentQueueShipmentIds = ((entry["assignedShipments"] as? List<*>)?.mapNotNull { item ->
+                        val fields = item as? Map<*, *> ?: return@mapNotNull null
+                        (fields["dispatchKey"] ?: fields["obdNumber"]) as? String
+                    }.orEmpty() + listOfNotNull(entry["assignedShipment"] as? String)).toSet()
+                    session.saveCurrentQueueDocId(queueId)
                     currentQueueEntries.clear()
-                    currentQueueEntries.add(tab)
+                    currentQueueEntries.add(com.sysu.go.adapter.QueueTab(queueDocId = queueId, status = status, hasShipment = false))
                     updateQueueTabs()
                     positionJob?.cancel()
-
-                    val queueId = entry.id
-                    val sessionDriverId = session.getDriverId() ?: ""
-                    if (status == "assigned") {
-                        // Driver has been assigned a shipment — check sap_assignments for details
-                        listenToAssignment(queueId, truckType, sessionDriverId)
-                        updateQueueUI(null, status, truckType, null)
-                        updateScanButtonState()
-                    } else if (status == "in_transit") {
-                        // Driver is in transit — keep listening for updates
-                        assignmentListener?.remove()
-                        listenToAssignment(queueId, truckType, sessionDriverId)
-                        updateQueueUI(null, status, truckType, null)
-                        updateScanButtonState()
-                    } else if (status == "loading" || status == "fully_loaded") {
-                        // Check guardVerified from sap_assignments and ALWAYS call listenToAssignment
-                        // to show the shipment assignment regardless of guard verified state.
-                        // Also covers "fully_loaded" so drivers in that state are restored after re-login.
-                        db.collection("sap_assignments")
-                            .whereEqualTo("driverId", queueId)
-                            .addSnapshotListener { assignSnap, assignError ->
-                                if (assignError != null) {
-                                    Log.e(TAG, "guardVerified query error: ${assignError.message}")
-                                    return@addSnapshotListener
-                                }
-                                val guardVerified = assignSnap?.documents?.firstOrNull()
-                                    ?.getBoolean("guardVerified") ?: false
-                                isGuardVerified = guardVerified
-                                // Always call listenToAssignment for status=loading to show shipment + badge
+                    val sessionDriverId = session.getDriverId() ?: driverId
+                    when {
+                        status in listOf("assigned", "in_transit", "loading", "fully_loaded") -> {
+                            if (previousQueueId != queueId || previousQueueStatus in listOf("waiting", "called") || assignmentListener == null) {
                                 listenToAssignment(queueId, truckType, sessionDriverId)
-                                updateScanButtonState()
-                                // Also update badge/queue card immediately even before shipment loads
-                                updateQueueUI(null, status, truckType, null)
                             }
-                    } else if (status in listOf("waiting", "called")) {
-                        assignmentListener?.remove()
-                        currentShipments.clear()
-                        hasShipment = false
-                        shipmentCardAdapter?.submitList(emptyList())
-                        updateQueueTabs()
-                        positionJob = com.sysu.go.network.observeQueuePosition(this, queueId) { position ->
-                                if (isFinishing || isDestroyed || currentQueueDocId != queueId ||
-                                    currentQueueStatus !in listOf("waiting", "called")) return@observeQueuePosition
+                            updateQueueUI(null, status, truckType, null)
+                        }
+                        status in listOf("waiting", "called") -> {
+                            assignmentListener?.invoke()
+                            currentShipments.clear()
+                            hasShipment = false
+                            shipmentCardAdapter?.submitList(emptyList())
+                            updateQueueTabs()
+                            positionJob = com.sysu.go.network.observeQueuePosition(this, queueId) { position ->
+                                if (isFinishing || isDestroyed || currentQueueDocId != queueId || currentQueueStatus !in listOf("waiting", "called")) return@observeQueuePosition
                                 updateQueueUI(position, status, truckType, null)
                                 updateScanButtonState()
                             }
-                    } else {
-                        assignmentListener?.remove()
-                        currentShipments.clear()
-                        hasShipment = false
-                        shipmentCardAdapter?.submitList(emptyList())
-                        updateQueueUI(null, status, truckType, null)
+                        }
+                        else -> {
+                            assignmentListener?.invoke()
+                            currentShipments.clear()
+                            hasShipment = false
+                            shipmentCardAdapter?.submitList(emptyList())
+                            updateQueueUI(null, status, truckType, null)
+                        }
                     }
                     updateScanButtonState()
                 } else {
@@ -1236,10 +1218,7 @@ class MainActivity : AppCompatActivity() {
                     shipmentCardAdapter?.submitList(emptyList())
                     binding.rvShipmentCards.visibility = View.GONE
                     positionJob?.cancel()
-
-                    // Even with no queue doc, check for assigned shipments in sap_assignments
                     listenToAssignmentViaSessionDriverId(driverId, "")
-
                     binding.tvStatusBadgeText.text = "Ready to Scan"
                     binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
                     binding.tvScanHint.text = "Show QR code at booth to check in"
@@ -1250,51 +1229,25 @@ class MainActivity : AppCompatActivity() {
                     binding.tvQueueStatusLabel.visibility = View.GONE
                     binding.tvQueueDetails.text = ""
                     binding.tvQueueDetails.visibility = View.GONE
-                    // Restore queue icon to default
                     binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
-                    binding.ivQueueIcon.setColorFilter(
-                        ContextCompat.getColor(this, R.color.sysu_red)
-                    )
-                    // Hide cancel button when out of queue
+                    binding.ivQueueIcon.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
                     binding.dividerCancelQueue.visibility = View.GONE
                     binding.cancelQueueContainer.visibility = View.GONE
                     updateScanButtonState()
                 }
             }
-    }
-
-    private fun listenToAssignment(queueId: String, truckType: String, sessionDriverId: String) {
-        Log.d(TAG, ">> listenToAssignment() called — queueId=$queueId sessionDriverId=$sessionDriverId")
-        assignmentListener?.remove()
-
-        /**
-         * Attempts to load ALL sap_assignments for this driver and populate
-         * currentQueueEntries with one tab per shipment.
-         *
-         * Approach 1: query by queueId — matches older docs where driverId == queueDocId
-         * Approach 2: query by sessionDriverId — matches newer docs where driverId == Firebase UID
-         *
-         * Both approaches are listeners so new shipments are picked up automatically.
-         * Syncs currentQueueEntries from ALL found sap_assignment docs, then calls updateQueueTabs().
-         */
-        assignmentListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", queueId)
-            .addSnapshotListener { allQueueSnapshots, qErr ->
-                if (qErr != null) {
-                    Log.e(TAG, ">> Approach1 error: ${qErr.message} — trying sessionDriverId fallback")
-                    listenToAssignmentViaSessionDriverId(sessionDriverId, truckType)
-                    return@addSnapshotListener
-                }
-
-                if (allQueueSnapshots != null && !allQueueSnapshots.isEmpty) {
-                    // Approach 1 matched — found sap_assignment(s) using queueId as driverId
-                    syncQueueTabsFromSapSnapshots(allQueueSnapshots, sessionDriverId, truckType)
-                } else {
-                    // Approach 1 empty — fall through to Approach 2
-                    Log.d(TAG, ">> Approach1 empty — trying Approach2 (sessionDriverId listener)")
-                    listenToAssignmentViaSessionDriverId(sessionDriverId, truckType)
-                }
+        }, onError = { error ->
+            Log.e(TAG, "queue realtime error: $error")
+            if (!hasLoadedQueueState && !isFinishing) {
+                binding.queueLoadingContainer.visibility = View.VISIBLE
+                binding.queueLoadingSkeleton.root.visibility = View.GONE
+                binding.tvQueueLoadError.visibility = View.VISIBLE
             }
+        })
+    }
+    private fun listenToAssignment(queueId: String, truckType: String, sessionDriverId: String) {
+        Log.d(TAG, ">> listenToAssignment() called â€” queueId=$queueId sessionDriverId=$sessionDriverId")
+        listenToAssignmentViaSessionDriverId(sessionDriverId, truckType)
     }
 
     /**
@@ -1303,21 +1256,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun listenToAssignmentViaSessionDriverId(sessionDriverId: String, truckType: String) {
         // Remove old approach-2 listener if any, then listen fresh
-        assignmentListener?.remove()
+        assignmentListener?.invoke()
         val observedQueueId = currentQueueDocId
-        assignmentListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", sessionDriverId)
-            .addSnapshotListener { snap, err ->
-                if (observedQueueId != currentQueueDocId) return@addSnapshotListener
-                if (err != null) {
-                    Log.e(TAG, ">> Approach2 error: ${err.message}")
-                    return@addSnapshotListener
-                }
-                Log.d(TAG, ">> Approach2 syncing — ${snap?.size() ?: 0} sap_assignment(s) found for sessionDriverId=$sessionDriverId")
-                if (snap != null) {
-                    syncQueueTabsFromSapSnapshots(snap, sessionDriverId, truckType)
+        assignmentListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+            if (observedQueueId != currentQueueDocId || isFinishing) return@subscribeRealtime
+            val records = payload as? List<*> ?: return@subscribeRealtime
+            val assignments = records.mapNotNull { it as? Map<String, Any?> }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && observedQueueId == currentQueueDocId) {
+                    isGuardVerified = assignments.firstOrNull { it["queueId"] == observedQueueId }
+                        ?.get("guardVerified") as? Boolean ?: false
+                    syncQueueTabsFromSapData(assignments, sessionDriverId, truckType)
                 }
             }
+        }, onError = { error -> Log.e(TAG, "assignments realtime error: $error") })
     }
 
     /**
@@ -1328,48 +1280,48 @@ class MainActivity : AppCompatActivity() {
      * - Adds entries for ALL found shipments (handles 1, 2, 3... shipments)
      * - Removes entries that no longer have a matching sap_assignment
      * - Updates cardMyQueue with first shipment's summary
-     * - Calls updateQueueTabs() which handles: 1 shipment → cardMyQueue, 2+ → vertical cards
+     * - Calls updateQueueTabs() which handles: 1 shipment â†’ cardMyQueue, 2+ â†’ vertical cards
      */
-    private fun syncQueueTabsFromSapSnapshots(
-        sapSnapshots: com.google.firebase.firestore.QuerySnapshot,
+    private fun syncQueueTabsFromSapData(
+        sapSnapshots: List<Map<String, Any?>>,
         sessionDriverId: String,
         truckType: String
     ) {
         if (isFinishing) return
 
         // hasShipment flag reflects whether any shipments exist at all
-        hasShipment = sapSnapshots.size() > 0
+        hasShipment = sapSnapshots.isNotEmpty()
 
         // Build replacement list with Assignment objects (includes shipment details)
         val newShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
-        for (doc in sapSnapshots.documents) {
-            val linkedQueueId = doc.getString("queueId")
-                ?: doc.getString("driverId")?.takeIf { it != sessionDriverId }
-                ?: currentQueueDocId?.takeIf { doc.id in currentQueueShipmentIds }
+        for (doc in sapSnapshots) {
+            val docId = doc["id"] as? String ?: continue
+            val linkedQueueId = doc["queueId"] as? String
+                ?: (doc["driverId"] as? String)?.takeIf { it != sessionDriverId }
+                ?: currentQueueDocId?.takeIf { docId in currentQueueShipmentIds }
             if (!com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
-                    doc.getString("tripStatus"), doc.getString("returnStatus"), linkedQueueId,
+                    doc["tripStatus"] as? String, doc["returnStatus"] as? String, linkedQueueId,
                     currentQueueDocId, currentQueueStatus,
-                    (doc.get("assignedAt") as? com.google.firebase.Timestamp)?.toDate()?.time, currentQueueEnteredAtMillis
+                    timestampMillis(doc["assignedAt"]), currentQueueEnteredAtMillis
                 )) continue
-            val docId = doc.id  // document ID IS the shipment number (e.g. "0010128715")
-            val tripStatus = doc.getString("tripStatus")
-            val guardVerified = doc.getBoolean("guardVerified") ?: false
-            val driverConfirmed = doc.getBoolean("driverConfirmed") ?: false
+            val tripStatus = doc["tripStatus"] as? String
+            val guardVerified = doc["guardVerified"] as? Boolean ?: false
+            val driverConfirmed = doc["driverConfirmed"] as? Boolean ?: false
 
-            // All fields are at ROOT level of sap_assignments — no nested "data" map
-            val truckPlate   = doc.getString("truckPlate")   ?: ""
-            val truckCompany = doc.getString("truckCompany") ?: ""
-            val helperName   = doc.getString("helperName")   ?: ""
+            // All fields are at ROOT level of sap_assignments â€” no nested "data" map
+            val truckPlate   = doc["truckPlate"] as? String ?: ""
+            val truckCompany = doc["truckCompany"] as? String ?: ""
+            val helperName   = doc["helperName"] as? String ?: ""
 
             // Delivery date: actualDelDate lives in lineItems[0] as OData string "/Date(millis)/"
-            val lineItems = doc.get("lineItems") as? List<Map<String, Any?>> ?: emptyList()
+            val lineItems = doc["lineItems"] as? List<Map<String, Any?>> ?: emptyList()
             val firstItem = lineItems.firstOrNull()
             val deliveryMillis = parseODataDate(firstItem?.get("actualDelDate") as? String)
 
             // docId (shipment number) is used as the OBD reference
             val assignment = com.sysu.go.model.Assignment(
-                docId = docId,              // e.g. "0010128715" — IS the shipment number
+                docId = docId,              // e.g. "0010128715" â€” IS the shipment number
                 queueId = linkedQueueId ?: currentQueueDocId ?: "",
                 driverId = sessionDriverId,
                 status = if (tripStatus == "in_transit") "in_transit" else "loading",
@@ -1391,7 +1343,7 @@ class MainActivity : AppCompatActivity() {
         hasShipment = activeShipments.isNotEmpty()
         currentShipments.addAll(activeShipments)
 
-        // ── Hanapin ang active shipment at i-restore ang SessionManager state ──
+        // â”€â”€ Hanapin ang active shipment at i-restore ang SessionManager state â”€â”€
         val inTransitShipment = activeShipments.find { it.tripStatus == "in_transit" || it.tripStatus == "returning_to_base" }
         val loadedShipment = if (inTransitShipment == null)
             activeShipments.find { it.tripStatus == "loaded" || it.tripStatus == "fully_loaded" || it.tripStatus == "loading" }
@@ -1399,7 +1351,7 @@ class MainActivity : AppCompatActivity() {
         val session = SessionManager(this)
 
         // Cached or pending snapshots must not stop a server-confirmed active tracking session.
-        if (!sapSnapshots.metadata.isFromCache && !sapSnapshots.metadata.hasPendingWrites()) when {
+        when {
             inTransitShipment != null -> {
                 // Driver mid-trip: restore active shipment doc ID and trip active state
                 session.saveActiveSapDocId(inTransitShipment.docId)
@@ -1413,7 +1365,7 @@ class MainActivity : AppCompatActivity() {
                 session.saveActiveSapDocId(loadedShipment.docId)
                 session.saveCurrentSapDocId(loadedShipment.docId)
                 session.setTripActive(false)
-                // Don't setTrackingActive(true) here — driver hasn't pressed Start Tracking yet
+                // Don't setTrackingActive(true) here â€” driver hasn't pressed Start Tracking yet
             }
             else -> {
                 // Siguraduhing malinis ang state kung walang active trip
@@ -1424,7 +1376,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ── Auto-sync Queue Status ──────────────────────────────────────────
+        // â”€â”€ Auto-sync Queue Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Queue assignment is written by the staff assignment transaction, never inferred from history.
 
         if (activeShipments.isEmpty()) {
@@ -1446,7 +1398,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // ── Optimistic bridge: CONFIRM SHIPMENT → MainActivity live update ──────────
+        // â”€â”€ Optimistic bridge: CONFIRM SHIPMENT â†’ MainActivity live update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // When the user confirms a shipment in AssignmentActivity, the Firestore write
         // (driverConfirmed=true) takes ~900ms. By the time they press back and onResume
         // fires, the cached snapshot from addSnapshotListener still shows false.
@@ -1461,7 +1413,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Optimistic: forced driverConfirmed=true for docId=$pendingDocId")
             }
         }
-        // ── End optimistic bridge ─────────────────────────────────────────────────────
+        // â”€â”€ End optimistic bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         // Update the static cardMyQueue with first shipment's summary
         val firstShipmentId = activeShipments.firstOrNull()?.docId
@@ -1469,8 +1421,8 @@ class MainActivity : AppCompatActivity() {
         updateScanButtonState()
 
         // updateQueueTabs() reads currentShipments.size:
-        //   < 2 → cardMyQueue visible, rvShipmentCards gone
-        //   >= 2 → cardMyQueue gone, rvShipmentCards shows vertical list
+        //   < 2 â†’ cardMyQueue visible, rvShipmentCards gone
+        //   >= 2 â†’ cardMyQueue gone, rvShipmentCards shows vertical list
         updateQueueTabs()
     }
 
@@ -1478,6 +1430,12 @@ class MainActivity : AppCompatActivity() {
      * Parses OData-style date strings like "/Date(1780444800000)/"
      * Returns epoch millis as Long, or 0L if unparseable.
      */
+    private fun timestampMillis(value: Any?): Long? = when (value) {
+        is Number -> value.toLong()
+        is Map<*, *> -> (value["\$timestamp"] as? Number)?.toLong()
+        else -> null
+    }
+
     private fun parseODataDate(raw: String?): Long {
         if (raw == null) return 0L
         return try {
@@ -1492,7 +1450,7 @@ class MainActivity : AppCompatActivity() {
             binding.tvScanHint.text = ""
             binding.tvScanHint.visibility = View.GONE
 
-            // ── Derive display status from tripStatus (sap_assignments) ──────
+            // â”€â”€ Derive display status from tripStatus (sap_assignments) â”€â”€â”€â”€â”€â”€
             // Check ALL shipments to determine the aggregate status
             val allTripStatuses = currentShipments.mapNotNull { it.tripStatus }
             val firstShipmentId = shipmentId ?: currentShipments.firstOrNull()?.docId
@@ -1524,7 +1482,7 @@ class MainActivity : AppCompatActivity() {
                 else -> 28f
             }
 
-            // ── Badge (frosted pill at top) ──────────────────────────────────
+            // â”€â”€ Badge (frosted pill at top) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             binding.tvStatusBadgeText.text = when (displayStatus) {
                 "REGISTRATION PENDING" -> "Complete Registration"
                 "IN TRANSIT" -> "In Transit"
@@ -1546,7 +1504,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // ── Ticket icon — ticket, tint varies by status ──────────────────
+            // â”€â”€ Ticket icon â€” ticket, tint varies by status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
             if (displayStatus != "DELIVERED") {
                 binding.ivQueueIcon.setColorFilter(
@@ -1560,7 +1518,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // ── Label ────────────────────────────────────────────────────────
+            // â”€â”€ Label â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             binding.tvQueueStatusLabel.text = when (displayStatus) {
                 "IN TRANSIT" -> "On the road"
                 "DELIVERED" -> "Completed"
@@ -1575,21 +1533,21 @@ class MainActivity : AppCompatActivity() {
             }
             binding.tvQueueStatusLabel.visibility = if (binding.tvQueueStatusLabel.text.isNotEmpty()) View.VISIBLE else View.GONE
 
-            // ── Detail line ──────────────────────────────────────────────────
+            // â”€â”€ Detail line â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             binding.tvQueueDetails.text = when (displayStatus) {
-                "IN TRANSIT" -> "Shipment #${firstShipmentId ?: "—"} • On the road"
-                "DELIVERED" -> "Shipment #${firstShipmentId ?: "—"} • All items delivered"
-                "LOADED" -> "Shipment #${firstShipmentId ?: "—"} • Verified & ready"
+                "IN TRANSIT" -> "Shipment #${firstShipmentId ?: "â€”"} â€¢ On the road"
+                "DELIVERED" -> "Shipment #${firstShipmentId ?: "â€”"} â€¢ All items delivered"
+                "LOADED" -> "Shipment #${firstShipmentId ?: "â€”"} â€¢ Verified & ready"
                 "LOADING" -> if (firstShipmentId != null) {
-                    "Shipment #$firstShipmentId • Being loaded"
+                    "Shipment #$firstShipmentId â€¢ Being loaded"
                 } else {
-                    "LOADING... • Please wait"
+                    "LOADING... â€¢ Please wait"
                 }
-                "ASSIGNED" -> "Shipment #${firstShipmentId ?: "—"} • $truckType"
+                "ASSIGNED" -> "Shipment #${firstShipmentId ?: "â€”"} â€¢ $truckType"
                 else -> when (queueStatus) {
-                    "waiting" -> "Waiting in Queue • $truckType"
-                    "called" -> "YOU ARE CALLED! • Proceed to bay"
-                    else -> "Status: ${queueStatus.uppercase()} • $truckType"
+                    "waiting" -> "Waiting in Queue â€¢ $truckType"
+                    "called" -> "YOU ARE CALLED! â€¢ Proceed to bay"
+                    else -> "Status: ${queueStatus.uppercase()} â€¢ $truckType"
                 }
             }
             binding.tvQueueDetails.visibility = View.VISIBLE
@@ -1602,13 +1560,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ─── Cancel Queue ─────────────────────────────────────────────────────────
+    // â”€â”€â”€ Cancel Queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /** Shows the dual-confirmation cancel queue dialog with professional styling. */
     private fun showCancelQueueDialog() {
         val inflater = LayoutInflater.from(this)
 
-        // ── Step 1: Soft confirmation ──────────────────────────────────────
+        // â”€â”€ Step 1: Soft confirmation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         val confirmView = inflater.inflate(R.layout.dialog_cancel_confirm, null)
         val confirmDialog = AlertDialog.Builder(this)
             .setView(confirmView)
@@ -1621,7 +1579,7 @@ class MainActivity : AppCompatActivity() {
 
         confirmView.findViewById<View>(R.id.btn_confirm_1).setOnClickListener {
             confirmDialog.dismiss()
-            // ── Step 2: Final warning ─────────────────────────────────────
+            // â”€â”€ Step 2: Final warning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             val finalView = inflater.inflate(R.layout.dialog_cancel_final, null)
             val finalDialog = AlertDialog.Builder(this)
                 .setView(finalView)
@@ -1694,7 +1652,7 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    // ─── Connection Monitor for offline popup ───────────────────────────────
+    // â”€â”€â”€ Connection Monitor for offline popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private fun registerConnectionMonitor() {
         connectionReceiver?.let { return }  // already registered
@@ -1738,7 +1696,7 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    // ─── Start Trip (Batch execution after all shipments confirmed) ────────────
+    // â”€â”€â”€ Start Trip (Batch execution after all shipments confirmed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /** Shows the final confirmation dialog before starting the trip. */
     private fun showStartTripDialog() {
@@ -1788,7 +1746,7 @@ class MainActivity : AppCompatActivity() {
 
         batch.commit()
             .addOnSuccessListener {
-                Log.d(TAG, "Batch startTrip: ${confirmed.size} shipment(s) → in_transit")
+                Log.d(TAG, "Batch startTrip: ${confirmed.size} shipment(s) â†’ in_transit")
                 // Navigate to GeneralTrackingActivity
                 val intent = Intent(this, GeneralTrackingActivity::class.java).apply {
                     putExtra("shipment_doc_id", firstDocId)
@@ -1817,9 +1775,9 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         unregisterConnectionMonitor()
         TrackingStateMonitor.removeListener(trackingStateListener)
-        queueListener?.remove()
+        queueListener?.invoke()
         positionJob?.cancel()
-        assignmentListener?.remove()
+        assignmentListener?.invoke()
         stopCircleAnimations()
         bounceArrowAnimator?.cancel()
         bounceArrowAnimator = null
@@ -1836,7 +1794,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun safeStartLocationServices() {
         if (!PermissionHelper.hasLocationPermission(this)) {
-            Log.w(TAG, "Location permission not granted — deferring LocationServices start until granted")
+            Log.w(TAG, "Location permission not granted â€” deferring LocationServices start until granted")
             return
         }
         try {
@@ -1852,12 +1810,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ─── My Trip Tab ─────────────────────────────────────────────────────────
+    // â”€â”€â”€ My Trip Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /**
      * Updates bottom nav icon tints to reflect the active tab.
-     * isHomeTab=true  → Home tab selected (red highlight on ivHome, muted on ivProfile)
-     * isHomeTab=false → Profile/My Trip tab selected (red highlight on ivProfile, muted on ivHome)
+     * isHomeTab=true  â†’ Home tab selected (red highlight on ivHome, muted on ivProfile)
+     * isHomeTab=false â†’ Profile/My Trip tab selected (red highlight on ivProfile, muted on ivHome)
      */
     private fun updateBottomNavSelectionForTab(isHomeTab: Boolean) {
         if (isHomeTab) {

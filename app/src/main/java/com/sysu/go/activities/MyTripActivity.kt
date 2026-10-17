@@ -77,7 +77,8 @@ class MyTripActivity : AppCompatActivity() {
     private lateinit var shipmentAdapter: MyTripTabAdapter
 
     /** Firestore snapshot listener removed onDestroy */
-    private var assignmentsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var assignmentsListener: (() -> Unit)? = null
+    private var hasLoadedAssignments = false
 
     /** Bouncing circles — cancelled onDestroy */
     private val circleAnimators = mutableListOf<android.animation.Animator>()
@@ -1005,7 +1006,7 @@ class MyTripActivity : AppCompatActivity() {
         circleAnimators.clear()
         circleViews.forEach { binding.circleContainer.removeView(it) }
         circleViews.clear()
-        assignmentsListener?.remove()
+        assignmentsListener?.invoke()
         uploadProgressDialog?.dismiss()
         uploadProgressDialog = null
     }
@@ -1040,42 +1041,49 @@ class MyTripActivity : AppCompatActivity() {
      * subsequent Firestore updates — socket data is the source of truth post-migration.
      */
     private fun loadAssignments() {
-        assignmentsListener?.remove()
+        assignmentsListener?.invoke()
         val sessionDriverId = sessionManager.getDriverId() ?: return
+        if (!hasLoadedAssignments) {
+            binding.loadingSkeleton.root.visibility = View.VISIBLE
+            binding.rvShipments.visibility = View.GONE
+            binding.emptyState.visibility = View.GONE
+        }
+        binding.tvLoadError.visibility = View.GONE
+        SocketManager.connect(this)
         val intentDocId = intent.getStringExtra("shipment_doc_id")
 
         // Single-approach pattern: sap_assignments.driverId always stores the Firebase UID
         // (not the queue doc id). Trip-status filtering is client-side to avoid
         // FAILED_PRECONDITION (single whereNotEqualTo alone is indexable, but paired with
         // other fields it can still fail — keep it off the query).
-        assignmentsListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", sessionDriverId)
-            .addSnapshotListener { snaps, err ->
-                if (err != null || snaps == null) {
-                    Log.e(TAG, "loadAssignments error: ${err?.message}")
-                    return@addSnapshotListener
-                }
-                if (isFinishing) return@addSnapshotListener
+        assignmentsListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+                val records = payload as? List<*> ?: return@subscribeRealtime
+                if (isFinishing) return@subscribeRealtime
 
                 // Render active shipments from this QR queue session only; prior trips remain history.
                 val currentQueueId = sessionManager.getCurrentQueueDocId()
-                val active = snaps.documents.filter { doc ->
-                    val s = doc.getString("tripStatus")
+                val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
+                    val s = doc["tripStatus"] as? String
                     s != "completed" && s != "delivered" &&
-                        (currentQueueId.isNullOrBlank() || doc.getString("queueId") == currentQueueId)
+                        (currentQueueId.isNullOrBlank() || doc["queueId"] == currentQueueId)
                 }
 
                 val list = active.mapNotNull { snap ->
                     @Suppress("UNCHECKED_CAST")
-                    val data = snap.data as? Map<String, Any?> ?: return@mapNotNull null
-                    buildAssignmentFromMap(data + ("docId" to snap.id))
+                    buildAssignmentFromMap(snap + ("docId" to (snap["id"] ?: "")))
                 }
                 fetchDriverData(sessionDriverId, list) { enriched ->
                     enrichWithQueueData(enriched) { final ->
                         handleAssignmentList(final, intentDocId)
                     }
                 }
-            }
+            }, onError = { error ->
+                Log.e(TAG, "loadAssignments realtime error: $error")
+                if (!hasLoadedAssignments && !isFinishing) {
+                    binding.loadingSkeleton.root.visibility = View.GONE
+                    binding.tvLoadError.visibility = View.VISIBLE
+                }
+            })
     }
 
     /**
@@ -1162,6 +1170,9 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     private fun handleAssignmentList(list: List<Assignment>, intentDocId: String?) {
+        hasLoadedAssignments = true
+        binding.loadingSkeleton.root.visibility = View.GONE
+        binding.tvLoadError.visibility = View.GONE
         val isReturningFromTransit = returnedFromTransitDocId != null
 
         // Suppress auto-navigation when the user explicitly opened MyTripActivity

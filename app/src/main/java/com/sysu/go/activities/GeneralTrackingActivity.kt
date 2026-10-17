@@ -31,7 +31,6 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
 import com.sysu.go.R
 import com.sysu.go.model.Assignment
 import com.sysu.go.model.TripSessionPolicy
@@ -88,7 +87,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
     private var readyToStartShipments: List<Assignment> = emptyList()
     private var isActiveShipmentDelivered = false
     private var allAssignedShipmentsCompleted = false
-    private var shipmentsListener: ListenerRegistration? = null
+    private var shipmentsListener: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -396,7 +395,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
         stopCircleAnimations()
         SocketManager.removeOnConnectListener { updateSocketStatus() }
         SocketManager.removeEventListener("disconnect") { updateSocketStatus() }
-        shipmentsListener?.remove()
+        shipmentsListener?.invoke()
 
         // Unregister network callback to prevent memory leaks
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -478,15 +477,16 @@ class GeneralTrackingActivity : AppCompatActivity() {
     // ════════════════════════════════════════════════════════════════
     private fun loadShipmentsData() {
         val driverId = SessionManager(this).getDriverId() ?: return
-        shipmentsListener?.remove()
-
-        shipmentsListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", driverId)
-            .addSnapshotListener { snaps, error ->
-                if (error != null || snaps == null) return@addSnapshotListener
+        shipmentsListener?.invoke()
+        SocketManager.connect(this)
+        shipmentsListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+                val records = payload as? List<*> ?: return@subscribeRealtime
                 val session = SessionManager(this)
                 val currentQueueId = session.getCurrentQueueDocId()
-                val fetchedAssignments = snaps.documents.mapNotNull { buildAssignmentFromSnap(it) }
+                val fetchedAssignments = records.mapNotNull { record ->
+                    val data = record as? Map<String, Any?> ?: return@mapNotNull null
+                    buildAssignmentFromMap(data)
+                }
                 val activeStatuses = setOf("assigned", "loading", "loaded", "fully_loaded", "in_transit", "returning_to_base")
                 val currentActiveDocId = session.getActiveSapDocId()
                 val activeAssignments = fetchedAssignments.filter { it.tripStatus in activeStatuses }
@@ -551,7 +551,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
                 updateTrackingStatus()
                 updateFloatingBottomBar()
-            }
+            }, onError = { error -> Log.e(TAG, "Assignments realtime error: $error") })
     }
 
     private fun isAssignmentPodComplete(assignment: Assignment): Boolean {
@@ -559,16 +559,16 @@ class GeneralTrackingActivity : AppCompatActivity() {
         return assignment.lineItems.all { (it["isPodCompleted"] as? Boolean) == true }
     }
 
-    private fun buildAssignmentFromSnap(doc: DocumentSnapshot): Assignment? {
-        val queueId = doc.getString("queueId") ?: ""
-        val tripStatus = doc.getString("tripStatus")
-        val guardVerified = doc.getBoolean("guardVerified") ?: false
-        val driverConfirmed = doc.getBoolean("driverConfirmed") ?: false
-        val guardFirstName = doc.getString("guardFirstName") ?: ""
-        val guardLastName = doc.getString("guardLastName") ?: ""
-        val guardSignature = doc.getString("guardSignature") ?: ""
-        val shipmentNumberRaw = doc.getString("shipmentNumber") ?: ""
-        val lineItems = doc.get("lineItems") as? List<*> ?: emptyList<Any>()
+    private fun buildAssignmentFromMap(doc: Map<String, Any?>): Assignment? {
+        val queueId = doc["queueId"] as? String ?: ""
+        val tripStatus = doc["tripStatus"] as? String
+        val guardVerified = doc["guardVerified"] as? Boolean ?: false
+        val driverConfirmed = doc["driverConfirmed"] as? Boolean ?: false
+        val guardFirstName = doc["guardFirstName"] as? String ?: ""
+        val guardLastName = doc["guardLastName"] as? String ?: ""
+        val guardSignature = doc["guardSignature"] as? String ?: ""
+        val shipmentNumberRaw = doc["shipmentNumber"] as? String ?: ""
+        val lineItems = doc["lineItems"] as? List<*> ?: emptyList<Any>()
         val firstItem = lineItems.filterIsInstance<Map<String, Any?>>().firstOrNull()
         val delTsRaw = firstItem?.get("actualDelDate") as? String
         val deliveryTs = try {
@@ -578,14 +578,14 @@ class GeneralTrackingActivity : AppCompatActivity() {
         val obdNumber = firstItem?.get("obdNumber") as? String ?: ""
 
         return Assignment(
-            docId = doc.id,
+            docId = doc["id"] as? String ?: "",
             queueId = queueId,
             driverId = SessionManager(this).getDriverId() ?: "",
-            status = doc.getString("status") ?: "",
+            status = doc["status"] as? String ?: "",
             tripStatus = tripStatus,
-            plateNumber = doc.getString("truckPlate") ?: "",
-            truckType = doc.getString("truckCompany") ?: "",
-            helper = doc.getString("helperName") ?: "",
+            plateNumber = doc["truckPlate"] as? String ?: "",
+            truckType = doc["truckCompany"] as? String ?: "",
+            helper = doc["helperName"] as? String ?: "",
             guardVerified = guardVerified,
             driverConfirmed = driverConfirmed,
             guardFirstName = guardFirstName,

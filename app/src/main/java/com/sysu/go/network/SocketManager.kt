@@ -13,6 +13,11 @@ import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONObject
 import java.net.URISyntaxException
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal fun isSupportedRealtimeTopic(topic: String): Boolean =
+    topic in setOf("profile", "driver", "queue", "queuePosition", "assignments", "location")
 
 object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     private const val TAG = "SOCKET_EVENTS_DEFINITIVE"
@@ -37,6 +42,14 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     @Volatile
     private var isConnecting = false
     private val sessionGate = SocketSessionGate()
+    private data class RealtimeSubscription(
+        val id: String,
+        val topic: String,
+        val params: Map<String, Any>,
+        val onData: (Any?) -> Unit,
+        val onError: (String) -> Unit,
+    )
+    private val realtimeSubscriptions = java.util.concurrent.ConcurrentHashMap<String, RealtimeSubscription>()
 
     private val eventListeners = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<(data: Any?) -> Unit>>()
     private val registeredEvents = java.util.concurrent.ConcurrentHashMap<Socket, MutableSet<String>>()
@@ -116,6 +129,73 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         connectListeners.remove(listener)
     }
 
+    fun subscribeRealtime(
+        topic: String,
+        params: Map<String, Any> = emptyMap(),
+        onData: (Any?) -> Unit,
+        onError: (String) -> Unit = {},
+    ): () -> Unit {
+        require(isSupportedRealtimeTopic(topic))
+        val id = "android-${UUID.randomUUID()}"
+        val subscription = RealtimeSubscription(id, topic, params.toMap(), onData, onError)
+        realtimeSubscriptions[id] = subscription
+        mSocketGo?.takeIf { it.connected() }?.let { socket -> emitRealtimeSubscribe(socket, subscription) }
+        val closed = AtomicBoolean(false)
+        return {
+            if (closed.compareAndSet(false, true)) {
+                realtimeSubscriptions.remove(id)
+                mSocketGo?.takeIf { it.connected() }?.emit("realtime:unsubscribe", JSONObject().put("id", id))
+            }
+        }
+    }
+
+    private fun emitRealtimeSubscribe(socket: Socket, subscription: RealtimeSubscription) {
+        socket.emit("realtime:subscribe", JSONObject()
+            .put("id", subscription.id)
+            .put("topic", subscription.topic)
+            .put("params", JSONObject(subscription.params)))
+    }
+
+    private fun restoreRealtimeSubscriptions(socket: Socket) {
+        realtimeSubscriptions.values.forEach { emitRealtimeSubscribe(socket, it) }
+    }
+
+    private fun dispatchRealtimeState(value: Any?) {
+        val payload = when (value) {
+            is JSONObject -> value
+            is Map<*, *> -> JSONObject(value)
+            else -> return
+        }
+        val id = payload.optString("id")
+        val subscription = realtimeSubscriptions[id] ?: return
+        if (subscription.topic != payload.optString("topic")) return
+        val data = normalizeRealtimeValue(payload.opt("data"))
+        Handler(Looper.getMainLooper()).post {
+            if (realtimeSubscriptions[id] === subscription) subscription.onData(data)
+        }
+    }
+
+    private fun dispatchRealtimeError(value: Any?) {
+        val payload = when (value) {
+            is JSONObject -> value
+            is Map<*, *> -> JSONObject(value)
+            else -> return
+        }
+        val id = payload.optString("id")
+        val subscription = realtimeSubscriptions[id] ?: return
+        val message = payload.optString("message", "Realtime data unavailable")
+        Handler(Looper.getMainLooper()).post {
+            if (realtimeSubscriptions[id] === subscription) subscription.onError(message)
+        }
+    }
+
+    private fun normalizeRealtimeValue(value: Any?): Any? = when (value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> value.keys().asSequence().associateWith { key -> normalizeRealtimeValue(value.opt(key)) }
+        is org.json.JSONArray -> (0 until value.length()).map { normalizeRealtimeValue(value.opt(it)) }
+        else -> value
+    }
+
     private fun notifyConnectListeners() {
         listenersNotified = true
         connectListeners.forEach { listener ->
@@ -177,6 +257,16 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
                     Log.i(TAG, ">>> EVENT_CONNECT! $url → socket.id=${socket.id()}")
                     isConnecting = false  // Socket fully connected — allow future reconnects
                     registerAllListenersOnSocket(socket)
+                    val registered = registeredEvents.getOrPut(socket) { mutableSetOf() }
+                    if ("realtime:state" !in registered) {
+                        socket.on("realtime:state") { args -> dispatchRealtimeState(args.firstOrNull()) }
+                        registered.add("realtime:state")
+                    }
+                    if ("realtime:error" !in registered) {
+                        socket.on("realtime:error") { args -> dispatchRealtimeError(args.firstOrNull()) }
+                        registered.add("realtime:error")
+                    }
+                    restoreRealtimeSubscriptions(socket)
                     offlineEmitted = false
                     val isTracking = isTrackingActive()
                     emitStatusUpdateOnSocket(socket, "online", getDriverName(), includeLocationFromPrefs = isTracking)
@@ -495,6 +585,7 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     fun disconnect() {
         Log.i(TAG, "[SOCKET] Disconnecting from server...")
         ConnectivityMonitor.removeListener(this)
+        realtimeSubscriptions.clear()
 
         // Stop heartbeat
         stopHeartbeat()

@@ -410,6 +410,37 @@
         app:layout_constraintHeight_max="320dp"
         app:layout_constraintVertical_bias="0.0" />
 
+    <FrameLayout
+        android:id="@+id/queueLoadingContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/tvMyQueueLabel"
+        app:layout_constraintBottom_toTopOf="@id/cardScanCTA"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_max="240dp"
+        app:layout_constraintVertical_bias="0.0">
+
+        <include
+            android:id="@+id/queueLoadingSkeleton"
+            layout="@layout/layout_shipment_skeleton"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/tvQueueLoadError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="Could not load queue status. Reopen this screen to retry."
+            android:textColor="@color/text_secondary"
+            android:visibility="gone" />
+    </FrameLayout>
+
     <!-- ══════════════════════════════════════════════
          ALL SHIPMENTS COMPLETE STATE
          Hidden by default. Shown when all shipments have tripStatus == "completed".

@@ -184,6 +184,27 @@
         app:layout_constraintBottom_toTopOf="@id/bottomBatchBar"
         app:layout_constraintTop_toBottomOf="@id/redBanner" />
 
+    <include
+        android:id="@+id/loadingSkeleton"
+        layout="@layout/layout_shipment_skeleton"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/bottomBatchBar"
+        app:layout_constraintTop_toBottomOf="@id/redBanner" />
+
+    <TextView
+        android:id="@+id/tvLoadError"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="24dp"
+        android:text="Could not load shipments. Reopen this screen to retry."
+        android:textColor="@color/text_secondary"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/redBanner" />
+
     <!-- FLOATING BOTTOM BAR for Batch Confirmation -->
     <androidx.cardview.widget.CardView
         android:id="@+id/bottomBatchBar"

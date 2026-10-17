@@ -1,4 +1,4 @@
-package com.sysu.go.activities
+﻿package com.sysu.go.activities
 
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.animation.Animator
@@ -27,8 +27,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.MetadataChanges
 import android.content.SharedPreferences
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityProfileBinding
@@ -41,7 +39,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import android.app.ProgressDialog
 import android.graphics.Typeface
 import android.util.Log
 import android.util.TypedValue
@@ -63,15 +60,15 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
     private val circleViews = mutableListOf<View>()
     private var driverId: String? = null
 
-    // Status badge — uses Firestore snapshot listener on drivers/{uid}.status.
+    // Status badge â€” uses Firestore snapshot listener on drivers/{uid}.status.
     // Source of truth: drivers/{uid}.status field. With offline persistence enabled
     // (GoApplication.kt), the snapshot listener reads from local cache when offline
     // and gets live updates when online. This is the simplest and most reliable path.
-    private var driverStatusListener: ListenerRegistration? = null
+    private var driverStatusListener: (() -> Unit)? = null
 
     // Cached value from the Firestore snapshot listener. We keep this around because
     // connectivity changes don't affect Firestore's view of the lifecycle state
-    // ("in_transit", "returning_to_base") — only the offline/online indicator.
+    // ("in_transit", "returning_to_base") â€” only the offline/online indicator.
     @Volatile
     private var lastFirestoreStatus: String = "online"
 
@@ -80,17 +77,17 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
     @Volatile
     private var lastPaintedConnectivity: ConnectivityMonitor.Status = ConnectivityMonitor.Status.OFFLINE
 
-    // Fallback poll — every 2s, reconcile badge with current ConnectivityMonitor
+    // Fallback poll â€” every 2s, reconcile badge with current ConnectivityMonitor
     // state. This is a belt-and-suspenders defense: even if the listener
     // somehow misses a transition (e.g., NetworkCallback glitch on this OEM),
-    // the badge still catches up within 2s. Lightweight — just compares a
+    // the badge still catches up within 2s. Lightweight â€” just compares a
     // status enum and re-renders if different.
     private val connectivityPoller = android.os.Handler(android.os.Looper.getMainLooper())
     private val connectivityPollRunnable = object : Runnable {
         override fun run() {
             val current = ConnectivityMonitor.getCurrentStatus()
             if (current != lastPaintedConnectivity) {
-                Log.w("ProfileActivity", ">>> [POLL] detected missed transition: $lastPaintedConnectivity → $current")
+                Log.w("ProfileActivity", ">>> [POLL] detected missed transition: $lastPaintedConnectivity â†’ $current")
                 onConnectivityChanged(current)
             }
             connectivityPoller.postDelayed(this, 2000L)
@@ -99,7 +96,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
 
     // Server-pushed driver_status_change listener. The server's presence
     // watcher (backend/utils/presenceWatcher.js) is now authoritative for
-    // OFFLINE detection — when it sees a stale driver, it writes "offline"
+    // OFFLINE detection â€” when it sees a stale driver, it writes "offline"
     // to Firestore AND broadcasts driver_status_change to room driver:{uid}.
     // We listen for that broadcast and flip the badge IMMEDIATELY, without
     // waiting for the Firestore snapshot to land (which may take a moment
@@ -109,7 +106,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             val json = data as? org.json.JSONObject ?: return@listener
             val status = json.optString("status", "online")
             val source = json.optString("source", "unknown")
-            Log.w("ProfileActivity", ">>> [SERVER] driver_status_change → $status (source=$source)")
+            Log.w("ProfileActivity", ">>> [SERVER] driver_status_change â†’ $status (source=$source)")
             // Server is authoritative for OFFLINE. For ONLINE / in_transit /
             // returning_to_base, prefer the Firestore snapshot (which may
             // include additional lifecycle fields), but the server push is
@@ -156,7 +153,8 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
         super.onResume()
         loadDriverInfo()
         refreshPermissionStates()
-        // Subscribe to drivers/{uid}.status — Firestore snapshot listener.
+        SocketManager.connect(this)
+        // Subscribe to drivers/{uid}.status â€” Firestore snapshot listener.
         // Reads from local cache (offline) per GoApplication persistence config.
         setupDriverStatusListener()
         // Subscribe to ConnectivityMonitor so the badge flips OFFLINE/ONLINE
@@ -164,12 +162,12 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
         // write to round-trip through the (potentially flaky) network.
         ConnectivityMonitor.addListener(this)
         // Subscribe to server-pushed driver_status_change broadcasts. The
-        // server's presence watcher is authoritative for OFFLINE — when it
+        // server's presence watcher is authoritative for OFFLINE â€” when it
         // detects a stale driver, it broadcasts driver_status_change:offline
         // and we flip the badge without waiting for Firestore.
         SocketManager.addEventListener("driver_status_change", serverStatusListener)
         // Start the 2-second poll so we still catch up even if the listener
-        // somehow misses an event (defensive — covers OEM-specific quirks).
+        // somehow misses an event (defensive â€” covers OEM-specific quirks).
         lastPaintedConnectivity = ConnectivityMonitor.Status.OFFLINE  // force first paint to take effect
         connectivityPoller.post(connectivityPollRunnable)
     }
@@ -232,7 +230,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
 
     /**
      * React to local connectivity changes for the badge only. We do NOT write
-     * to Firestore here — DriverStatus already does that via ConnectivityMonitor's
+     * to Firestore here â€” DriverStatus already does that via ConnectivityMonitor's
      * own listener. The badge just needs to render the right thing *now*, before
      * the Firestore write completes (which can take seconds when DNS is broken).
      *
@@ -240,22 +238,22 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
      * Firestore snapshot so we don't clobber it with a generic ONLINE/OFFLINE.
      */
     override fun onConnectivityChanged(status: ConnectivityMonitor.Status) {
-        Log.w("ProfileActivity", ">>> [BADGE] connectivity → $status (lastFirestoreStatus=$lastFirestoreStatus, lastPainted=$lastPaintedConnectivity)")
+        Log.w("ProfileActivity", ">>> [BADGE] connectivity â†’ $status (lastFirestoreStatus=$lastFirestoreStatus, lastPainted=$lastPaintedConnectivity)")
         lastPaintedConnectivity = status
         if (status == ConnectivityMonitor.Status.OFFLINE) {
-            // Connectivity is OFFLINE — show OFFLINE badge immediately, regardless
+            // Connectivity is OFFLINE â€” show OFFLINE badge immediately, regardless
             // of whatever lifecycle state the Firestore cache happens to hold.
             // This is the CRITICAL path the user hit: Firestore write is queued
             // offline, but the badge MUST flip immediately so the user sees reality.
             renderStatusBadge("offline")
-            Log.w("ProfileActivity", ">>> [BADGE] ✓ OFFLINE badge rendered (immediate, no Firestore wait)")
+            Log.w("ProfileActivity", ">>> [BADGE] âœ“ OFFLINE badge rendered (immediate, no Firestore wait)")
         } else {
             // Connectivity is back. Re-render with whatever lifecycle state we last
             // saw from Firestore. If that state was also "offline" (because the
             // server write hadn't flushed yet), render "online" now.
             val effective = if (lastFirestoreStatus == "offline") "online" else lastFirestoreStatus
             renderStatusBadge(effective)
-            Log.w("ProfileActivity", ">>> [BADGE] ✓ re-rendered with state='$effective'")
+            Log.w("ProfileActivity", ">>> [BADGE] âœ“ re-rendered with state='$effective'")
         }
     }
 
@@ -265,52 +263,34 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
      * Persistence is enabled in GoApplication.kt, so:
      *   - When online: snapshot listener fires whenever the server value changes
      *   - When offline: snapshot listener serves from local cache (last known value)
-     *   - When transitioning offline → online: persisted writes flush, listener fires
+     *   - When transitioning offline â†’ online: persisted writes flush, listener fires
      *
      * This is the most reliable path because Firestore SDK handles all the
      * networking, caching, and reconnection logic. We just react to the result.
      */
     private fun setupDriverStatusListener() {
         val uid = driverId ?: SessionManager(this).getDriverId() ?: return
-
-        // Tear down any previous listener to avoid leaks on rapid resume/pause.
         teardownDriverStatusListener()
-
-        driverStatusListener = db.collection("drivers").document(uid)
-            .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
-                if (error != null) {
-                    Log.w("ProfileActivity", "driver status snapshot error: ${error.message}")
-                    // Show online as default fallback — never blank
-                    renderStatusBadge("online")
-                    return@addSnapshotListener
-                }
-                if (snapshot == null || !snapshot.exists()) {
-                    Log.d("ProfileActivity", "driver doc doesn't exist yet — default to online")
-                    renderStatusBadge("online")
-                    return@addSnapshotListener
-                }
-                val status = snapshot.getString("status") ?: "online"
+        driverStatusListener = SocketManager.subscribeRealtime(
+            topic = "driver",
+            onData = { payload ->
+                val data = payload as? Map<*, *>
+                val status = data?.get("status") as? String ?: "online"
                 lastFirestoreStatus = status
-                // Log whether the snapshot came from server (live) or local cache (offline)
-                // so we can verify the offline-reads-from-cache path is actually working.
-                val source = if (snapshot.metadata.isFromCache) "CACHE" else "SERVER"
-                Log.d("ProfileActivity", "driver status snapshot → $status [from $source]")
-                // Only render the snapshot directly if we are currently online.
-                // If we're offline, ConnectivityMonitor.onConnectivityChanged is the
-                // authoritative source — it has already painted the OFFLINE badge.
-                if (ConnectivityMonitor.getCurrentStatus() != ConnectivityMonitor.Status.OFFLINE) {
-                    renderStatusBadge(status)
-                } else {
-                    Log.d("ProfileActivity", "snapshot ignored — device is offline, badge stays OFFLINE")
+                runOnUiThread {
+                    if (!isFinishing && ConnectivityMonitor.getCurrentStatus() != ConnectivityMonitor.Status.OFFLINE) {
+                        renderStatusBadge(status)
+                    }
                 }
-            }
+            },
+            onError = { message -> Log.w("ProfileActivity", "driver realtime error: $message") },
+        )
     }
 
     private fun teardownDriverStatusListener() {
-        driverStatusListener?.remove()
+        driverStatusListener?.invoke()
         driverStatusListener = null
     }
-
     /**
      * Maps the canonical `drivers/{uid}.status` value to a badge.
      * Values: "online" (default), "offline", "in_transit", "returning_to_base".
@@ -489,10 +469,15 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
         val companyDisplay = Sanitizer.sanitizeCompanyName(session.getDriverCompany())
         binding.tvCompany.text = companyDisplay.ifEmpty { "Not set" }
 
-        // Requirements section — always show. Defaults to all unchecked (false).
+        // Requirements section â€” always show. Defaults to all unchecked (false).
         // Firestore callback (loadRequirements) will merge saved values on top.
         binding.requirementsSection.visibility = View.VISIBLE
         binding.rvRequirements.layoutManager = LinearLayoutManager(this)
+        if (session.getDriverId() != null) {
+            binding.rvRequirements.visibility = View.GONE
+            binding.requirementsSkeleton.visibility = View.VISIBLE
+            binding.btnEditRequirements.isEnabled = false
+        }
         val defaultAdapter = RequirementDisplayAdapter()
         binding.rvRequirements.adapter = defaultAdapter
         val defaultList = listOf(
@@ -528,7 +513,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                     .apply()
         }
 
-        // History button — opens a dialog showing completed trips from the
+        // History button â€” opens a dialog showing completed trips from the
         // driver_history collection, falling back to the latest completed
         // trip on the driver document if no history records exist.
         val historyButton = MaterialButton(this@ProfileActivity)
@@ -543,7 +528,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             historyButton.setOnClickListener { showHistoryDialog() }
         }
 
-        // Assigned-count subtitle — one-shot fetch on screen open
+        // Assigned-count subtitle â€” one-shot fetch on screen open
         refreshAssignedCount()
     }
 
@@ -559,6 +544,8 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
     private fun refreshAssignedCount() {
         val session = SessionManager(this)
         val uid = session.getDriverId() ?: return
+        binding.assignedCountSkeleton.visibility = View.VISIBLE
+        binding.tvAssignedCount.visibility = View.GONE
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
@@ -574,6 +561,8 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             } catch (e: Exception) {
                 Log.e("ProfileActivity", "refreshAssignedCount failed", e)
                 binding.tvAssignedCount.visibility = View.GONE
+            } finally {
+                binding.assignedCountSkeleton.visibility = View.GONE
             }
         }
     }
@@ -634,6 +623,10 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                 }
             } catch (e: Exception) {
                 // Silently fail - profile will show placeholder values
+            } finally {
+                binding.requirementsSkeleton.visibility = View.GONE
+                binding.rvRequirements.visibility = View.VISIBLE
+                binding.btnEditRequirements.isEnabled = true
             }
         }
     }
@@ -667,11 +660,11 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
         val driverName = session.getDriverName()
 
         // Build candidate driverIds in priority order:
-        //   1. Current queue doc ID — kept while the driver is actively in queue.
-        //   2. Last known queue doc ID — survives a trip's full lifecycle, including
+        //   1. Current queue doc ID â€” kept while the driver is actively in queue.
+        //   2. Last known queue doc ID â€” survives a trip's full lifecycle, including
         //      after ReturnToBase clears the current queue key and deletes
         //      `queue.{docId}.driverId` server-side.
-        //   3. Firebase UID — used by a minority of older sap_assignment docs.
+        //   3. Firebase UID â€” used by a minority of older sap_assignment docs.
         // We dedupe by set membership so we never run the same query twice.
         val candidateIds = linkedSetOf<String>().apply {
             session.getCurrentQueueDocId()?.takeIf { it.isNotBlank() }?.let(::add)
@@ -679,11 +672,12 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             uid.takeIf { it.isNotBlank() }?.let(::add)
         }.toList()
 
-        // Show loading indicator
-        val progressDialog = ProgressDialog(this@ProfileActivity)
-        progressDialog.setMessage("Loading history...")
-        progressDialog.setCancelable(false)
-        progressDialog.show()
+        val loadingDialog = AlertDialog.Builder(this@ProfileActivity)
+            .setTitle("Loading trip history")
+            .setView(R.layout.dialog_history_loading)
+            .setCancelable(false)
+            .create()
+        loadingDialog.show()
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
@@ -704,7 +698,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
 
                 // Final fallback: by driverName (works even if driverId was rewritten).
                 // Narrow the result set client-side to entries whose driverName matches
-                // the current session — avoids showing other drivers' trips.
+                // the current session â€” avoids showing other drivers' trips.
                 if (completedSnaps == null || completedSnaps.isEmpty) {
                     val byName = db.collection("sap_assignments")
                         .whereEqualTo("driverName", driverName)
@@ -717,7 +711,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                     }
                 }
 
-                progressDialog.dismiss()
+                loadingDialog.dismiss()
 
                 if (completedSnaps == null || completedSnaps.isEmpty) {
                     Toast.makeText(this@ProfileActivity, "No completed trip found", Toast.LENGTH_SHORT).show()
@@ -744,7 +738,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
 
                 buildHistoryDialog(historyList.map { it.first })
             } catch (e: Exception) {
-                progressDialog.dismiss()
+                loadingDialog.dismiss()
                 Log.e("ProfileActivity", "Error loading history: ${e.message}")
                 Toast.makeText(this@ProfileActivity, "Failed to load history: ${e.message}", Toast.LENGTH_LONG).show()
             }
@@ -778,8 +772,8 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             val truckPlate = entry["truckPlate"] as? String ?: ""
             val truckCompany = entry["truckCompany"] as? String ?: ""
             val lineItems = (entry["lineItems"] as? List<*>) ?: emptyList<Any?>()
-            // Per-shipment return outcome — written by ReturnToBaseBottomSheet.performConfirmArrival()
-            // alongside tripStatus="completed". Falls back to "—" for older docs that pre-date
+            // Per-shipment return outcome â€” written by ReturnToBaseBottomSheet.performConfirmArrival()
+            // alongside tripStatus="completed". Falls back to "â€”" for older docs that pre-date
             // the per-shipment mirror (added 2026-08-10).
             val returnStatus = entry["returnStatus"] as? String ?: ""
             val returnedToBaseAt = (entry["returnedToBaseAt"] as? Timestamp)?.toDate()
@@ -789,10 +783,10 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                 setPadding(0, 0, 0, 16)
             }
 
-            // Trip header: "Trip #N — <date>"
+            // Trip header: "Trip #N â€” <date>"
             tripView.addView(TextView(this@ProfileActivity).apply {
                 text = if (completedAt != null) {
-                    "Trip #${tripIndex + 1} — ${sdf.format(completedAt)}"
+                    "Trip #${tripIndex + 1} â€” ${sdf.format(completedAt)}"
                 } else {
                     "Trip #${tripIndex + 1}"
                 }
@@ -813,7 +807,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                 setPadding(0, 0, 0, 8)
             })
 
-            // Return-to-base outcome — only shown when the field is populated.
+            // Return-to-base outcome â€” only shown when the field is populated.
             // Skipped silently for legacy docs so we don't add noise for pre-mirror trips.
             if (returnStatus.isNotBlank()) {
                 val returnedLabel = buildString {
@@ -834,7 +828,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                 })
             }
 
-            // Line items — one entry per delivery
+            // Line items â€” one entry per delivery
             if (lineItems.isNotEmpty()) {
                 lineItems.forEachIndexed { index, item ->
                     val itemMap = item as? Map<String, *> ?: return@forEachIndexed
@@ -845,8 +839,8 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                     val podAt = (itemMap["podCapturedAt"] as? Timestamp)?.toDate()
 
                     val itemDetails = buildString {
-                        append("   • ").append(customer)
-                        if (status.isNotBlank()) append(" — ").append(status)
+                        append("   â€¢ ").append(customer)
+                        if (status.isNotBlank()) append(" â€” ").append(status)
                         append("\n")
                         if (obd.isNotBlank()) append("     OBD: ").append(obd).append("\n")
                         append("     POD: ").append(

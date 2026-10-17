@@ -23,6 +23,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.sysu.go.network.SocketManager
 import com.sysu.go.R
 import com.sysu.go.activities.SelectActiveTripBottomSheet
 import com.sysu.go.adapter.AssignmentAdapter
@@ -59,7 +60,8 @@ class AssignmentActivity : AppCompatActivity() {
     private var requirementsSnapshot: Map<String, Boolean> = emptyMap()
 
     // Firestore listener — kept so we remove it in onDestroy
-    private var assignmentsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var assignmentsListener: (() -> Unit)? = null
+    private var hasLoadedAssignments = false
 
     // Bouncing circles
     private val circleAnimators = mutableListOf<android.animation.Animator>()
@@ -100,7 +102,7 @@ class AssignmentActivity : AppCompatActivity() {
         circleAnimators.clear()
         circleViews.forEach { binding.circleContainer.removeView(it) }
         circleViews.clear()
-        assignmentsListener?.remove()
+        assignmentsListener?.invoke()
     }
 
     private fun setupRecyclerView() {
@@ -728,34 +730,44 @@ class AssignmentActivity : AppCompatActivity() {
      * is not indexable in Firestore — keep it off the query).
      */
     private fun loadAssignments() {
-        assignmentsListener?.remove()
+        assignmentsListener?.invoke()
         val sessionDriverId = sessionManager.getDriverId() ?: return
+        if (!hasLoadedAssignments) {
+            binding.loadingSkeleton.root.visibility = View.VISIBLE
+            binding.rvAssignments.visibility = View.GONE
+            binding.emptyState.visibility = View.GONE
+        }
+        binding.tvLoadError.visibility = View.GONE
+        SocketManager.connect(this)
 
-        assignmentsListener = db.collection("sap_assignments")
-            .whereEqualTo("driverId", sessionDriverId)
-            .addSnapshotListener { snaps, err ->
-                if (err != null || snaps == null) {
-                    Log.e(TAG, "loadAssignments error: ${err?.message}")
-                    return@addSnapshotListener
-                }
-                if (isFinishing) return@addSnapshotListener
+        assignmentsListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+                val records = payload as? List<*> ?: return@subscribeRealtime
+                if (isFinishing) return@subscribeRealtime
 
                 // Client-side filter: exclude terminal trip states so they don't show
                 // as active cards. (Completed/delivered docs still exist for history.)
-                val active = snaps.documents.filter { doc ->
-                    val s = doc.getString("tripStatus")
+                val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
+                    val s = doc["tripStatus"] as? String
                     s != "completed" && s != "delivered" &&
                         com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
-                            s, doc.getString("returnStatus"), doc.getString("queueId"),
+                            s, doc["returnStatus"] as? String, doc["queueId"] as? String,
                             sessionManager.getCurrentQueueDocId(), "assigned"
                         )
                 }
 
-                val list = active.mapNotNull { snap -> buildAssignment(snap) }
+                val list = active.mapNotNull { record -> buildAssignment(record) }
+                hasLoadedAssignments = true
+                binding.loadingSkeleton.root.visibility = View.GONE
                 assignments = list
                 submitToAdapter(list)
                 updateAggregateBadge(list)
-            }
+            }, onError = { error ->
+                Log.e(TAG, "loadAssignments realtime error: $error")
+                if (!hasLoadedAssignments && !isFinishing) {
+                    binding.loadingSkeleton.root.visibility = View.GONE
+                    binding.tvLoadError.visibility = View.VISIBLE
+                }
+            })
     }
 
     /**
@@ -830,23 +842,21 @@ class AssignmentActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildAssignment(
-        snap: com.google.firebase.firestore.DocumentSnapshot
-    ): Assignment {
-        val queueId = snap.getString("driverId") ?: "" // queue doc ID (not Firebase UID)
+    private fun buildAssignment(snap: Map<String, Any?>): Assignment {
+        val queueId = snap["queueId"] as? String ?: ""
 
-        val tripStatus = snap.getString("tripStatus")
-        val guardVerified = snap.getBoolean("guardVerified") ?: false
-        val driverConfirmed = snap.getBoolean("driverConfirmed") ?: false
-        val guardFirstName = snap.getString("guardFirstName") ?: ""
-        val guardLastName = snap.getString("guardLastName") ?: ""
-        val guardSignature = snap.getString("guardSignature") ?: ""
+        val tripStatus = snap["tripStatus"] as? String
+        val guardVerified = snap["guardVerified"] as? Boolean ?: false
+        val driverConfirmed = snap["driverConfirmed"] as? Boolean ?: false
+        val guardFirstName = snap["guardFirstName"] as? String ?: ""
+        val guardLastName = snap["guardLastName"] as? String ?: ""
+        val guardSignature = snap["guardSignature"] as? String ?: ""
 
         // Extract shipmentNumber from ROOT document field (SAP field), not from lineItems
-        val shipmentNumberRaw = snap.getString("shipmentNumber") ?: ""
+        val shipmentNumberRaw = snap["shipmentNumber"] as? String ?: ""
 
         // lineItems[0].actualDelDate — OData format "/Date(millis)/"
-        val lineItems = snap.get("lineItems") as? List<*> ?: emptyList<Any>()
+        val lineItems = snap["lineItems"] as? List<*> ?: emptyList<Any>()
         val firstItem = lineItems.filterIsInstance<Map<String, Any?>>().firstOrNull()
         val delTsRaw = firstItem?.get("actualDelDate") as? String
         val deliveryTs = try {
@@ -857,14 +867,14 @@ class AssignmentActivity : AppCompatActivity() {
         val obdNumber = firstItem?.get("obdNumber") as? String ?: ""
 
         return Assignment(
-            docId = snap.id,
+            docId = snap["id"] as? String ?: "",
             queueId = queueId,
             driverId = sessionManager.getDriverId() ?: "",
-            status = snap.getString("status") ?: "",
+            status = snap["status"] as? String ?: "",
             tripStatus = tripStatus,
-            plateNumber = snap.getString("truckPlate") ?: "",
-            truckType = snap.getString("truckCompany") ?: "",
-            helper = snap.getString("helperName") ?: "",
+            plateNumber = snap["truckPlate"] as? String ?: "",
+            truckType = snap["truckCompany"] as? String ?: "",
+            helper = snap["helperName"] as? String ?: "",
             guardVerified = guardVerified,
             driverConfirmed = driverConfirmed,
             guardFirstName = guardFirstName,

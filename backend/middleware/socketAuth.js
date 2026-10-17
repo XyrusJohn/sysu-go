@@ -1,5 +1,6 @@
 ﻿const VALID_ROLES = new Set(["driver", "fleet_manager", "qr_generator", "admin", "super_admin"]);
 const DRIVER_EVENTS = new Set(["update_status", "driver_moving", "driver_stopped", "driver_status_change", "request_driver_status", "heartbeat", "driver_is_full", "pod_updated"]);
+const REALTIME_EVENTS = new Set(["realtime:subscribe", "realtime:unsubscribe"]);
 const UPDATE_STATUSES = new Set(["online", "offline", "stopped", "completed"]);
 const LIFECYCLE_STATUSES = new Set(["online", "offline", "in_transit", "returning_to_base"]);
 const fail = message => Object.assign(new Error(message), { data: { code: "SOCKET_UNAUTHORIZED" } });
@@ -28,6 +29,20 @@ function createSocketAuth({ getFirebaseAuth, getDb }) {
           const current = await identity(socket.data.token);
           if (current.uid !== socket.data.uid || current.role !== socket.data.role) throw fail("Account authorization changed");
           const [event, payload] = packet;
+          if (REALTIME_EVENTS.has(event)) {
+            if (current.role !== "driver") throw fail("Socket subscription not authorized");
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)
+              || Buffer.byteLength(JSON.stringify(payload)) > 1024) throw fail("Invalid socket subscription");
+            if (event === "realtime:subscribe" && (typeof payload.id !== "string"
+              || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.id)
+              || !["profile", "driver", "queue", "queuePosition", "assignments", "location"].includes(payload.topic))) {
+              throw fail("Invalid socket subscription");
+            }
+            if (event === "realtime:unsubscribe" && (typeof payload.id !== "string"
+              || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.id))) throw fail("Invalid socket subscription");
+            done();
+            return;
+          }
           if (!DRIVER_EVENTS.has(event) || current.role !== "driver") throw fail("Socket event not authorized");
           if (payload != null && (typeof payload !== "object" || Array.isArray(payload) || Buffer.byteLength(JSON.stringify(payload)) > 4096)) throw fail("Invalid socket payload");
           if (payload?.driverId != null && payload.driverId !== current.uid) throw fail("Cannot act for another driver");

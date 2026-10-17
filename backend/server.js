@@ -172,6 +172,7 @@ const DRIVER_LIFECYCLE_STATUSES = new Set([
 ]);
 
 io.on("connection", async (socket) => {
+  require("./services/realtimeSubscriptions").bindRealtimeSubscriptions(socket, getDb());
   const verifiedUid = socket.data.uid;
   const role = socket.data.role;
   console.log("[" + ts() + "] Authenticated socket connected: " + socket.id + " (" + role + ")");

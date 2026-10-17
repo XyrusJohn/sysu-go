@@ -1,4 +1,4 @@
-package com.sysu.go.activities
+﻿package com.sysu.go.activities
 
 import android.os.Bundle
 import android.util.Log
@@ -62,8 +62,10 @@ class QueueDetailsActivity : AppCompatActivity() {
     private var isSpecificShipmentMode: Boolean = false  // true when opened from My Queue card with specific shipment
     private var currentLineItems: List<Map<String, Any?>> = emptyList()
     private var hasShipment: Boolean = false   // true only when sap_assignment doc is loaded
-    private var queueDriverId: String = ""    // Firebase UID — used for requirements lookup
-    private var queueListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var queueDriverId: String = ""    // Firebase UID â€” used for requirements lookup
+    private var queueListener: (() -> Unit)? = null
+    private var assignmentListener: (() -> Unit)? = null
+    private var hasLoadedDetails = false
     private var positionJob: kotlinx.coroutines.Job? = null
     private var currentQueueStatus: String = ""
 
@@ -124,7 +126,7 @@ class QueueDetailsActivity : AppCompatActivity() {
         // Initialize POD launchers
         registerPodLaunchers()
 
-        // ── Per-shipment loading: if opened from a "My Queue" card tap ──
+        // â”€â”€ Per-shipment loading: if opened from a "My Queue" card tap â”€â”€
         val explicitShipmentDocId = intent.getStringExtra("shipment_doc_id")
         isSpecificShipmentMode = !explicitShipmentDocId.isNullOrBlank()
         if (!explicitShipmentDocId.isNullOrBlank()) {
@@ -263,7 +265,8 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        queueListener?.remove()
+        queueListener?.invoke()
+        assignmentListener?.invoke()
         positionJob?.cancel()
         super.onDestroy()
         circleAnimators.forEach { it.cancel() }
@@ -316,9 +319,9 @@ class QueueDetailsActivity : AppCompatActivity() {
                                     lineItem = lineItem,
                                     unloadStatus = "UNLOADING"
                                 )
-                                // ✅ UPDATE local state immediately
+                                // âœ… UPDATE local state immediately
                                 updateLineItemUnloadStatus(obdNumber, "UNLOADING")
-                                // ✅ REFRESH the bottom sheet to reflect changes
+                                // âœ… REFRESH the bottom sheet to reflect changes
                                 refreshObdItemsSheet()
                                 Toast.makeText(
                                     this@QueueDetailsActivity,
@@ -347,9 +350,9 @@ class QueueDetailsActivity : AppCompatActivity() {
                                     lineItem = lineItem,
                                     unloadStatus = ""  // Empty string means PENDING/UNSTARTED
                                 )
-                                // ✅ UPDATE local state immediately
+                                // âœ… UPDATE local state immediately
                                 updateLineItemUnloadStatus(obdNumber, "")
-                                // ✅ REFRESH the bottom sheet to reflect changes
+                                // âœ… REFRESH the bottom sheet to reflect changes
                                 refreshObdItemsSheet()
                                 Toast.makeText(
                                     this@QueueDetailsActivity,
@@ -379,9 +382,9 @@ class QueueDetailsActivity : AppCompatActivity() {
                                     try {
                                         // Reset POD data to allow retake (sets unloadStatus to UNLOADING)
                                         resetPodDataForRetake(shipmentDocId, lineItem)
-                                        // ✅ UPDATE local state with ALL POD fields reset
+                                        // âœ… UPDATE local state with ALL POD fields reset
                                         updateLineItemForRetake(obdNumber)
-                                        // ✅ REFRESH the bottom sheet to reflect changes
+                                        // âœ… REFRESH the bottom sheet to reflect changes
                                         refreshObdItemsSheet()
                                         Toast.makeText(
                                             this@QueueDetailsActivity,
@@ -408,112 +411,96 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     private fun loadQueueDetails() {
-        val session = SessionManager(this)
-        val sessionDriverId = session.getDriverId() ?: run {
-            Log.e("OBD", ">>> driverId is NULL — walang session!")
-            return
-        }
-        Log.d("OBD", ">>> Session driverId: '$sessionDriverId'")
-
-        // ── ATTEMPT 1 ── Primary query using SessionManager's driverId (Firebase UID).
-        // Works because queue.driverId field = Firebase UID in Firestore.
-        queueListener?.remove()
-        queueListener = db.collection("queue")
-            .whereEqualTo("driverId", sessionDriverId)
-            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
-            .addSnapshotListener { snapshots, error ->
-                if (error != null) {
-                    Log.e("OBD", ">>> queue query ERROR: ${error.message}")
-                    return@addSnapshotListener
-                }
-                if (snapshots != null && !snapshots.isEmpty) {
-                    Log.d("OBD", ">>> ATTEMPT 1 SUCCESS — queue found via sessionDriverId")
-                    processQueueDocument(snapshots.documents[0], source = "attempt1_sessionDriverId")
-                    return@addSnapshotListener
-                }
-
-                // ── ATTEMPT 2 ── Fallback: look up queueDriverId from sap_assignments.
-                // IMPORTANT: sap_assignments.driverId stores the QUEUE DOCUMENT ID (doc.id),
-                // NOT the Firebase UID. Must query by doc.id, not by sessionDriverId.
-                Log.d("OBD", ">>> ATTEMPT 1 empty — trying ATTEMPT 2 (sap fallback)...")
-                db.collection("sap_assignments")
-                    .whereEqualTo("driverId", sessionDriverId)
-                    .get()
-                    .addOnSuccessListener { sapSnaps ->
-                        if (!sapSnaps.isEmpty) {
-                            val queueDriverId = sapSnaps.documents[0].getString("driverId") ?: sessionDriverId
-                            Log.d("OBD", ">>> ATTEMPT 2 found sap, queueDriverId='$queueDriverId'")
-                            db.collection("queue")
-                                .whereEqualTo("driverId", queueDriverId)
-                                .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
-                                .get()
-                                .addOnSuccessListener { qSnaps ->
-                                    if (!qSnaps.isEmpty) {
-                                        Log.d("OBD", ">>> ATTEMPT 2 queue found via queueDriverId from sap")
-                                        processQueueDocument(qSnaps.documents[0], source = "attempt2_sapFallback")
-                                    } else {
-                                        Log.d("OBD", ">>> ATTEMPT 2 also empty")
-                                    }
-                                }
-                            return@addOnSuccessListener
-                        }
-
-                        // ── ATTEMPT 3 ── Last resort: direct sessionDriverId scan of queue.
-                        Log.d("OBD", ">>> ATTEMPT 2 empty — trying ATTEMPT 3 (direct scan)...")
-                        db.collection("queue")
-                            .whereEqualTo("driverId", sessionDriverId)
-                            .whereIn("status", listOf("assigned", "waiting", "called", "loading", "in_transit"))
-                            .get()
-                            .addOnSuccessListener { scanSnapshots ->
-                                if (!scanSnapshots.isEmpty) {
-                                    Log.d("OBD", ">>> ATTEMPT 3 SUCCESS")
-                                    processQueueDocument(scanSnapshots.documents[0], source = "attempt3_directScan")
-                                } else {
-                                    Log.d("OBD", ">>> ATTEMPT 3 empty — no queue for driverId='$sessionDriverId'")
-                                }
-                            }
-                    }
+        val sessionDriverId = sessionManager.getDriverId() ?: return
+        showDetailsLoading()
+        queueListener?.invoke()
+        SocketManager.connect(this)
+        queueListener = SocketManager.subscribeRealtime("queue", onData = { payload ->
+            val records = payload as? List<*> ?: return@subscribeRealtime
+            val queueRecords = records.mapNotNull { it as? Map<String, Any?> }
+            val preferredQueueId = sessionManager.getCurrentQueueDocId()
+            val active = queueRecords.firstOrNull { it["id"] == preferredQueueId &&
+                (it["status"] as? String) in listOf("assigned", "waiting", "called", "loading", "in_transit", "fully_loaded")
+            } ?: queueRecords.firstOrNull {
+                (it["status"] as? String) in listOf("assigned", "waiting", "called", "loading", "in_transit", "fully_loaded")
+            } ?: run {
+                showDetailsLoadError("No active queue found.")
+                return@subscribeRealtime
             }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) processQueueRecord(active, "socket_driver_queue")
+            }
+        }, onError = { error ->
+            Log.e("OBD", "queue realtime error: $error")
+            if (!hasLoadedDetails) showDetailsLoadError("Could not load queue details. Reopen this screen to retry.")
+        })
     }
 
-    /**
-     * Loads a specific shipment directly by its sap_assignments document ID.
-     * Called when the activity is opened from a "My Queue" dashboard card tap
-     * (shipment_doc_id intent extra is passed).
-     */
     private fun loadSpecificShipment(shipmentDocId: String) {
-        Log.d("OBD", ">>> loadSpecificShipment docId=$shipmentDocId")
-        db.collection("sap_assignments").document(shipmentDocId)
-            .addSnapshotListener { snap, err ->
-                if (err != null || snap == null || !snap.exists()) return@addSnapshotListener
-                populateQueueDetailsUI(snap)
+        showDetailsLoading()
+        assignmentListener?.invoke()
+        SocketManager.connect(this)
+        assignmentListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+            val records = payload as? List<*> ?: return@subscribeRealtime
+            val shipment = records.mapNotNull { it as? Map<String, Any?> }.firstOrNull { it["id"] == shipmentDocId }
+                ?: run {
+                    showDetailsLoadError("Shipment details are no longer available.")
+                    return@subscribeRealtime
+                }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    populateQueueDetailsUI(shipment)
+                    hideDetailsLoading()
+                }
             }
+        }, onError = { error ->
+            Log.e("OBD", "shipment realtime error: $error")
+            if (!hasLoadedDetails) showDetailsLoadError("Could not load shipment details. Reopen this screen to retry.")
+        })
     }
 
+    private fun showDetailsLoading() {
+        binding.detailsLoadingContainer.visibility = View.VISIBLE
+        binding.detailsLoadingSkeleton.root.visibility = View.VISIBLE
+        binding.tvDetailsLoadError.visibility = View.GONE
+    }
+
+    private fun hideDetailsLoading() {
+        hasLoadedDetails = true
+        binding.detailsLoadingContainer.visibility = View.GONE
+    }
+
+    private fun showDetailsLoadError(message: String) {
+        if (isFinishing || isDestroyed) return
+        binding.tvDetailsLoadError.text = message
+        binding.detailsLoadingContainer.visibility = View.VISIBLE
+        binding.detailsLoadingSkeleton.root.visibility = View.GONE
+        binding.tvDetailsLoadError.visibility = View.VISIBLE
+    }
     /**
      * Populates all UI fields from a sap_assignments document.
-     * sap_assignments/{shipmentNumber} — doc ID is the shipment number itself.
-     * Requirements are loaded via 2-hop: driverId (queue doc ID) → queue.driverId (Firebase UID) → drivers.requirements.
+     * sap_assignments/{shipmentNumber} â€” doc ID is the shipment number itself.
+     * Requirements are loaded via 2-hop: driverId (queue doc ID) â†’ queue.driverId (Firebase UID) â†’ drivers.requirements.
      */
-    private fun populateQueueDetailsUI(doc: com.google.firebase.firestore.DocumentSnapshot) {
-        val shipmentNumber = doc.id  // document ID IS the shipment number (e.g. "0010128715")
-        currentTripStatus = doc.getString("tripStatus") ?: ""
+    private fun populateQueueDetailsUI(doc: Map<String, Any?>) {
+        val shipmentNumber = doc["id"] as? String ?: return
+        currentTripStatus = doc["tripStatus"] as? String ?: ""
 
-        // ── Banner: show shipment number as queue reference ──
+        // â”€â”€ Banner: show shipment number as queue reference â”€â”€
         binding.tvQueueNumberLabel.text = "SHIPMENT"
         binding.tvQueueNumber.text = shipmentNumber
 
-        // ── Subtitle ──
+        // â”€â”€ Subtitle â”€â”€
         binding.tvSubStatus.text = "Being loaded"
 
-        // ── Details card fields from sap_assignments root ──
+        // â”€â”€ Details card fields from sap_assignments root â”€â”€
         binding.tvShipmentNumber.text = shipmentNumber
-        binding.tvPlateNo.text   = doc.getString("truckPlate")   ?: "—"
+        binding.tvPlateNo.text   = doc["truckPlate"] as? String   ?: "â€”"
         // tvTruckType and tvHelper come from the queue doc (loaded inside loadRequirementsAndQueueData below)
 
-        // ── Customer Requirements + Queue fields: 2-hop via queue doc ──
+        // â”€â”€ Customer Requirements + Queue fields: 2-hop via queue doc â”€â”€
         // sap_assignments.driverId is the Firebase UID, used to query queue collection by driverId field
-        val firebaseUidFromDoc = doc.getString("driverId") ?: ""
+        val firebaseUidFromDoc = doc["driverId"] as? String ?: ""
         if (firebaseUidFromDoc.isNotBlank()) {
             loadRequirementsAndQueueData(firebaseUidFromDoc)
         } else {
@@ -524,14 +511,14 @@ class QueueDetailsActivity : AppCompatActivity() {
             bindRequirement(binding.tvReqSafetyShoes, null)
             bindRequirement(binding.tvReqPants, null)
             bindRequirement(binding.tvReqClosedShoes, null)
-            binding.tvTruckType.text = "—"
-            binding.tvHelper.text    = "—"
+            binding.tvTruckType.text = "â€”"
+            binding.tvHelper.text    = "â€”"
         }
 
-        // ── Planned Delivery: actualDelDate lives in lineItems[0] as OData string "/Date(millis)/" ──
+        // â”€â”€ Planned Delivery: actualDelDate lives in lineItems[0] as OData string "/Date(millis)/" â”€â”€
         @Suppress("UNCHECKED_CAST")
-        val lineItems = doc.get("lineItems") as? List<Map<String, Any?>> ?: emptyList()
-        val guardSignature = doc.getString("guardSignatureBase64") ?: ""
+        val lineItems = doc["lineItems"] as? List<Map<String, Any?>> ?: emptyList()
+        val guardSignature = doc["guardSignatureBase64"] as? String ?: ""
         currentLineItems = lineItems.mapNotNull {
             it as? Map<String, Any?>
         }.map {
@@ -543,13 +530,13 @@ class QueueDetailsActivity : AppCompatActivity() {
         val rawDate = firstItem?.get("actualDelDate") as? String
         binding.tvDeliveryDate.text = formatODataDate(rawDate)
 
-        // ── OBD count pill ──
+        // â”€â”€ OBD count pill â”€â”€
         binding.tvObdCount.text = lineItems.size.toString()
 
         currentSapDocId = shipmentNumber
         hasShipment = true
 
-        // ── "Go to Tracking" — only show for the active trip when it's in_transit ──
+        // â”€â”€ "Go to Tracking" â€” only show for the active trip when it's in_transit â”€â”€
         val activeDocId = sessionManager.getActiveSapDocId()
         if (currentSapDocId == activeDocId && currentTripStatus == "in_transit") {
             binding.btnGoToTracking.visibility = View.VISIBLE
@@ -560,16 +547,16 @@ class QueueDetailsActivity : AppCompatActivity() {
 
     /**
      * Loads queue doc data AND driver requirements via 2-hop:
-     * sap_assignments.driverId (= Firebase UID) → queue.driverId (Firebase UID) → drivers.requirements
+     * sap_assignments.driverId (= Firebase UID) â†’ queue.driverId (Firebase UID) â†’ drivers.requirements
      *
      * Also sets truckType, helper, and plateNumber from the queue doc (source of truth for these fields).
      */
     private fun loadRequirementsAndQueueData(driverUid: String) {
         // Set default values first in case the Firestore call fails
-        binding.tvTruckType.text = "—"
-        binding.tvHelper.text    = "—"
+        binding.tvTruckType.text = "â€”"
+        binding.tvHelper.text    = "â€”"
 
-        // ✅ FIX: ang driverId mula sa sap_assignments ay Firebase UID,
+        // âœ… FIX: ang driverId mula sa sap_assignments ay Firebase UID,
         // kaya i-query ang queue collection by "driverId" field.
         db.collection("queue")
             .whereEqualTo("driverId", driverUid)
@@ -586,12 +573,12 @@ class QueueDetailsActivity : AppCompatActivity() {
 
                 if (queueDoc == null) return@addOnSuccessListener
 
-                binding.tvTruckType.text = queueDoc.getString("truckType") ?: "—"
-                binding.tvHelper.text    = queueDoc.getString("helper")   ?: "—"
+                binding.tvTruckType.text = queueDoc.getString("truckType") ?: "â€”"
+                binding.tvHelper.text    = queueDoc.getString("helper")   ?: "â€”"
                 val queuePlate = queueDoc.getString("plateNumber") ?: ""
                 if (queuePlate.isNotBlank()) binding.tvPlateNo.text = queuePlate
 
-                // driverUid IS already the Firebase UID — direct lookup na sa drivers
+                // driverUid IS already the Firebase UID â€” direct lookup na sa drivers
                 db.collection("drivers").document(driverUid).get()
                     .addOnSuccessListener { driverDoc ->
                         if (driverDoc == null || !driverDoc.exists() || isFinishing) return@addOnSuccessListener
@@ -610,36 +597,36 @@ class QueueDetailsActivity : AppCompatActivity() {
             }
     }
 
-    /** Binds a requirement TextView: green ✓ (true), gray — (false/null). */
+    /** Binds a requirement TextView: green âœ“ (true), gray â€” (false/null). */
     private fun bindRequirement(tv: android.widget.TextView, value: Boolean?) {
         if (isFinishing) return
         when (value) {
             true -> {
-                tv.text = "✔"
+                tv.text = "âœ”"
                 tv.setTextColor(ContextCompat.getColor(this, R.color.transit_green))
             }
             else -> {
-                tv.text = "—"
+                tv.text = "â€”"
                 tv.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
             }
         }
     }
 
-    /** Parses OData date string "/Date(millis)/" into a human-readable "MMM dd, yyyy • h:mm a". */
+    /** Parses OData date string "/Date(millis)/" into a human-readable "MMM dd, yyyy â€¢ h:mm a". */
     private fun formatODataDate(raw: String?): String {
-        if (raw == null) return "—"
+        if (raw == null) return "â€”"
         return try {
             val millis = raw.removePrefix("/Date(").removeSuffix(")/").toLong()
-            val sdf = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm a", java.util.Locale.US)
+            val sdf = java.text.SimpleDateFormat("MMM dd, yyyy â€¢ h:mm a", java.util.Locale.US)
             sdf.format(java.util.Date(millis))
         } catch (e: Exception) {
-            "—"
+            "â€”"
         }
     }
 
-    private fun processQueueDocument(doc: com.google.firebase.firestore.DocumentSnapshot, source: String) {
+    private fun processQueueRecord(doc: Map<String, Any?>, source: String) {
         if (isFinishing || isDestroyed) return
-        val status = doc.getString("status") ?: "unknown"
+        val status = doc["status"] as? String ?: "unknown"
         currentQueueStatus = status
         positionJob?.cancel()
         positionJob = null
@@ -651,11 +638,11 @@ class QueueDetailsActivity : AppCompatActivity() {
         binding.tvQueueNumberLabel.visibility = View.GONE
 
         // Persist queue doc ID for later lookup
-        currentQueueDocId = doc.id
-        sessionManager.saveCurrentQueueDocId(doc.id)
+        currentQueueDocId = doc["id"] as? String ?: return
+        sessionManager.saveCurrentQueueDocId(currentQueueDocId!!)
 
-        // ── 2-hop: queue.driverId (Firebase UID) → drivers.requirements ──
-        val driverId = doc.getString("driverId") ?: ""
+        // â”€â”€ 2-hop: queue.driverId (Firebase UID) â†’ drivers.requirements â”€â”€
+        val driverId = doc["driverId"] as? String ?: ""
         if (driverId.isNotBlank()) {
             queueDriverId = driverId
             loadRequirementsFromDriver(driverId)
@@ -663,108 +650,75 @@ class QueueDetailsActivity : AppCompatActivity() {
             clearRequirements()
         }
 
-        binding.tvPlateNo.text    = doc.getString("plateNumber")   ?: "—"
-        binding.tvTruckType.text  = doc.getString("truckType")      ?: "—"
-        binding.tvHelper.text     = doc.getString("helper")         ?: "—"
+        binding.tvPlateNo.text    = doc["plateNumber"] as? String   ?: "â€”"
+        binding.tvTruckType.text  = doc["truckType"] as? String      ?: "â€”"
+        binding.tvHelper.text     = doc["helper"] as? String         ?: "â€”"
         Log.d("QUEUE_DETAILS", "Helper name from queue doc: ${binding.tvHelper.text}")
 
-        if (status in listOf("waiting", "called") && doc.getBoolean("isAssigned") != true) {
+        if (status in listOf("waiting", "called") && doc["isAssigned"] != true) {
+            assignmentListener?.invoke()
+            assignmentListener = null
             hasShipment = false
             currentSapDocId = ""
             currentLineItems = emptyList()
-            binding.tvShipmentNumber.text = "—"
+            binding.tvShipmentNumber.text = "â€”"
             binding.tvObdCount.text = "0"
             binding.btnGoToTracking.visibility = View.GONE
-            if (doc.getBoolean("registrationComplete") != true) {
+            if (doc["registrationComplete"] != true) {
+                hideDetailsLoading()
                 binding.tvQueueNumber.text = "Complete Registration"
                 binding.tvQueueNumberLabel.visibility = View.GONE
                 return
             }
-            positionJob = com.sysu.go.network.observeQueuePosition(this, doc.id) { position ->
-                    if (isFinishing || isDestroyed || currentQueueDocId != doc.id ||
+            positionJob = com.sysu.go.network.observeQueuePosition(this, currentQueueDocId!!) { position ->
+                    if (isFinishing || isDestroyed || currentQueueDocId != doc["id"] ||
                         currentQueueStatus != status || hasShipment) return@observeQueuePosition
                     binding.tvQueueNumber.text = position?.toString() ?: "Waiting"
                     binding.tvQueueNumberLabel.visibility = if (position == null) View.GONE else View.VISIBLE
                 }
+            hideDetailsLoading()
             // Waiting admissions must not load historical UID assignments over the queue number.
             return
         } else if (status == "loading") {
             binding.tvQueueNumber.text = "GO"
         }
 
-        // ── sap_assignments.driverId stores the Firebase UID (queue["driverId"]), NOT
+        // â”€â”€ sap_assignments.driverId stores the Firebase UID (queue["driverId"]), NOT
         // the queue document id (queueDocId). Use queueDriverId here, NOT currentQueueDocId.
-        Log.d("OBD", ">>> sap query using queueDriverId='$queueDriverId' (Firebase UID, not queueDocId='$currentQueueDocId')")
-        db.collection("sap_assignments")
-            .whereEqualTo("driverId", queueDriverId)
-            .get()
-            .addOnSuccessListener { assignSnaps ->
-                if (isFinishing || isDestroyed || currentQueueDocId != doc.id || currentQueueStatus != status) return@addOnSuccessListener
-                if (assignSnaps.isEmpty) {
-                    Log.d("OBD", ">>> sap_assignments WALA")
+        assignmentListener?.invoke()
+        assignmentListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
+            val records = payload as? List<*> ?: return@subscribeRealtime
+            val assignedIds = (doc["assignedShipments"] as? List<*>)?.mapNotNull { item ->
+                val fields = item as? Map<*, *> ?: return@mapNotNull null
+                (fields["dispatchKey"] ?: fields["obdNumber"]) as? String
+            }.orEmpty()
+            val candidates = records.mapNotNull { it as? Map<String, Any?> }
+            val linkedAssignments = candidates.filter { record ->
+                record["queueId"] == currentQueueDocId || (record["id"] as? String) in assignedIds
+            }
+            val activeStatuses = setOf("assigned", "loading", "loaded", "fully_loaded", "in_transit", "returning_to_base")
+            val assignment = linkedAssignments.firstOrNull { (it["tripStatus"] as? String) in activeStatuses }
+                ?: linkedAssignments.firstOrNull()
+                ?: candidates.filter { it["driverId"] == queueDriverId && (it["tripStatus"] as? String) in activeStatuses }
+                    .singleOrNull()
+            runOnUiThread {
+                if (isFinishing || isDestroyed || currentQueueDocId != doc["id"] || currentQueueStatus != status) return@runOnUiThread
+                if (assignment == null) {
                     hasShipment = false
-                    return@addOnSuccessListener
+                    currentLineItems = emptyList()
+                    binding.tvObdCount.text = "0"
+                    showDetailsLoadError("Shipment details are not available yet.")
+                    return@runOnUiThread
                 }
-
-                // Skip updating shipment-specific fields when in specific shipment mode
-                // to prevent stale data from overwriting real-time updates from the dedicated listener
                 if (!isSpecificShipmentMode) {
-                    binding.tvShipmentNumber.text = assignSnaps.documents[0].id
-                    currentSapDocId = assignSnaps.documents[0].id
-                }
-
-                val lineItemsRef = assignSnaps.documents[0].get("lineItems")
-                    val guardSignature = assignSnaps.documents[0].getString("guardSignatureBase64") ?: ""
-                    if (lineItemsRef != null && lineItemsRef is List<*>) {
-                        val lineItems = lineItemsRef.mapNotNull { it as? Map<*, *> }
-                        if (lineItems.isNotEmpty()) {
-                            @Suppress("UNCHECKED_CAST")
-                            val items = lineItems as? List<Map<String, Any>> ?: emptyList()
-                            if (!isSpecificShipmentMode) {
-                                currentLineItems = items.map { it.toMutableMap().apply { put("guardSignature", guardSignature) } }
-                                binding.tvObdCount.text = items.size.toString()
-                            }
-                        } else {
-                            if (!isSpecificShipmentMode) {
-                                currentLineItems = emptyList()
-                                binding.tvObdCount.text = "0"
-                            }
-                        }
-                    } else {
-                        if (!isSpecificShipmentMode) {
-                            currentLineItems = emptyList()
-                            binding.tvObdCount.text = "0"
-                        }
-                    }
-
-                // Skip updating hasShipment and delivery date when in specific shipment mode
-                // to prevent stale data from overwriting real-time updates from the dedicated listener
-                if (!isSpecificShipmentMode) {
-                    hasShipment = true
-
-                    // ── Read and display delivery date from sap_assignments ──
-                    val delTimestamp = assignSnaps.documents[0].getTimestamp("actualDelDate")
-                    if (delTimestamp != null && !isFinishing) {
-                        val cal = java.util.Calendar.getInstance()
-                        cal.timeInMillis = delTimestamp.toDate().time
-                        val fmt = java.text.SimpleDateFormat("MMM dd, yyyy • h:mm a", java.util.Locale.US)
-                        binding.tvDeliveryDate.text = fmt.format(cal.time)
-                    } else {
-                        binding.tvDeliveryDate.text = "—"
-                    }
-                }
-
-                // Override queue number with LOADING once shipment is assigned
-                if (!isFinishing) {
-                    binding.tvQueueNumber.text = "LOADING"
+                    populateQueueDetailsUI(assignment)
+                    hideDetailsLoading()
+                    binding.tvQueueNumber.text = if (status == "loading") "GO" else "LOADING"
                     binding.tvQueueNumberLabel.visibility = View.GONE
                 }
             }
-            .addOnFailureListener { e ->
-                Log.e("OBD", ">>> sap_assignments FAILED: ${e.message}")
-            }
+        }, onError = { error -> Log.e("OBD", "assignment realtime error: $error") })
     }
-
     private val sessionManager by lazy { SessionManager(this) }
     private var currentQueueDocId: String = ""
 
@@ -791,7 +745,7 @@ class QueueDetailsActivity : AppCompatActivity() {
     ) {
         val checked = reqMap?.get(key) ?: false
         if (isFinishing) return
-        tv.text = if (checked) "✔" else "—"
+        tv.text = if (checked) "âœ”" else "â€”"
         tv.setTextColor(
             ContextCompat.getColor(
                 this@QueueDetailsActivity,
@@ -809,11 +763,11 @@ class QueueDetailsActivity : AppCompatActivity() {
             binding.tvReqPants,
             binding.tvReqClosedShoes
         ).forEach { tv ->
-            tv.text = "—"
+            tv.text = "â€”"
             tv.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
         }
-        binding.tvTruckType.text = "—"
-        binding.tvHelper.text    = "—"
+        binding.tvTruckType.text = "â€”"
+        binding.tvHelper.text    = "â€”"
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
@@ -821,9 +775,9 @@ class QueueDetailsActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(ev)
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // POD CAPTURE INTEGRATION BLOCK
-    // ════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     private fun registerPodLaunchers() {
         cameraPermissionLauncher = registerForActivityResult(
@@ -1089,7 +1043,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                             null
                         }
 
-                        // ✅ UPDATE local state immediately
+                        // âœ… UPDATE local state immediately
                         updateLineItemPodStatus(
                             obdNumber = (podData.lineItem["obdNumber"] as? String) ?: "",
                             podImageUrl = "saved_in_subcollection", // Wag i-save sa local memory ang Base64 para iwas crash
@@ -1100,7 +1054,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                         groupObdNumbers.drop(1).forEach { obd ->
                             updateLineItemPodStatus(obd, "saved_in_subcollection", podData.status, podData.capturedAtMillis, groupPodId)
                         }
-                        // ✅ REFRESH the bottom sheet to reflect changes
+                        // âœ… REFRESH the bottom sheet to reflect changes
                         refreshObdItemsSheet()
 
                         hideUploadProgress()
@@ -1208,7 +1162,7 @@ class QueueDetailsActivity : AppCompatActivity() {
      * timestamp overlay using capturedAtMillis, then passes the stamped bitmap
      * to ImageStorageHelper for compression and base64-encoding.
      *
-     * Mirrors the two-step decode → process flow already in ImageStorageHelper,
+     * Mirrors the two-step decode â†’ process flow already in ImageStorageHelper,
      * separated here so the PhotoFile overload can participate in timestamp
      * embedding without duplicating ImageStorageHelper internals.
      */
@@ -1270,7 +1224,7 @@ class QueueDetailsActivity : AppCompatActivity() {
 
     /**
      * Copy of BitmapFactory's calculateInSampleSize for use with File decode path.
-     * Mirrors the logic already in ImageStorageHelper.decodeAndResize() — kept here
+     * Mirrors the logic already in ImageStorageHelper.decodeAndResize() â€” kept here
      * so encodePodImageWithTimestamp is fully self-contained.
      */
     private fun calculateInSampleSizeForFile(
@@ -1294,7 +1248,7 @@ class QueueDetailsActivity : AppCompatActivity() {
      * Opens a fullscreen black overlay dialog showing the POD photo.
      * The image is decoded from a base64 data URI string.
      *
-     * Layout: dialog_image_preview.xml — semi-transparent black background,
+     * Layout: dialog_image_preview.xml â€” semi-transparent black background,
      * center-fitted ImageView, accessible close (X) button top-right.
      *
      * @param base64ImageString Full base64 data URI (data:image/jpeg;base64,...).
@@ -1465,7 +1419,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                                 try {
                                     // Reset POD data to allow retake (sets unloadStatus to UNLOADING)
                                     resetPodDataForRetake(shipmentDocId, lineItem)
-                                    // ✅ UPDATE local state with ALL POD fields reset
+                                    // âœ… UPDATE local state with ALL POD fields reset
                                     updateLineItemForRetake(obdNumber)
                                     // Refresh the bottom sheet to reflect changes
                                     refreshObdItemsSheet()
@@ -1730,7 +1684,7 @@ class QueueDetailsActivity : AppCompatActivity() {
      * Opens a fullscreen black overlay dialog showing the guard signature photo.
      * The image is decoded from a base64 data URI string.
      *
-     * Layout: dialog_image_preview.xml — semi-transparent black background,
+     * Layout: dialog_image_preview.xml â€” semi-transparent black background,
      * center-fitted ImageView, accessible close (X) button top-right.
      *
      * @param base64ImageString Full base64 data URI (data:image/jpeg;base64,...).
