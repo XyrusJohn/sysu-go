@@ -28,6 +28,8 @@ class GoApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.sysu.go.diagnostics.SystemErrorReporter.install(this)
+        com.sysu.go.diagnostics.UserErrorNotifier.install(this)
         val firebaseApp = com.google.firebase.FirebaseApp.getInstance()
         com.sysu.go.config.EnvironmentPolicy.validate(BuildConfig.USE_FIREBASE_EMULATORS, firebaseApp.options.projectId,
             BuildConfig.API_BASE_URL, BuildConfig.SOCKET_URL, BuildConfig.FRONTEND_URL)

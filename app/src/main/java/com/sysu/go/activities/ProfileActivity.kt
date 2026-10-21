@@ -283,7 +283,10 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
                     }
                 }
             },
-            onError = { message -> Log.w("ProfileActivity", "driver realtime error: $message") },
+            onError = { message ->
+                Log.w("ProfileActivity", "driver realtime error: $message")
+                com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@ProfileActivity, "profile-subscription")
+            },
         )
     }
 
@@ -740,7 +743,7 @@ class ProfileActivity : AppCompatActivity(), ConnectivityMonitor.ConnectivityCha
             } catch (e: Exception) {
                 loadingDialog.dismiss()
                 Log.e("ProfileActivity", "Error loading history: ${e.message}")
-                Toast.makeText(this@ProfileActivity, "Failed to load history: ${e.message}", Toast.LENGTH_LONG).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@ProfileActivity, "trip-history", e)
             }
         }
     }

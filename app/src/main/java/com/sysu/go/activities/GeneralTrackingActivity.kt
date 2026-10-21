@@ -70,7 +70,12 @@ class GeneralTrackingActivity : AppCompatActivity() {
         override fun onLost(network: android.net.Network) {
             runOnUiThread {
                 updateNetworkStatus(false)
-                if (isTrackingStarted) showNetworkLostSnackbar()
+                if (isTrackingStarted) {
+                    com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(
+                        this@GeneralTrackingActivity,
+                        "realtime-connection",
+                    )
+                }
             }
         }
     }
@@ -204,9 +209,13 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
             SocketManager.connect(this)
             startLocationUpdates()
-
-            val serviceIntent = Intent(this, com.sysu.go.services.LocationServices::class.java)
-            ContextCompat.startForegroundService(this, serviceIntent)
+            if (!ensureLocationServiceStarted()) {
+                session.setTrackingActive(false)
+                isTrackingStarted = false
+                stopLocationUpdates()
+                updateTrackingStatus()
+                return
+            }
             Log.d(TAG, "[SERVICE] LocationServices successfully restarted")
 
             updateTrackingStatus()
@@ -214,6 +223,24 @@ class GeneralTrackingActivity : AppCompatActivity() {
         } else {
             pendingStart = true
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
+        }
+    }
+
+    private fun ensureLocationServiceStarted(): Boolean {
+        if (!SessionManager(this).isTrackingActive() ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) return false
+
+        try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, com.sysu.go.services.LocationServices::class.java)
+            )
+            return true
+        } catch (e: Exception) {
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "location-tracking-start", e)
+            Log.e(TAG, "[SERVICE] Could not start LocationServices", e)
+            return false
         }
     }
 
@@ -354,6 +381,12 @@ class GeneralTrackingActivity : AppCompatActivity() {
                     startTracking()
                 } else if (isTrackingStarted) {
                     startLocationUpdates()
+                    if (!ensureLocationServiceStarted()) {
+                        SessionManager(this).setTrackingActive(false)
+                        isTrackingStarted = false
+                        stopLocationUpdates()
+                        updateTrackingStatus()
+                    }
                     updateSocketStatus()
                 }
             } else {
@@ -371,15 +404,21 @@ class GeneralTrackingActivity : AppCompatActivity() {
         updateSocketStatus()
         loadShipmentsData()
 
-        // Re-attach the UI location listener if tracking is already active.
-        // onPause() detaches it to save battery; onResume() must re-attach it
-        // so the screen stops showing "Waiting for GPS..." after coming back.
-        // The background LocationServices service keeps running regardless.
+        // Re-attach the UI listener and re-deliver active state to the foreground
+        // service. The service may have been started from MainActivity while the
+        // trip was idle, so changing the preference alone does not start GPS.
         if (isTrackingStarted &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             startLocationUpdates()
-            Log.d(TAG, "[RESUME] Reattached UI location listener (tracking was active)")
+            if (ensureLocationServiceStarted()) {
+                Log.d(TAG, "[RESUME] Reattached UI listener and confirmed tracking service is active")
+            } else {
+                SessionManager(this).setTrackingActive(false)
+                isTrackingStarted = false
+                stopLocationUpdates()
+                updateTrackingStatus()
+            }
         }
     }
 
@@ -461,17 +500,6 @@ class GeneralTrackingActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showNetworkLostSnackbar() {
-        val snackbar = Snackbar.make(
-            findViewById(R.id.cardLocation),
-            "⚠️ Nawalan ng internet connection. Ang tracking data ay naka-queue.",
-            Snackbar.LENGTH_LONG
-        )
-        snackbar.setBackgroundTint(ContextCompat.getColor(this, R.color.sysu_red))
-        snackbar.setTextColor(ContextCompat.getColor(this, R.color.white))
-        snackbar.show()
-    }
-
     // ═════════════════════════════════════════════════════════════════
     // TRIP ASSIGNMENT & POD CHECK LOGIC
     // ════════════════════════════════════════════════════════════════
@@ -551,7 +579,10 @@ class GeneralTrackingActivity : AppCompatActivity() {
 
                 updateTrackingStatus()
                 updateFloatingBottomBar()
-            }, onError = { error -> Log.e(TAG, "Assignments realtime error: $error") })
+            }, onError = { error ->
+                Log.e(TAG, "Assignments realtime error: $error")
+                com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@GeneralTrackingActivity, "assignment-subscription")
+            })
     }
 
     private fun isAssignmentPodComplete(assignment: Assignment): Boolean {
@@ -716,7 +747,7 @@ class GeneralTrackingActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "Failed to start trip: ${e.message}")
-                Toast.makeText(this, "Failed to start trip. Check connection.", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@GeneralTrackingActivity, "trip-start", e)
             }
     }
 

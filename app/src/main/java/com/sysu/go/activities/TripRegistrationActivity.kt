@@ -150,6 +150,15 @@ class TripRegistrationActivity : AppCompatActivity() {
         binding.btnAddHelper.setOnClickListener { addHelperView() }
         binding.btnSubmit.setOnClickListener { submitTrip() }
         binding.btnBack.setOnClickListener { finish() }
+        if (intent.getBooleanExtra("profileSaveWarning", false)) {
+            binding.root.post {
+                com.sysu.go.diagnostics.UserErrorNotifier.show(
+                    this,
+                    "driver-profile",
+                    "Your driver profile could not be saved. Some details may not be available next time.",
+                )
+            }
+        }
     }
 
     private fun loadDriverProfile() {

@@ -469,7 +469,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performStartReturning error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(requireActivity(), "trip-start", e)
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "START RETURNING TO BASE"
             }
@@ -528,7 +528,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performArrivedAtBase error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(requireActivity(), "shipment-state-transition", e)
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "ARRIVED AT BASE"
             }
@@ -684,7 +684,7 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             } catch (e: Exception) {
                 Log.e(TAG, "performConfirmArrival error: ${e.message}")
                 hideLoading()
-                Toast.makeText(requireContext(), "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(requireActivity(), "shipment-completion", e)
                 binding.btnConfirmReturn.isEnabled = true
                 binding.btnConfirmReturn.text = "YES, CONFIRM ARRIVAL"
             }

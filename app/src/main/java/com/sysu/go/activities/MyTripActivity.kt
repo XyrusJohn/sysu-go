@@ -125,6 +125,7 @@ class MyTripActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "sap_updated listener parse error: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "assignment-subscription", e)
             }
         }
     }
@@ -150,12 +151,14 @@ class MyTripActivity : AppCompatActivity() {
                                     bottomSheet.refreshWith(fresh.filterIsInstance<Map<String, Any?>>())
                                 }
                             } catch (e: Exception) {
+                                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "pod-refresh", e)
                                 Log.e(TAG, "pod_updated refresh failed: ${e.message}")
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "pod-refresh", e)
                 Log.e(TAG, "pod_updated listener error: ${e.message}")
             }
         }
@@ -263,6 +266,7 @@ class MyTripActivity : AppCompatActivity() {
             }
         }.addOnFailureListener {
             Log.e(TAG, "getLastLocation failed: ${it.message}")
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "location-fetch", it)
             proceedToCamera(
                 null, null,
                 capturedAtMillis, item, shipmentDocId
@@ -345,6 +349,7 @@ class MyTripActivity : AppCompatActivity() {
             }.addOnFailureListener {
                 // Truly nothing — GPS unavailable on this device
                 Log.w(TAG, "One-shot timeout AND system cache failed — proceeding without location stamp")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "location-fetch", it)
                 proceedToCamera(null, null, capturedAtMillis, item, shipmentDocId)
             }
         }, 10_000L)
@@ -431,8 +436,7 @@ class MyTripActivity : AppCompatActivity() {
         }
         } catch (e: Throwable) {
             Log.e(TAG, "showObdStatusSheet CRASHED: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            Toast.makeText(this, "Error opening camera: ${e.message}", Toast.LENGTH_LONG).show()
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "camera-status-sheet", e)
         }
     }
 
@@ -491,8 +495,7 @@ class MyTripActivity : AppCompatActivity() {
             Log.d(TAG, "showObdStatusSheetWithLocation: ObdStatusBottomSheet.show() called OK")
         } catch (e: Throwable) {
             Log.e(TAG, "showObdStatusSheetWithLocation CRASHED: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            Toast.makeText(this, "Error opening status sheet: ${e.message}", Toast.LENGTH_LONG).show()
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "camera-status-sheet", e)
         }
     }
 
@@ -627,22 +630,14 @@ class MyTripActivity : AppCompatActivity() {
                     } catch (e: Exception) {
                         hideUploadProgress()
                         Log.e(TAG, "Firestore update failed: ${e.message}")
-                        Toast.makeText(
-                            this@MyTripActivity,
-                            "Photo captured but status save failed. Retry.",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "pod-save", e)
                     }
                 }
             },
-            onFailure = { errorMsg ->
+            onFailure = { _ ->
                 hideUploadProgress()
-                Log.e(TAG, "POD image processing failed: $errorMsg")
-                Toast.makeText(
-                    this@MyTripActivity,
-                    "Photo processing failed: $errorMsg",
-                    Toast.LENGTH_LONG
-                ).show()
+                Log.e(TAG, "POD image processing failed")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "pod-processing")
             }
         )
     }
@@ -794,13 +789,7 @@ class MyTripActivity : AppCompatActivity() {
 
             } catch (e: Exception) {
                 Log.e(TAG, "writeUnloadStatus FAILED for obd=$obdNumber: ${e.message}")
-                runOnUiThread {
-                    Toast.makeText(
-                        this@MyTripActivity,
-                        "Network error. Status update will retry.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-state-transition", e)
             }
         }
     }
@@ -877,7 +866,7 @@ class MyTripActivity : AppCompatActivity() {
                 showObdStatusSheet(item, shipmentDocId)
             } catch (e: Exception) {
                 Log.e(TAG, "retakeObdPod failed: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Pumalya ang retake", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "pod-save", e)
             }
         }
     }
@@ -1079,6 +1068,7 @@ class MyTripActivity : AppCompatActivity() {
                 }
             }, onError = { error ->
                 Log.e(TAG, "loadAssignments realtime error: $error")
+                com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@MyTripActivity, "assignment-subscription")
                 if (!hasLoadedAssignments && !isFinishing) {
                     binding.loadingSkeleton.root.visibility = View.GONE
                     binding.tvLoadError.visibility = View.VISIBLE
@@ -1333,7 +1323,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "START_LOADING error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-state-transition", e)
                         }
                     }}
                 }
@@ -1360,7 +1350,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-state-transition", e)
                         }
                     }}
                 }
@@ -1392,7 +1382,7 @@ class MyTripActivity : AppCompatActivity() {
                             loadAssignments()
                         } catch (e: Exception) {
                             Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                            Toast.makeText(this@MyTripActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-state-transition", e)
                         }
                     }}
                 }
@@ -1441,8 +1431,8 @@ class MyTripActivity : AppCompatActivity() {
                 Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
                 onSuccess()
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-completion", e)
                 Log.e(TAG, "confirmShipment error: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Hindi ma-kumpirma. Subukan ulit.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1473,11 +1463,11 @@ class MyTripActivity : AppCompatActivity() {
                 // MainActivity → MyTripActivity → picks next shipment → same flow.
                 launchDeliveryActivity(assignment.docId)
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "trip-start", e)
                 Log.e(TAG, "confirmAndStartTrip error: ${e.message}")
                 sessionManager.saveActiveSapDocId(null)
                 sessionManager.clearCurrentSapDocId()
                 sessionManager.setTripActive(false)
-                Toast.makeText(this@MyTripActivity, "Hindi masimulan ang biyahe. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1576,11 +1566,11 @@ class MyTripActivity : AppCompatActivity() {
                 shipmentAdapter.setEndingDocId(null)
                 loadAssignments()
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "shipment-completion", e)
                 Log.e(TAG, "endSingleShipment error: ${e.message}")
                 shipmentAdapter.setEndingDocId(null)
                 shipmentAdapter.notifyDataSetChanged()
                 runOnUiThread {
-                    Toast.makeText(this@MyTripActivity, "Hindi ma-tapos ang biyahe. Subukan ulit.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1751,6 +1741,7 @@ class MyTripActivity : AppCompatActivity() {
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "onRefreshRequest: Firestore reload failed: ${e.message}")
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "assignment-subscription", e)
                         sheet.hideRefreshing()
                     }
                 }
@@ -1799,7 +1790,7 @@ class MyTripActivity : AppCompatActivity() {
                 }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
             } catch (e: Exception) {
                 Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
-                Toast.makeText(this@MyTripActivity, "Hindi ma-load ang detalye ng beripikasyon", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "guard-verification", e)
             }
         }
     }
@@ -1860,6 +1851,7 @@ class MyTripActivity : AppCompatActivity() {
             )
         } catch (e: Exception) {
             Log.e(TAG, "buildAssignmentFromMap error: ${e.message}")
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MyTripActivity, "assignment-subscription", e)
             null
         }
     }

@@ -185,9 +185,7 @@ class QRScanActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this, "Camera error: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "qr-camera-start", e)
             }
         }, ContextCompat.getMainExecutor(this))
     }

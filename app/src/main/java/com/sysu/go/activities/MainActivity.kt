@@ -161,6 +161,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        val previousSessionHadCrash = com.sysu.go.diagnostics.SystemErrorReporter.flushPendingCrash(this)
 
         // â”€â”€ Permission setup gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // If driver hasn't completed the permission wizard or is missing required
@@ -170,6 +171,13 @@ class MainActivity : AppCompatActivity() {
         if (PermissionHelper.needsSetup(this)) {
             PermissionHelper.markSetupCompleted(this)
             startActivity(Intent(this, PermissionSetupActivity::class.java))
+            if (previousSessionHadCrash) {
+                com.sysu.go.diagnostics.UserErrorNotifier.show(
+                    this,
+                    "previous-crash",
+                    "The app encountered a problem during your previous session. Please retry your last action.",
+                )
+            }
             // Do NOT call finish() â€” let the system manage the back stack
             return
         }
@@ -177,6 +185,15 @@ class MainActivity : AppCompatActivity() {
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        if (previousSessionHadCrash) {
+            binding.root.post {
+                com.sysu.go.diagnostics.UserErrorNotifier.show(
+                    this,
+                    "previous-crash",
+                    "The app encountered a problem during your previous session. Please retry your last action.",
+                )
+            }
+        }
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -1123,7 +1140,8 @@ class MainActivity : AppCompatActivity() {
                     binding.tvDriverName.text = cleanName
                 }
             } catch (e: Exception) {
-                // Silently fail
+                Log.w(TAG, "Driver profile could not be loaded", e)
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "driver-profile", e)
             }
         }
     }
@@ -1238,6 +1256,7 @@ class MainActivity : AppCompatActivity() {
             }
         }, onError = { error ->
             Log.e(TAG, "queue realtime error: $error")
+            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this, "queue-subscription")
             if (!hasLoadedQueueState && !isFinishing) {
                 binding.queueLoadingContainer.visibility = View.VISIBLE
                 binding.queueLoadingSkeleton.root.visibility = View.GONE
@@ -1269,7 +1288,10 @@ class MainActivity : AppCompatActivity() {
                     syncQueueTabsFromSapData(assignments, sessionDriverId, truckType)
                 }
             }
-        }, onError = { error -> Log.e(TAG, "assignments realtime error: $error") })
+        }, onError = { error ->
+            Log.e(TAG, "assignments realtime error: $error")
+            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this, "assignment-subscription")
+        })
     }
 
     /**
@@ -1641,13 +1663,14 @@ class MainActivity : AppCompatActivity() {
                     }
                     .addOnFailureListener { e ->
                         Log.e(TAG, ">>> sap_assignments cleanup failed: ${e.message}")
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "queue-subscription", e)
                     }
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, ">>> Queue cancellation failed: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "queue-subscription", e)
                 // Attempt to restore state so driver can try again
                 if (!isFinishing) {
-                    Toast.makeText(this, R.string.cancel_queue_error, Toast.LENGTH_SHORT).show()
                 }
             }
     }
@@ -1758,7 +1781,7 @@ class MainActivity : AppCompatActivity() {
                 session.saveActiveSapDocId(null)
                 session.clearCurrentSapDocId()
                 session.setTripActive(false)
-                Toast.makeText(this, "Hindi masimulan ang biyahe. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "trip-start", e)
             }
     }
 
@@ -1807,6 +1830,7 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "LocationServices started successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start LocationServices safely: ${e.message}", e)
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "location-tracking-start", e)
         }
     }
 
@@ -1884,6 +1908,7 @@ class MainActivity : AppCompatActivity() {
                                         fetchAndSetupMyTripCards()
                                     } catch (e: Exception) {
                                         Log.e(TAG, "START_LOADING error: ${e.message}")
+                                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "shipment-state-transition", e)
                                     }
                                 }
                             }
@@ -1903,6 +1928,7 @@ class MainActivity : AppCompatActivity() {
                                         fetchAndSetupMyTripCards()
                                     } catch (e: Exception) {
                                         Log.e(TAG, "FULLY_LOADED error: ${e.message}")
+                                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "shipment-state-transition", e)
                                     }
                                 }
                             }
@@ -1968,6 +1994,7 @@ class MainActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "fetchAndSetupMyTripCards: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "assignment-subscription", e)
             }
     }
 
@@ -2061,7 +2088,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         }.addOnFailureListener { e ->
             Log.e(TAG, "startSingleShipment failed: ${e.message}")
-            Toast.makeText(this, "Hindi masimulan ang biyahe.", Toast.LENGTH_SHORT).show()
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@MainActivity, "trip-start", e)
         }
     }
 

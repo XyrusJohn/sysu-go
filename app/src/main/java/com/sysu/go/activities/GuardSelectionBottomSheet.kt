@@ -16,6 +16,7 @@ class GuardSelectionBottomSheet : BottomSheetDialogFragment() {
 
     private var guards: List<SecurityGuard> = emptyList()
     private var onGuardSelected: ((SecurityGuard) -> Unit)? = null
+    private var guardAdapter: GuardSelectionAdapter? = null
 
     companion object {
         const val TAG = "GuardSelectionBottomSheet"
@@ -45,15 +46,22 @@ class GuardSelectionBottomSheet : BottomSheetDialogFragment() {
 
         binding.rvGuards.apply {
             layoutManager = LinearLayoutManager(requireContext())
-            adapter = GuardSelectionAdapter(guards) { guard ->
+            guardAdapter = GuardSelectionAdapter(guards) { guard ->
                 onGuardSelected?.invoke(guard)
                 dismiss()
             }
+            adapter = guardAdapter
         }
+    }
+
+    fun updateGuards(updated: List<SecurityGuard>) {
+        guards = updated.toList()
+        guardAdapter?.submitGuards(guards)
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
+        guardAdapter = null
         _binding = null
     }
 }

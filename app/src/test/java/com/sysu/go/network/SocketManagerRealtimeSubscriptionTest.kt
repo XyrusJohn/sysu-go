@@ -9,6 +9,11 @@ class SocketManagerRealtimeSubscriptionTest {
         assertTrue(isSupportedRealtimeTopic("queuePosition"))
     }
 
+    @Test fun authenticatedMasterDataTopicsAreSupported() {
+        assertTrue(isSupportedRealtimeTopic("securityGuards"))
+        assertTrue(isSupportedRealtimeTopic("truckCompanies"))
+    }
+
     @Test fun unknownRealtimeTopicIsRejected() {
         assertFalse(isSupportedRealtimeTopic("unknown"))
     }

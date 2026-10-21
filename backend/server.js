@@ -544,7 +544,7 @@ io.on("connection", async (socket) => {
 });
 
 // ─── Start server ───────────────────────────────────────────────────────────
-const RAILWAY_PORT = parseInt(process.env.PORT || "8080", 10);
+const PORT = parseInt(process.env.PORT || "8080", 10);
 
 // Destroy sockets idle for > 30s (avoids holding connections indefinitely)
 server.on("timeout", (socket) => {
@@ -552,9 +552,9 @@ server.on("timeout", (socket) => {
   console.warn(`[${ts()}] [SERVER] Idle socket destroyed: ${socket.remoteAddress}`);
 });
 
-server.listen(RAILWAY_PORT, "0.0.0.0", () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`[${ts()}] [ENV] PORT=${process.env.PORT}`);
-  console.log(`[${ts()}] 🚀 Server + Socket.IO running on port ${RAILWAY_PORT}`);
+  console.log(`[${ts()}] 🚀 Server + Socket.IO running on port ${PORT}`);
   // Start internet connectivity heartbeat monitor
   startHeartbeat();
   // Start presence watcher — scans onlineDriver Map every 15s and marks

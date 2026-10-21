@@ -17,7 +17,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun isSupportedRealtimeTopic(topic: String): Boolean =
-    topic in setOf("profile", "driver", "queue", "queuePosition", "assignments", "location")
+    topic in setOf("profile", "driver", "queue", "queuePosition", "assignments", "location", "securityGuards", "truckCompanies")
 
 object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
     private const val TAG = "SOCKET_EVENTS_DEFINITIVE"
@@ -290,6 +290,13 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
 
                 socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
                     Log.e(TAG, ">>> EVENT_CONNECT_ERROR! $url → ${args.joinToString()}")
+                    com.sysu.go.diagnostics.SystemErrorReporter.reportOperationFailure(
+                        "realtime-connection", java.io.IOException("Socket.IO connection failed")
+                    )
+                    com.sysu.go.diagnostics.UserErrorNotifier.showCurrent(
+                        "realtime-connection",
+                        "Live connection lost. SYSU Go will reconnect automatically; check your internet connection.",
+                    )
                     isConnecting = false  // Allow retry on connection error
                 }
 

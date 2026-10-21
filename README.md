@@ -1,6 +1,6 @@
 # SYSU Go
 
-**Stanley University Transportation - Driver Tracking System**
+**SYSU International - Driver Tracking System**
 
 SYSU Go is the Android driver application and supporting Node.js/Firebase backend. The web dashboard, kiosk, SAP assignment view, and maps are maintained in the sibling `sysu-app` project.
 
@@ -34,15 +34,19 @@ The former `app/README.md` and `backend/README.md` content has been consolidated
 
 ## Technology Stack
 
-| Layer | Technology | Evidence |
-|---|---|---|
-| Android | Kotlin, Android Gradle Plugin | `app/build.gradle.kts` |
-| Backend | Node.js 24, Express, Firebase Admin | `backend/package.json` and `backend/server.js` |
+| Layer         | Technology                            | Evidence                                                       |
+| ------------- | ------------------------------------- | -------------------------------------------------------------- |
+| Android       | Kotlin, Android Gradle Plugin         | `app/build.gradle.kts`                                         |
+| Backend       | Node.js 24, Express, Firebase Admin   | `backend/package.json` and `backend/server.js`                 |
 | Identity/data | Firebase Authentication and Firestore | Android Firebase clients and `backend/config/firebaseAdmin.js` |
-| Realtime | Socket.IO | Android `SocketManager` and backend `server.js` |
-| QR camera | CameraX and ML Kit | `app/build.gradle.kts` |
+| Realtime      | Socket.IO                             | Android `SocketManager` and backend `server.js`                |
+| QR camera     | CameraX and ML Kit                    | `app/build.gradle.kts`                                         |
 
 The sibling web dashboard is documented by the `sysu-app` repository.
+
+## Container deployment
+
+The Node.js API and Socket.IO backend have provider-neutral Dockerfiles and a Docker Compose entry point. The Android app remains a separately built and signed APK. See the [container deployment guide](docs/container-deployment.md) for setup and limitations.
 
 ## Features
 
@@ -85,27 +89,27 @@ Open the repository in Android Studio, select the `emulator` build variant, and 
 
 ## Configuration
 
-| Variable | Use |
-|---|---|
-| `SYSU_ENV` | Explicit backend environment (`emulator`, `staging`, or `production`) |
-| `FIREBASE_PROJECT_ID` | Project asserted by guarded backend initialization |
-| `FIRESTORE_EMULATOR_HOST` | Firestore emulator host for isolated tests |
-| `FIREBASE_AUTH_EMULATOR_HOST` | Auth emulator host for isolated tests |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Approved non-emulator backend credential input, when required |
-| `PORT` | Backend HTTP/Socket.IO listener port |
+| Variable                        | Use                                                                   |
+| ------------------------------- | --------------------------------------------------------------------- |
+| `SYSU_ENV`                      | Explicit backend environment (`emulator`, `staging`, or `production`) |
+| `FIREBASE_PROJECT_ID`           | Project asserted by guarded backend initialization                    |
+| `FIRESTORE_EMULATOR_HOST`       | Firestore emulator host for isolated tests                            |
+| `FIREBASE_AUTH_EMULATOR_HOST`   | Auth emulator host for isolated tests                                 |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Approved non-emulator backend credential input, when required         |
+| `PORT`                          | Backend HTTP/Socket.IO listener port                                  |
 
 Use the demo project and loopback hosts for local emulator work; do not provide service-account credentials in emulator mode. Non-emulator configuration must match its Firebase project and environment. The backend serves HTTP and Socket.IO on one listener. Android API and socket URLs come from the selected Gradle build variant. See [local emulator setup](docs/LOCAL_EMULATOR_SETUP.md) for the exact values and checks.
 
 ## Documentation
 
-| Document | Purpose |
-|---|---|
-| [Documentation index](docs/README.md) | Maintained guides and historical material |
-| [Android app guide](docs/android-app-guide.md) | Source-checked Android behavior and limits |
-| [Backend API guide](docs/backend-api-guide.md) | Current route and socket contract |
-| [Local emulator setup](docs/LOCAL_EMULATOR_SETUP.md) | Isolated configuration and test setup |
-| [Project status](docs/project-status-summary.md) | Current acceptance summary |
-| [Fix tracker](docs/FIX_TRACKER.md) | Detailed release findings and gates |
-| [Release test plan](docs/RELEASE_TEST_PLAN.md) | Verification strategy and release criteria |
+| Document                                             | Purpose                                    |
+| ---------------------------------------------------- | ------------------------------------------ |
+| [Documentation index](docs/README.md)                | Maintained guides and historical material  |
+| [Android app guide](docs/android-app-guide.md)       | Source-checked Android behavior and limits |
+| [Backend API guide](docs/backend-api-guide.md)       | Current route and socket contract          |
+| [Local emulator setup](docs/LOCAL_EMULATOR_SETUP.md) | Isolated configuration and test setup      |
+| [Project status](docs/project-status-summary.md)     | Current acceptance summary                 |
+| [Fix tracker](docs/FIX_TRACKER.md)                   | Detailed release findings and gates        |
+| [Release test plan](docs/RELEASE_TEST_PLAN.md)       | Verification strategy and release criteria |
 
 For current acceptance state and release limitations, start with [project status](docs/project-status-summary.md) and [fix tracker](docs/FIX_TRACKER.md). Local test results and a controlled beta do not establish public release readiness; deployment, device, signing, security, and rollback gates require their own evidence.

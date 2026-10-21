@@ -1,4 +1,8 @@
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
+const MASTER_DATA_FIELDS = {
+  securityGuards: ["guardId", "firstName", "middleInitial", "lastName", "fullName", "active"],
+  truckCompanies: ["companyCode", "forwarderCode", "name", "active"],
+};
 
 function serialize(value) {
   if (value && typeof value.toMillis === "function") return {$timestamp: value.toMillis()};
@@ -92,14 +96,26 @@ function bindRealtimeSubscriptions(socket, db) {
     } else if (request.topic === "location") {
       collection = db.collection("driver_locations").doc(uid);
       document = true;
+    } else if (Object.hasOwn(MASTER_DATA_FIELDS, request.topic)) {
+      collection = db.collection(request.topic === "securityGuards" ? "security_guard" : "truck_company")
+        .where("active", "==", true);
     } else {
       ack({success: false, message: "Subscription not authorized"});
       return;
     }
     const stop = collection.onSnapshot(snapshot => {
-      const data = document
+      let data = document
         ? (snapshot.exists ? {id: snapshot.id, ...serialize(snapshot.data())} : null)
         : snapshot.docs.map(doc => ({id: doc.id, ...serialize(doc.data())}));
+      if (MASTER_DATA_FIELDS[request.topic]) {
+        const fields = MASTER_DATA_FIELDS[request.topic];
+        data = snapshot.docs.map(doc => {
+          const source = doc.data();
+          return Object.fromEntries([["id", doc.id], ...fields
+            .filter(field => source[field] !== undefined)
+            .map(field => [field, serialize(source[field])])]);
+        });
+      }
       socket.emit("realtime:state", {id: request.id, topic: request.topic, data});
     }, () => socket.emit("realtime:error", {id: request.id, topic: request.topic, message: "Realtime data unavailable"}));
     subscriptions.set(request.id, stop);

@@ -330,11 +330,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                                 ).show()
                             } catch (e: Exception) {
                                 Log.e("QUEUE_DETAILS", "Failed to start unload: ${e.message}")
-                                Toast.makeText(
-                                    this@QueueDetailsActivity,
-                                    "Failed to start unload: ${e.message}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "shipment-state-transition", e)
                             }
                         }
                     }
@@ -361,11 +357,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                                 ).show()
                             } catch (e: Exception) {
                                 Log.e("QUEUE_DETAILS", "Failed to cancel unload: ${e.message}")
-                                Toast.makeText(
-                                    this@QueueDetailsActivity,
-                                    "Failed to cancel unload: ${e.message}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "shipment-state-transition", e)
                             }
                         }
                     }
@@ -393,11 +385,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                                         ).show()
                                     } catch (e: Exception) {
                                         Log.e("QUEUE_DETAILS", "Failed to reset POD for retake: ${e.message}")
-                                        Toast.makeText(
-                                            this@QueueDetailsActivity,
-                                            "Failed to reset POD for retake: ${e.message}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
+                                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-save", e)
                                     }
                                 }
                             }
@@ -432,6 +420,7 @@ class QueueDetailsActivity : AppCompatActivity() {
             }
         }, onError = { error ->
             Log.e("OBD", "queue realtime error: $error")
+            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "queue-subscription")
             if (!hasLoadedDetails) showDetailsLoadError("Could not load queue details. Reopen this screen to retry.")
         })
     }
@@ -455,6 +444,7 @@ class QueueDetailsActivity : AppCompatActivity() {
             }
         }, onError = { error ->
             Log.e("OBD", "shipment realtime error: $error")
+            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "assignment-subscription")
             if (!hasLoadedDetails) showDetailsLoadError("Could not load shipment details. Reopen this screen to retry.")
         })
     }
@@ -594,6 +584,7 @@ class QueueDetailsActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 Log.e("QUEUE_DETAILS", "Failed to load queue for driver $driverUid: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "queue-load", e)
             }
     }
 
@@ -717,7 +708,10 @@ class QueueDetailsActivity : AppCompatActivity() {
                     binding.tvQueueNumberLabel.visibility = View.GONE
                 }
             }
-        }, onError = { error -> Log.e("OBD", "assignment realtime error: $error") })
+        }, onError = { error ->
+            Log.e("OBD", "assignment realtime error: $error")
+            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "assignment-subscription")
+        })
     }
     private val sessionManager by lazy { SessionManager(this) }
     private var currentQueueDocId: String = ""
@@ -735,6 +729,9 @@ class QueueDetailsActivity : AppCompatActivity() {
                 displayRequirement("headcap", reqMap, binding.tvReqHeadcap)
                 displayRequirement("pants", reqMap, binding.tvReqPants)
                 displayRequirement("closedShoes", reqMap, binding.tvReqClosedShoes)
+            }
+            .addOnFailureListener { error ->
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "driver-profile", error)
             }
     }
 
@@ -1070,23 +1067,13 @@ class QueueDetailsActivity : AppCompatActivity() {
                         ).show()
                     } catch (e: Exception) {
                         hideUploadProgress()
-
-                        Toast.makeText(
-                            this@QueueDetailsActivity,
-                            "Upload failed: ${e.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-save", e)
                     }
                 }
             },
-            onFailure = { errorMsg ->
+            onFailure = { _ ->
                 hideUploadProgress()
-
-                Toast.makeText(
-                    this,
-                    "Photo processing failed: $errorMsg",
-                    Toast.LENGTH_LONG
-                ).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-processing")
             }
         )
     }
@@ -1121,7 +1108,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                 refreshObdItemsSheet()
                 Toast.makeText(this@QueueDetailsActivity, "Unload started for ${obdNumbers.size} OBDs", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(this@QueueDetailsActivity, "Failed to start group unload. Please retry.", Toast.LENGTH_LONG).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "shipment-state-transition", e)
             }
         }
     }
@@ -1370,11 +1357,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                             ).show()
                         } catch (e: Exception) {
                             Log.e("QUEUE_DETAILS", "Failed to start unload: ${e.message}")
-                            Toast.makeText(
-                                this@QueueDetailsActivity,
-                                "Failed to start unload: ${e.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "shipment-state-transition", e)
                         }
                     }
                 }
@@ -1398,11 +1381,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                             ).show()
                         } catch (e: Exception) {
                             Log.e("QUEUE_DETAILS", "Failed to cancel unload: ${e.message}")
-                            Toast.makeText(
-                                this@QueueDetailsActivity,
-                                "Failed to cancel unload: ${e.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "shipment-state-transition", e)
                         }
                     }
                 }
@@ -1430,11 +1409,7 @@ class QueueDetailsActivity : AppCompatActivity() {
                                     ).show()
                                 } catch (e: Exception) {
                                     Log.e("QUEUE_DETAILS", "Failed to reset POD for retake: ${e.message}")
-                                    Toast.makeText(
-                                        this@QueueDetailsActivity,
-                                        "Failed to reset POD for retake: ${e.message}",
-                                        Toast.LENGTH_LONG
-                                    ).show()
+                                    com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-save", e)
                                 }
                             }
                         }
@@ -1552,12 +1527,12 @@ class QueueDetailsActivity : AppCompatActivity() {
                     }
                     .addOnFailureListener {
                         progressDialog.dismiss()
-                        Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-preview", it)
                     }
             }
             .addOnFailureListener {
                 progressDialog.dismiss()
-                Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@QueueDetailsActivity, "pod-preview", it)
             }
     }
 
@@ -1565,7 +1540,7 @@ class QueueDetailsActivity : AppCompatActivity() {
     private fun showDialogWithFetchedImage(dataUri: String) {
         val bitmap = decodeBase64ToBitmap(dataUri)
         if (bitmap == null) {
-            Toast.makeText(this, "Failed to load POD image", Toast.LENGTH_SHORT).show()
+            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "pod-preview")
             return
         }
 

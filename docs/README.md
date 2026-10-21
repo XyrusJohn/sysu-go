@@ -7,6 +7,7 @@ Current guides describe selected source-verified behavior; route source, tests, 
 - [Repository overview and isolated setup](../README.md)
 - [Android app guide](android-app-guide.md)
 - [Backend API and socket contract](backend-api-guide.md)
+- [Container deployment](container-deployment.md); provider-neutral API image and Compose setup
 - [Local emulator setup](LOCAL_EMULATOR_SETUP.md)
 
 ## Status and release evidence

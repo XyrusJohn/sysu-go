@@ -7,9 +7,17 @@ import com.sysu.go.databinding.ItemGuardSelectionBinding
 import com.sysu.go.model.SecurityGuard
 
 class GuardSelectionAdapter(
-    private val guards: List<SecurityGuard>,
+    guards: List<SecurityGuard>,
     private val onGuardSelected: (SecurityGuard) -> Unit
 ) : RecyclerView.Adapter<GuardSelectionAdapter.GuardViewHolder>() {
+
+    private val guards = guards.toMutableList()
+
+    fun submitGuards(updated: List<SecurityGuard>) {
+        guards.clear()
+        guards.addAll(updated)
+        notifyDataSetChanged()
+    }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GuardViewHolder {
         val binding = ItemGuardSelectionBinding.inflate(

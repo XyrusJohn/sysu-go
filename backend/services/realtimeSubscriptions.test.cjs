@@ -53,6 +53,23 @@ test("queue feed is limited to the authenticated driver's sessions", async () =>
   assert.deepEqual(f.events.at(-1).payload.data, [{id: "q-1", driverId: "driver-1", status: "waiting"}]);
 });
 
+test("driver master-data subscriptions stream active guards and companies without private fields", async () => {
+  const f = fixture();
+  for (const [topic, source, expected] of [
+    ["securityGuards", {guardId: "G-1", firstName: "Sam", middleInitial: "A", lastName: "Lee", fullName: "Sam A Lee", active: true, signature: "private"},
+      {id: "guard-1", guardId: "G-1", firstName: "Sam", middleInitial: "A", lastName: "Lee", fullName: "Sam A Lee", active: true}],
+    ["truckCompanies", {companyCode: "TC-1", forwarderCode: "FWD", name: "Example Trucking", active: true, bankDetails: "private"},
+      {id: "company-1", companyCode: "TC-1", forwarderCode: "FWD", name: "Example Trucking", active: true}],
+  ]) {
+    let ack;
+    await f.handlers.get("realtime:subscribe")({id: `master-${topic}`, topic}, value => {ack = value;});
+    assert.equal(ack.success, true);
+    f.ref.next({docs: [{id: expected.id, data: () => source}]});
+    assert.deepEqual(f.events.at(-1).payload.data, [expected]);
+  }
+  assert.deepEqual(f.filters, [["active", "==", true], ["active", "==", true]]);
+});
+
 test("queue position streams only the authenticated driver's ranked position", async () => {
   const own = {driverId: "driver-1", truckType: "AUV", status: "waiting", registrationComplete: true, isAssigned: false};
   const f = fixture("driver-1", own);

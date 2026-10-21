@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.location.LocationServices
+import com.sysu.go.activities.GeneralTrackingActivity
 import com.sysu.go.activities.MainActivity
 import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.SessionManager
@@ -25,11 +26,14 @@ class AndroidTrackingBridgeTest {
     private val context = instrumentation.targetContext
     private val fused = LocationServices.getFusedLocationProviderClient(context)
     private var scenario: ActivityScenario<MainActivity>? = null
+    private var trackingScenario: ActivityScenario<GeneralTrackingActivity>? = null
     private var lastFixAt = 0L
 
     @Before fun isolate() { support.isolate() }
     @After fun cleanup() {
+        trackingScenario?.close()
         scenario?.close()
+        trackingScenario = null
         Tasks.await(fused.setMockMode(false), 10, TimeUnit.SECONDS)
         support.cleanup()
     }
@@ -56,6 +60,29 @@ class AndroidTrackingBridgeTest {
         }
         // Provider delivery and service publication happen after mock injection completes.
         lastFixAt = SystemClock.elapsedRealtime()
+    }
+
+    @Test fun enteringActiveTrackingScreenStartsServiceAfterIdleHomeStartup() {
+        support.fixture("/reset", JSONObject().put("assignment", true).put("tripStatus", "in_transit"))
+        support.signIn()
+        SessionManager(context).apply {
+            saveCurrentSapDocId("native-shipment")
+            saveActiveSapDocId("native-shipment")
+            setTripActive(true)
+            setTrackingActive(false)
+        }
+        Tasks.await(fused.setMockMode(true), 10, TimeUnit.SECONDS)
+        scenario = ActivityScenario.launch(Intent(context, MainActivity::class.java))
+        support.waitUntil("Home socket must authenticate") { SocketManager.isConnected() }
+
+        // This is the tracking flag transition performed when the driver confirms a shipment.
+        SessionManager(context).setTrackingActive(true)
+        trackingScenario = ActivityScenario.launch(Intent(context, GeneralTrackingActivity::class.java))
+        support.waitUntil("Tracking screen must preserve authenticated socket") { SocketManager.isConnected() }
+        fix(14.551)
+        support.waitUntil("Resumed tracking screen must start the foreground location service") {
+            support.fixture("/state").optJSONObject("location")?.optDouble("lat") == 14.551
+        }
     }
 
     @Test fun nativeServiceUpdatesWebsiteAcrossBackgroundReconnectReturnAndClosure() {

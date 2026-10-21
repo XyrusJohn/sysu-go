@@ -20,6 +20,7 @@ local.properties
 .env
 .env.*
 !.env.example
+!.env.container.example
 
 # Firebase (DO NOT COMMIT — contains private key)
 backend/config/serviceAccountKey.json

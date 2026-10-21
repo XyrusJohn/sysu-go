@@ -35,7 +35,7 @@ function createSocketAuth({ getFirebaseAuth, getDb }) {
               || Buffer.byteLength(JSON.stringify(payload)) > 1024) throw fail("Invalid socket subscription");
             if (event === "realtime:subscribe" && (typeof payload.id !== "string"
               || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.id)
-              || !["profile", "driver", "queue", "queuePosition", "assignments", "location"].includes(payload.topic))) {
+              || !["profile", "driver", "queue", "queuePosition", "assignments", "location", "securityGuards", "truckCompanies"].includes(payload.topic))) {
               throw fail("Invalid socket subscription");
             }
             if (event === "realtime:unsubscribe" && (typeof payload.id !== "string"

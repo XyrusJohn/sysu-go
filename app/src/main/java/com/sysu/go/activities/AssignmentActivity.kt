@@ -62,6 +62,10 @@ class AssignmentActivity : AppCompatActivity() {
     // Firestore listener — kept so we remove it in onDestroy
     private var assignmentsListener: (() -> Unit)? = null
     private var hasLoadedAssignments = false
+    private val securityGuardRepository by lazy { SecurityGuardRepository(this) }
+    private var securityGuardSubscription: (() -> Unit)? = null
+    private var hasReceivedGuardSnapshot = false
+    private var guardSelectionSheet: GuardSelectionBottomSheet? = null
 
     // Bouncing circles
     private val circleAnimators = mutableListOf<android.animation.Animator>()
@@ -94,6 +98,31 @@ class AssignmentActivity : AppCompatActivity() {
         super.onResume()
         loadRequirements()
         loadAssignments()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (securityGuardSubscription == null) {
+            hasReceivedGuardSnapshot = false
+            securityGuardSubscription = SocketManager.subscribeRealtime(
+                topic = "securityGuards",
+                onData = { data ->
+                    hasReceivedGuardSnapshot = true
+                    val guards = securityGuardRepository.updateFromRealtime(data)
+                    guardSelectionSheet?.updateGuards(guards)
+                },
+                onError = {
+                    Log.w(TAG, "Security guard realtime snapshot unavailable: $it")
+                    com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@AssignmentActivity, "guard-subscription")
+                },
+            )
+        }
+    }
+
+    override fun onStop() {
+        securityGuardSubscription?.invoke()
+        securityGuardSubscription = null
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -183,8 +212,8 @@ class AssignmentActivity : AppCompatActivity() {
                                 .await()
                             Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
                         } catch (e: Exception) {
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
                             Log.e(TAG, "FULLY_LOADED error: ${e.message}")
-                            Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -265,8 +294,8 @@ class AssignmentActivity : AppCompatActivity() {
                                 .await()
                             Log.d(TAG, "START_LOADING: ${assignment.docId}")
                         } catch (e: Exception) {
+                            com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
                             Log.e(TAG, "START_LOADING error: ${e.message}")
-                            Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                         }
                     }}
                 }
@@ -304,8 +333,8 @@ class AssignmentActivity : AppCompatActivity() {
                         .await()
                     Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
                 } catch (e: Exception) {
+                    com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
                     Log.e(TAG, "CANCEL_LOADING error: ${e.message}")
-                    Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 }
             }}
         }
@@ -353,8 +382,8 @@ class AssignmentActivity : AppCompatActivity() {
                         .await()
                     Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading (guard data reset)")
                 } catch (e: Exception) {
+                    com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "guard-verification", e)
                     Log.e(TAG, "CANCEL_VERIFICATION error: ${e.message}")
-                    Toast.makeText(this@AssignmentActivity, "Pumalya. Suriin ang koneksyon.", Toast.LENGTH_SHORT).show()
                 }
             }}
         }
@@ -377,24 +406,27 @@ class AssignmentActivity : AppCompatActivity() {
             ).show()
             return
         }
-        lifecycleScope.launch {
-            val repo = SecurityGuardRepository(this@AssignmentActivity)
-            val guards = repo.refreshGuards().ifEmpty { repo.getCachedGuards() }
-            if (guards.isEmpty()) {
-                Toast.makeText(this@AssignmentActivity, "Walang available na guard", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-
-            // Step 1: Guard selection
-            GuardSelectionBottomSheet.newInstance(guards) { guard ->
-                // Step 2: Open signature pad
-                SignaturePadBottomSheet().apply {
-                    onSignatureConfirmed = { signatureBase64 ->
-                        submitGuardVerification(assignment, guard, signatureBase64)
-                    }
-                }.show(supportFragmentManager, SignaturePadBottomSheet.TAG)
-            }.show(supportFragmentManager, GuardSelectionBottomSheet.TAG)
+        val guards = securityGuardRepository.getCachedGuards()
+        if (SocketManager.isConnected() && !hasReceivedGuardSnapshot) {
+            Toast.makeText(this, "Nagsi-sync pa ang guards. Subukan muli sa ilang sandali.", Toast.LENGTH_SHORT).show()
+            return
         }
+        if (guards.isEmpty()) {
+            val message = if (hasReceivedGuardSnapshot) "Walang available na guard" else "Nagsi-sync pa ang guards. Subukan muli sa ilang sandali."
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Step 1: Guard selection
+        guardSelectionSheet = GuardSelectionBottomSheet.newInstance(guards) { guard ->
+            // Step 2: Open signature pad
+            SignaturePadBottomSheet().apply {
+                onSignatureConfirmed = { signatureBase64 ->
+                    submitGuardVerification(assignment, guard, signatureBase64)
+                }
+            }.show(supportFragmentManager, SignaturePadBottomSheet.TAG)
+        }
+        guardSelectionSheet?.show(supportFragmentManager, GuardSelectionBottomSheet.TAG)
     }
 
     private fun submitGuardVerification(
@@ -465,6 +497,7 @@ class AssignmentActivity : AppCompatActivity() {
                         ).show()
                     }
                     .addOnFailureListener { e ->
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "guard-verification", e)
                         Log.e(TAG, "Guard verification save failed: ${e.message}")
                         Toast.makeText(
                             this@AssignmentActivity,
@@ -473,6 +506,7 @@ class AssignmentActivity : AppCompatActivity() {
                         ).show()
                     }
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "guard-verification", e)
                 Log.e(TAG, "saveGuardVerificationToFirestore error: ${e.message}")
             }
         }
@@ -513,6 +547,7 @@ class AssignmentActivity : AppCompatActivity() {
                     onSubmitConfirmed = { }  // read-only after submission
                 }.show(supportFragmentManager, GuardVerificationBottomSheet.TAG)
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "guard-verification", e)
                 Log.e(TAG, "showGuardVerificationSheet error: ${e.message}")
                 Toast.makeText(this@AssignmentActivity, "Hindi ma-load ang detalye ng beripikasyon", Toast.LENGTH_SHORT).show()
             }
@@ -538,6 +573,7 @@ class AssignmentActivity : AppCompatActivity() {
                         launchGeneralTrackingActivity(docId)
                     }
                     .addOnFailureListener { e ->
+                        com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "trip-start", e)
                         Log.e(TAG, "Failed to start trip: ${e.message}")
                         sessionManager.saveActiveSapDocId(null)
                         sessionManager.clearCurrentSapDocId()
@@ -549,6 +585,7 @@ class AssignmentActivity : AppCompatActivity() {
                         ).show()
                     }
             } catch (e: Exception) {
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "trip-start", e)
                 Log.e(TAG, "startTrip error: ${e.message}")
                 sessionManager.saveActiveSapDocId(null)
             }
@@ -574,42 +611,26 @@ class AssignmentActivity : AppCompatActivity() {
      * when MainActivity CTA is tapped after ALL shipments are confirmed.
      */
     private fun confirmShipment(assignment: Assignment) {
-        // SET optimistic bridge flag FIRST so MainActivity.onResume() can update
-        // the UI immediately when we finish() back to it. The Firestore snapshot
-        // listener will overwrite this within ~900ms once the network round-trip
-        // completes, but the bridge eliminates the visible gap.
-        sessionManager.savePendingConfirmedDocId(assignment.docId)
-
-        // Optimistic local copy — only matters during the screen transition.
-        val idx = assignments.indexOfFirst { it.docId == assignment.docId }
-        if (idx >= 0) {
-            assignments = assignments.toMutableList().apply {
-                set(idx, assignments[idx].copy(driverConfirmed = true))
-            }
-            submitToAdapter(assignments)
-            updateAggregateBadge(assignments)
-        }
-
-        Toast.makeText(
-            this@AssignmentActivity,
-            R.string.confirm_shipment_toast,
-            Toast.LENGTH_SHORT
-        ).show()
-
-        // Fire the Firestore update in the background. Don't block on callbacks —
-        // the user is going back to MainActivity. If the write fails, the snapshot
-        // listener on MainActivity will eventually reconcile.
         db.collection("sap_assignments").document(assignment.docId)
             .update(mapOf("driverConfirmed" to true))
             .addOnSuccessListener {
                 Log.d(TAG, "Shipment confirmed: ${assignment.docId}")
+                sessionManager.savePendingConfirmedDocId(assignment.docId)
+                val idx = assignments.indexOfFirst { it.docId == assignment.docId }
+                if (idx >= 0) {
+                    assignments = assignments.toMutableList().apply {
+                        set(idx, assignments[idx].copy(driverConfirmed = true))
+                    }
+                    submitToAdapter(assignments)
+                    updateAggregateBadge(assignments)
+                }
+                Toast.makeText(this, R.string.confirm_shipment_toast, Toast.LENGTH_SHORT).show()
+                finish()
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "confirmShipment failed: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "shipment-state-transition", e)
             }
-
-        // Simple, predictable navigation: go straight back to MainActivity.
-        finish()
     }
 
     /**
@@ -637,21 +658,6 @@ class AssignmentActivity : AppCompatActivity() {
     private fun saveBatchConfirmations(selectedDocIds: Set<String>, allConfirmed: Boolean) {
         if (selectedDocIds.isEmpty()) return
 
-        // Set optimistic bridge for the first selected doc
-        selectedDocIds.firstOrNull()?.let { sessionManager.savePendingConfirmedDocId(it) }
-
-        // Optimistic local UI update
-        val updated = assignments.map { assignment ->
-            if (selectedDocIds.contains(assignment.docId)) {
-                assignment.copy(driverConfirmed = true)
-            } else {
-                assignment
-            }
-        }
-        assignments = updated
-        submitToAdapter(updated)
-        updateAggregateBadge(updated)
-
         // Write batch to Firestore
         val batch = db.batch()
         selectedDocIds.forEach { docId ->
@@ -662,25 +668,23 @@ class AssignmentActivity : AppCompatActivity() {
         batch.commit()
             .addOnSuccessListener {
                 Log.d(TAG, "Batch confirmed ${selectedDocIds.size} shipments successfully")
+                selectedDocIds.firstOrNull()?.let { sessionManager.savePendingConfirmedDocId(it) }
+                assignments = assignments.map { assignment ->
+                    if (selectedDocIds.contains(assignment.docId)) assignment.copy(driverConfirmed = true) else assignment
+                }
+                submitToAdapter(assignments)
+                updateAggregateBadge(assignments)
+                if (allConfirmed) {
+                    Toast.makeText(this, "Lahat ng shipments ay kumpirmado na! Handa na mag-Start Trip.", Toast.LENGTH_LONG).show()
+                    finish()
+                } else {
+                    Toast.makeText(this, "Na-kumpirma ang ${selectedDocIds.size} sa ${assignments.size} shipments.", Toast.LENGTH_SHORT).show()
+                }
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "Batch confirm failed: ${e.message}")
+                com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this, "shipment-state-transition", e)
             }
-
-        if (allConfirmed) {
-            Toast.makeText(
-                this,
-                "Lahat ng shipments ay kumpirmado na! Handa na mag-Start Trip.",
-                Toast.LENGTH_LONG
-            ).show()
-            finish()
-        } else {
-            Toast.makeText(
-                this,
-                "Na-kumpirma ang ${selectedDocIds.size} sa ${assignments.size} shipments.",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
     }
 
     private fun updateBatchBarUI(list: List<Assignment>) {
@@ -763,6 +767,7 @@ class AssignmentActivity : AppCompatActivity() {
                 updateAggregateBadge(list)
             }, onError = { error ->
                 Log.e(TAG, "loadAssignments realtime error: $error")
+                com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@AssignmentActivity, "assignment-subscription")
                 if (!hasLoadedAssignments && !isFinishing) {
                     binding.loadingSkeleton.root.visibility = View.GONE
                     binding.tvLoadError.visibility = View.VISIBLE

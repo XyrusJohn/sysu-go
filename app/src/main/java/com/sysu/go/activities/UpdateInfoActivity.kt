@@ -24,6 +24,7 @@ import com.sysu.go.databinding.ActivityUpdateInfoBinding
 import com.sysu.go.databinding.ItemHelperInputBinding
 import com.sysu.go.model.ScanRequest
 import com.sysu.go.network.QRApiService
+import com.sysu.go.network.SocketManager
 import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.Sanitizer
 import com.sysu.go.utils.SessionManager
@@ -38,6 +39,8 @@ class UpdateInfoActivity : AppCompatActivity() {
     private val db = FirebaseFirestore.getInstance()
     private var currentToken: String? = null
     private val helperBindings = mutableListOf<ItemHelperInputBinding>()
+    private var truckCompanySubscription: (() -> Unit)? = null
+    private lateinit var truckCompanyAdapter: ArrayAdapter<String>
 
     private lateinit var requirementsAdapter: RequirementEditAdapter
 
@@ -63,6 +66,7 @@ class UpdateInfoActivity : AppCompatActivity() {
         }
 
         setupTruckTypeSpinner()
+        setupTruckCompanySuggestions()
         setupRequirements()
 
         // Load existing requirements if driver already has a profile
@@ -74,6 +78,44 @@ class UpdateInfoActivity : AppCompatActivity() {
 
         binding.btnAddHelper.setOnClickListener { addHelperView() }
         binding.btnSubmit.setOnClickListener { submitInfo() }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (truckCompanySubscription == null) {
+            truckCompanySubscription = SocketManager.subscribeRealtime(
+                topic = "truckCompanies",
+                onData = { data ->
+                    val names = (data as? List<*>)
+                        ?.mapNotNull { (it as? Map<*, *>)?.get("name") as? String }
+                        ?.map(String::trim)
+                        ?.filter(String::isNotEmpty)
+                        ?.distinct()
+                        .orEmpty()
+                    truckCompanyAdapter.clear()
+                    truckCompanyAdapter.addAll(names)
+                    truckCompanyAdapter.notifyDataSetChanged()
+                },
+                onError = { android.util.Log.w("UpdateInfoActivity", "Truck company suggestions unavailable: $it") },
+            )
+        }
+    }
+
+    override fun onStop() {
+        truckCompanySubscription?.invoke()
+        truckCompanySubscription = null
+        super.onStop()
+    }
+
+    private fun setupTruckCompanySuggestions() {
+        truckCompanyAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_dropdown_item_1line,
+            resources.getStringArray(R.array.truck_companies).toMutableList(),
+        )
+        binding.etTruckCompany.setAdapter(truckCompanyAdapter)
+        binding.etTruckCompany.threshold = 0
+        binding.etTruckCompany.setOnClickListener { binding.etTruckCompany.showDropDown() }
     }
 
     private fun addHelperView() {
@@ -210,7 +252,7 @@ class UpdateInfoActivity : AppCompatActivity() {
             when (result) {
                 is QRApiService.Result.Success -> {
                     // Save driver profile to Firestore for history + auto-fill
-                    saveDriverProfile(
+                    val profileSaved = saveDriverProfile(
                         uid = driverId,
                         name = driverName,
                         fn = driverFN,
@@ -246,6 +288,7 @@ class UpdateInfoActivity : AppCompatActivity() {
                     // Navigate to TripRegistrationActivity with queueId
                     val intent = Intent(this@UpdateInfoActivity, TripRegistrationActivity::class.java)
                     intent.putExtra("queueId", returnedQueueId)
+                    intent.putExtra("profileSaveWarning", !profileSaved)
                     intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
                     startActivity(intent)
                     finish()
@@ -254,7 +297,7 @@ class UpdateInfoActivity : AppCompatActivity() {
                     val msg = when {
                         result.code == 400 -> getString(R.string.already_in_queue)
                         result.code == 410 -> getString(R.string.token_expired)
-                        else -> "Error ${result.code}: ${result.message}"
+                        else -> "We could not join the queue right now. Check your connection and try again."
                     }
                     val dlgView2 = LayoutInflater.from(this@UpdateInfoActivity).inflate(R.layout.dialog_sysu_info, null)
                     dlgView2.findViewById<ImageView>(R.id.ivDialogIcon).setImageResource(R.drawable.ic_dialog_error)
@@ -282,7 +325,7 @@ class UpdateInfoActivity : AppCompatActivity() {
         truckCompany: String,
         helperName: String,
         requirements: Map<String, Boolean>
-    ) {
+    ): Boolean {
         try {
             val updates = mapOf(
                 "name" to name,
@@ -297,8 +340,11 @@ class UpdateInfoActivity : AppCompatActivity() {
                 "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
             )
             db.collection("drivers").document(uid).set(updates as Map<String, Any>, SetOptions.merge()).await()
+            return true
         } catch (e: Exception) {
-            // Profile save failure is non-fatal
+            android.util.Log.e("UpdateInfoActivity", "Failed to save driver profile")
+            com.sysu.go.diagnostics.SystemErrorReporter.reportOperationFailure("driver-profile", e)
+            return false
         }
     }
 
