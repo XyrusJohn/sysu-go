@@ -458,6 +458,10 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     requireContext(),
                     Intent(requireContext(), LocationServices::class.java)
                 )
+                com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                    requireContext(), "returning_to_base", subjectId = trackingAnchor,
+                    idempotencyKey = "returning:$trackingAnchor"
+                )
 
                 Log.d(TAG, "performStartReturning: driver → returning_to_base (isReturning=true)")
                 // Mark driver-level status for the Profile badge and Socket.IO broadcast
@@ -673,6 +677,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                     db.collection("queue").document(assignmentQueueId).update(queueCompletion).await()
                     Log.d(TAG, "performConfirmArrival: resolved queue $assignmentQueueId marked completed")
                 }
+
+                // Arrival closes the audit session only after geofence-gated confirmation and writes succeed.
+                com.sysu.go.audit.DriverActionAudit.completeSession(requireContext())
 
                 // Do not erase a newly admitted queue ID if MainActivity already observed the next scan.
                 if (sessionManager.getCurrentQueueDocId() == queueDocId) {

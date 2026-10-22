@@ -24,6 +24,40 @@ test('G13 only authenticated drivers may subscribe to approved master-data strea
 });
 test('G13 POD event requires a bounded assignment identifier',async()=>{const h=harness();assert.equal(await connect(h),undefined);assert.equal(await packet(h,'pod_updated',{shipmentDocId:'dispatch-123',source:'driver_app'}),undefined);assert.ok(await packet(h,'pod_updated',{shipmentDocId:'../foreign',source:'driver_app'}));});
 
+test('driver activity sync accepts only bounded self-authenticated batches and valid zero coordinates', async () => {
+  const sessionId = '0d3a8588-8c60-4e3f-97c9-c373148234c5';
+  const validEvent = {
+    eventId: '6a1bb782-9c6f-447e-8a23-a6936b5dd414', sessionId, sequence: 1,
+    eventType: 'app_open', occurredAtMs: Date.now(), locationState: 'available',
+    lat: 0, lng: 0, accuracy: 20, outcome: 'success', metadata: {},
+  };
+  const h = harness(); assert.equal(await connect(h), undefined);
+  assert.equal(await packet(h, 'driver_actions:sync', {sessionId, events: [validEvent]}), undefined);
+  for (const payload of [
+    {sessionId, driverId: 'victim', events: [validEvent]},
+    {sessionId, events: [{...validEvent, sequence: 0}]},
+    {sessionId, events: [{...validEvent, eventType: 'unapproved'}]},
+    {sessionId, events: [{...validEvent, lat: 91}]},
+    {sessionId, events: Array(51).fill(validEvent)},
+  ]) {
+    const other = harness(); assert.equal(await connect(other), undefined);
+    assert.ok(await packet(other, 'driver_actions:sync', payload));
+  }
+});
+
+test('driver action history reads are staff-only and bounded', async () => {
+  const sessionId = '0d3a8588-8c60-4e3f-97c9-c373148234c5';
+  for (const role of ['fleet_manager', 'admin', 'super_admin']) {
+    const staff = harness({role}); assert.equal(await connect(staff), undefined);
+    assert.equal(await packet(staff, 'driver_actions:get_events', {driverId: 'uid-a', sessionId, limit: 100, cursor: 0}), undefined);
+    assert.ok(await packet(staff, 'driver_actions:get_sessions', {driverId: 'uid-a', limit: 501}));
+  }
+  for (const role of ['driver', 'qr_generator']) {
+    const denied = harness({role}); assert.equal(await connect(denied), undefined);
+    assert.ok(await packet(denied, 'driver_actions:get_sessions', {driverId: 'uid-a', limit: 20}));
+  }
+});
+
 
 test('G13 idle authorization monitor rechecks role/revocation and clears itself on disconnect', async () => {
   const originalSet = global.setInterval, originalClear = global.clearInterval;

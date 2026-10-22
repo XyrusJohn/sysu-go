@@ -10,6 +10,7 @@ import com.sysu.go.BuildConfig
 import com.sysu.go.utils.ConnectivityMonitor
 import com.sysu.go.utils.SessionManager
 import io.socket.client.IO
+import io.socket.client.Ack
 import io.socket.client.Socket
 import org.json.JSONObject
 import java.net.URISyntaxException
@@ -509,6 +510,26 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
             Log.d(TAG, "Emitted pod_updated for shipment=$shipmentDocId")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to emit pod_updated: ${e.message}")
+        }
+    }
+
+    fun emitDriverActionSync(payload: JSONObject, callback: (JSONObject) -> Unit): Boolean {
+        val socket = mSocketGo
+        if (socket?.connected() != true) return false
+        return try {
+            socket.emit("driver_actions:sync", payload, Ack { args ->
+                val value = args.firstOrNull()
+                val response = when (value) {
+                    is JSONObject -> value
+                    is Map<*, *> -> JSONObject(value)
+                    else -> JSONObject()
+                }
+                callback(response)
+            })
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Driver action sync deferred")
+            false
         }
     }
 

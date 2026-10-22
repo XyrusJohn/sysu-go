@@ -8,6 +8,8 @@ const { Server } = require("socket.io");
 const { getDb } = require("./config/firebaseAdmin.js");
 const { startHeartbeat } = require("./utils/heartbeatMonitor");
 const { startPresenceWatcher } = require("./utils/presenceWatcher");
+const cron = require("node-cron");
+const { bindDriverActionAudit, cleanupExpiredDriverActions } = require("./services/driverActionAudit");
 
 // ─── Log helper with timestamp ────────────────────────────────────────────────
 const ts = () => new Date().toISOString().replace("T", " ").substring(0, 19);
@@ -89,7 +91,7 @@ app.use("/api", (req, res) => {
 // ─── Socket.IO handshake logic ──────────────────────────────────────────────
 // onlineDriver tracks ALL live sockets per driver using a Set.
 // Driver is OFFLINE only when Set is EMPTY. This handles dual-socket connections
-// (SYSU Go + SYSU App) correctly — Ctrl+Shift+R / reconnect / WiFi-kill on one
+// (Railway + sysu-app) correctly — Ctrl+Shift+R / reconnect / WiFi-kill on one
 // socket must NOT mark driver offline if another socket is still alive.
 //
 // `lastSeen` is the timestamp of the most recent client→server emit (heartbeat,
@@ -173,6 +175,7 @@ const DRIVER_LIFECYCLE_STATUSES = new Set([
 
 io.on("connection", async (socket) => {
   require("./services/realtimeSubscriptions").bindRealtimeSubscriptions(socket, getDb());
+  bindDriverActionAudit(socket, { db: getDb(), io });
   const verifiedUid = socket.data.uid;
   const role = socket.data.role;
   console.log("[" + ts() + "] Authenticated socket connected: " + socket.id + " (" + role + ")");
@@ -563,4 +566,12 @@ server.listen(PORT, "0.0.0.0", () => {
   // even when Socket.IO EVENT_DISCONNECT doesn't (DNS-broken / captive
   // portal scenarios where the TCP socket hangs without a FIN).
   startPresenceWatcher(onlineDriver, io);
+  cron.schedule("15 3 * * *", async () => {
+    try {
+      const removed = await cleanupExpiredDriverActions(getDb());
+      if (removed) console.log(`[${ts()}] [Driver Action Cleanup] Removed ${removed} records past 90-day retention`);
+    } catch (_) {
+      console.error(`[${ts()}] [Driver Action Cleanup] Retention cleanup failed`);
+    }
+  }, { timezone: "Asia/Manila" });
 });

@@ -28,6 +28,7 @@ import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.QRApiService
 import com.sysu.go.network.TripApiService
 import com.sysu.go.network.TripRegistrationFlow
+import com.sysu.go.audit.DriverActionAudit
 import com.sysu.go.utils.KeyboardUtils
 import com.sysu.go.utils.Sanitizer
 import com.sysu.go.utils.SessionManager
@@ -540,6 +541,7 @@ class TripRegistrationActivity : AppCompatActivity() {
                 .replace(Regex("""[<>$&"|;'\\/]"""), "")
                 .replace(Regex("""\s+"""), " ")
 
+            val registrationStartedAtMs = System.currentTimeMillis()
             val result = TripRegistrationFlow.run(queueId,
                 admit = {
                     val token = currentToken
@@ -567,6 +569,11 @@ class TripRegistrationActivity : AppCompatActivity() {
                 onAdmitted = { admittedId ->
                     queueId = admittedId
                     session.saveCurrentQueueDocId(admittedId)
+                    DriverActionAudit.recordFreshLocation(
+                        this@TripRegistrationActivity, "queue_joined", subjectId = admittedId,
+                        durationMs = (System.currentTimeMillis() - registrationStartedAtMs).coerceAtLeast(0L),
+                        idempotencyKey = "queue-joined:$admittedId"
+                    )
                 },
                 register = { admittedId ->
                     val request = TripApiService.TripRegisterRequest(
@@ -615,12 +622,25 @@ class TripRegistrationActivity : AppCompatActivity() {
             setLoading(false)
             when (result) {
                 is TripRegistrationFlow.Result.Success -> {
+                    DriverActionAudit.recordFreshLocation(
+                        this@TripRegistrationActivity, "trip_registration",
+                        subjectId = result.queueId, outcome = "success",
+                        durationMs = System.currentTimeMillis() - registrationStartedAtMs,
+                        idempotencyKey = "registration-success:${result.queueId}"
+                    )
                     session.saveDriverCompany(company)
                     saveRequirementsToProfile()
                     Toast.makeText(this@TripRegistrationActivity, "Nakumpirma na ang biyahe!", Toast.LENGTH_SHORT).show()
                     navigateToHome()
                 }
                 is TripRegistrationFlow.Result.Error -> {
+                    DriverActionAudit.recordFreshLocation(
+                        this@TripRegistrationActivity, "trip_registration",
+                        subjectId = queueId, outcome = "failed",
+                        durationMs = System.currentTimeMillis() - registrationStartedAtMs,
+                        metadata = org.json.JSONObject().put("errorCode", result.code),
+                        idempotencyKey = "registration-failure:$queueId:${result.code}:$registrationStartedAtMs"
+                    )
                     Log.w(TAG, "Trip confirmation failed (code ${result.code})")
                     val message = if (result.code == 401) {
                         "Hindi ma-verify ang session. Mag-sign in muli; kung tuloy ang error, kailangan suriin ang server."

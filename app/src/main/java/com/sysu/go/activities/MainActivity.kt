@@ -35,6 +35,7 @@ import com.sysu.go.R
 import com.sysu.go.databinding.ActivityMainBinding
 import com.sysu.go.firebase.FirebaseAuthManager
 import com.sysu.go.network.SocketManager
+import com.sysu.go.audit.DriverActionAudit
 import com.sysu.go.services.LocationServices
 import com.sysu.go.utils.ConnectivityMonitor
 import com.sysu.go.utils.NetworkUtils // Import NetworkUtils
@@ -211,6 +212,10 @@ class MainActivity : AppCompatActivity() {
         setupUI()
         setupBottomNav()
         setupTutorial()
+        DriverActionAudit.initialize(this)
+        if (savedInstanceState == null) binding.root.post {
+            DriverActionAudit.showNoticeIfNeeded(this)
+        }
         SocketManager.connect(this)
         listenToQueueStatus()
         startCircleAnimation()
@@ -907,6 +912,9 @@ class MainActivity : AppCompatActivity() {
         updateTrackingBadge(TrackingStateMonitor.getCurrentState())
         // Re-check tutorials â€” user may have re-enabled them in Profile
         setupTutorial()
+        if (DriverActionAudit.pendingCount(this) > 0 && !SocketManager.isConnected()) {
+            Toast.makeText(this, "Trip activity is safely saved and will sync when your connection returns.", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onPause() {
@@ -1314,19 +1322,56 @@ class MainActivity : AppCompatActivity() {
         // hasShipment flag reflects whether any shipments exist at all
         hasShipment = sapSnapshots.isNotEmpty()
 
+        val eligibleSnapshots = sapSnapshots.filter { doc ->
+            val docId = doc["id"] as? String ?: return@filter false
+            val linkedQueueId = doc["queueId"] as? String
+                ?: (doc["driverId"] as? String)?.takeIf { it != sessionDriverId }
+                ?: currentQueueDocId?.takeIf { docId in currentQueueShipmentIds }
+            com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
+                doc["tripStatus"] as? String, doc["returnStatus"] as? String, linkedQueueId,
+                currentQueueDocId, currentQueueStatus,
+                timestampMillis(doc["assignedAt"]), currentQueueEnteredAtMillis
+            )
+        }
+        FirebaseAuth.getInstance().currentUser?.uid?.takeIf {
+            DriverActionAudit.noticeAcknowledged(this, it)
+        }?.let { uid ->
+            val eligibleIds = eligibleSnapshots.mapNotNull { it["id"] as? String }
+            val acknowledgedAt = DriverActionAudit.noticeAcknowledgedAt(this, uid)
+            val firstSnapshotEligible = eligibleSnapshots.mapNotNull { doc ->
+                val docId = doc["id"] as? String ?: return@mapNotNull null
+                val assignedAt = timestampMillis(doc["assignedAt"]) ?: return@mapNotNull null
+                docId.takeIf { assignedAt >= acknowledgedAt }
+            }
+            val newlyAssigned = runCatching {
+                com.sysu.go.audit.DriverActionOutbox(this).use {
+                    it.newlyObservedAssignments(uid, eligibleIds, firstSnapshotEligible)
+                }
+            }.getOrDefault(emptyList()).toSet()
+            eligibleSnapshots.forEach { doc ->
+                val docId = doc["id"] as? String ?: return@forEach
+                if (docId !in newlyAssigned) return@forEach
+                val assignedAt = timestampMillis(doc["assignedAt"]) ?: System.currentTimeMillis()
+                val waitingMs = currentQueueEnteredAtMillis?.let { (assignedAt - it).coerceAtLeast(0L) }
+                com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                    this,
+                    eventType = "shipment_assigned",
+                    subjectId = (doc["dispatchKey"] as? String)?.takeIf { it.isNotBlank() } ?: docId,
+                    durationMs = waitingMs,
+                    idempotencyKey = "assignment:$docId",
+                    occurredAtMs = assignedAt
+                )
+            }
+        }
+
         // Build replacement list with Assignment objects (includes shipment details)
         val newShipments = mutableListOf<com.sysu.go.model.Assignment>()
 
-        for (doc in sapSnapshots) {
+        for (doc in eligibleSnapshots) {
             val docId = doc["id"] as? String ?: continue
             val linkedQueueId = doc["queueId"] as? String
                 ?: (doc["driverId"] as? String)?.takeIf { it != sessionDriverId }
                 ?: currentQueueDocId?.takeIf { docId in currentQueueShipmentIds }
-            if (!com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
-                    doc["tripStatus"] as? String, doc["returnStatus"] as? String, linkedQueueId,
-                    currentQueueDocId, currentQueueStatus,
-                    timestampMillis(doc["assignedAt"]), currentQueueEnteredAtMillis
-                )) continue
             val tripStatus = doc["tripStatus"] as? String
             val guardVerified = doc["guardVerified"] as? Boolean ?: false
             val driverConfirmed = doc["driverConfirmed"] as? Boolean ?: false

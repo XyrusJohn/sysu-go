@@ -210,6 +210,10 @@ class AssignmentActivity : AppCompatActivity() {
                                     "fullyLoadedAt" to Timestamp.now()
                                 ))
                                 .await()
+                            com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                                this@AssignmentActivity, "fully_loaded", subjectId = assignment.docId,
+                                idempotencyKey = "fully-loaded:${assignment.docId}"
+                            )
                             Log.d(TAG, "FULLY_LOADED: ${assignment.docId}")
                         } catch (e: Exception) {
                             com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
@@ -292,6 +296,10 @@ class AssignmentActivity : AppCompatActivity() {
                                     "loadingStartedAt" to Timestamp.now()
                                 ))
                                 .await()
+                            com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                                this@AssignmentActivity, "loading_started", subjectId = assignment.docId,
+                                idempotencyKey = "loading:${assignment.docId}"
+                            )
                             Log.d(TAG, "START_LOADING: ${assignment.docId}")
                         } catch (e: Exception) {
                             com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
@@ -474,6 +482,10 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Guard verification saved for ${assignment.docId}")
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            this@AssignmentActivity, "guard_verified", subjectId = assignment.docId,
+                            idempotencyKey = "guard-verified:${assignment.docId}"
+                        )
                         // Optimistically update local list so the card instantly shows the new state
                         val idx = assignments.indexOfFirst { it.docId == assignment.docId }
                         if (idx >= 0) {
@@ -570,6 +582,10 @@ class AssignmentActivity : AppCompatActivity() {
                     .update(updates)
                     .addOnSuccessListener {
                         Log.d(TAG, "Trip started: $docId")
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            this@AssignmentActivity, "transit_started", subjectId = docId,
+                            idempotencyKey = "transit-started:$docId"
+                        )
                         launchGeneralTrackingActivity(docId)
                     }
                     .addOnFailureListener { e ->

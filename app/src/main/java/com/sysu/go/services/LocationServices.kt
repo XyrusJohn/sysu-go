@@ -101,6 +101,8 @@ class LocationServices : Service() {
     // For dynamic notification updates
     private var lastUpdateTime: Long = 0
     private var lastAccuracy: Float? = null
+    private var lastAuditPoint: android.location.Location? = null
+    private var lastAuditPointElapsedMs: Long = 0L
     private val notificationManager by lazy { getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
 
     override fun onCreate() {
@@ -135,6 +137,8 @@ class LocationServices : Service() {
             updateNotification()
             return
         }
+        // Persist a sparse route sample independently of Socket.IO availability.
+        recordSparseAuditPoint(location, nowMs)
         val key = "$uid:$sapDocId"
         if (persistTripKey != key) {
             persistTripKey = key
@@ -161,6 +165,26 @@ class LocationServices : Service() {
         TrackingStateMonitor.setState(if (status == "stopped") TrackingStateMonitor.State.STOPPED else TrackingStateMonitor.State.ONLINE)
         persistLocation(uid, sapDocId, fix, status, key, nowMs)
         updateNotification()
+    }
+
+    private fun recordSparseAuditPoint(location: android.location.Location, elapsedMs: Long) {
+        if (!com.sysu.go.audit.DriverActionAudit.hasLocationPermission(this)) return
+        val previous = lastAuditPoint
+        val movedMeters = previous?.distanceTo(location) ?: Float.POSITIVE_INFINITY
+        if (previous != null && elapsedMs - lastAuditPointElapsedMs < 5_000L) return
+        if (previous != null && elapsedMs - lastAuditPointElapsedMs < 30_000L && movedMeters < 100f) return
+        try {
+            com.sysu.go.audit.DriverActionAudit.record(
+                context = this,
+                eventType = "route_point",
+                location = location,
+                occurredAtMs = location.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+            )
+            lastAuditPoint = android.location.Location(location)
+            lastAuditPointElapsedMs = elapsedMs
+        } catch (_: Exception) {
+            // Audit sampling stays best-effort and cannot interrupt location delivery.
+        }
     }
 
     private fun persistLocation(uid: String, sapDocId: String, fix: LocationSendPolicy.Fix,

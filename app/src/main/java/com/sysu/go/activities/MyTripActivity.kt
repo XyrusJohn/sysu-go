@@ -600,6 +600,13 @@ class MyTripActivity : AppCompatActivity() {
                             podImageUrl = base64DataUri,
                             capturedAtMillis = podData.capturedAtMillis
                         )
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            this@MyTripActivity,
+                            "pod_captured",
+                            subjectId = podData.shipmentDocId,
+                            idempotencyKey = "pod:${podData.shipmentDocId}:${podData.lineItem["obdNumber"]}:${podData.capturedAtMillis}",
+                            occurredAtMs = podData.capturedAtMillis
+                        )
                         hideUploadProgress()
 
                         // ── Real-time socket broadcast ─────────────────────────
@@ -786,6 +793,15 @@ class MyTripActivity : AppCompatActivity() {
                 // ── Success: clear the checkpoint ──
                 clearUnloadCheckpoint(shipmentDocId, obdNumber)
                 Log.d(TAG, "writeUnloadStatus: COMPLETE for obd=$obdNumber")
+                if (status == "UNLOADING") {
+                    com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                        this@MyTripActivity,
+                        "unloading_started",
+                        subjectId = shipmentDocId,
+                        metadata = org.json.JSONObject().put("obdRef", obdNumber),
+                        idempotencyKey = "unloading:$shipmentDocId:$obdNumber"
+                    )
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "writeUnloadStatus FAILED for obd=$obdNumber: ${e.message}")

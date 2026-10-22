@@ -29,6 +29,8 @@ import com.sysu.go.BuildConfig
 import com.sysu.go.R
 import com.sysu.go.databinding.ActivityQrScanBinding
 import com.sysu.go.network.QRApiService
+import com.sysu.go.audit.DriverActionAudit
+import org.json.JSONObject
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -248,6 +250,7 @@ class QRScanActivity : AppCompatActivity() {
             val result = QRApiService.verifyToken(token)
             when (result) {
                 is QRApiService.Result.Success -> {
+                    DriverActionAudit.recordFreshLocation(this@QRScanActivity, "qr_scan", outcome = "success")
                     currentToken = token
                     android.util.Log.i(TAG, "Token verified successfully ($token). Navigating to TripRegistrationActivity...")
                     withContext(Dispatchers.Main) {
@@ -261,6 +264,10 @@ class QRScanActivity : AppCompatActivity() {
                     }
                 }
                 is QRApiService.Result.Error -> {
+                    DriverActionAudit.recordFreshLocation(
+                        this@QRScanActivity, "qr_scan", outcome = "failed",
+                        metadata = JSONObject().put("errorCode", result.code)
+                    )
                     android.util.Log.w(TAG, "Token verification error (code ${result.code}): ${result.message}")
                     withContext(Dispatchers.Main) {
                         binding.progressBar.visibility = android.widget.ProgressBar.GONE

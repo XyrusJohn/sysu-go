@@ -123,6 +123,23 @@
       "fields": [
         {"fieldPath": "createdAt", "order": "DESCENDING"}
       ]
+    },
+    {
+      "collectionGroup": "driver_action_sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "driverId", "order": "ASCENDING"},
+        {"fieldPath": "startedAt", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "driver_action_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "driverId", "order": "ASCENDING"},
+        {"fieldPath": "sessionId", "order": "ASCENDING"},
+        {"fieldPath": "sequence", "order": "DESCENDING"}
+      ]
     }
   ]
 }
