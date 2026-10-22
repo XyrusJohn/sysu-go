@@ -12,6 +12,22 @@ const EVENT_TYPES = new Set([
 const LOCATION_STATES = new Set(["available", "unavailable", "permission_denied"]);
 const STAFF_ROLES = new Set(["fleet_manager", "admin", "super_admin"]);
 
+function logReadFailure(operation, error) {
+  const code = error?.code;
+  const errorCode = typeof code === "string" || typeof code === "number" ? code : "UNKNOWN";
+  const reason = code === 9 || code === "failed-precondition" ? "Firestore failed precondition; check query index requirements"
+    : code === 7 || code === "permission-denied" ? "Firestore permission denied"
+      : code === 4 || code === "deadline-exceeded" ? "Firestore query deadline exceeded"
+        : code === 14 || code === "unavailable" ? "Firestore unavailable"
+          : "Firestore query failed";
+  console.error("[driver-action] Firestore read failed", {
+    operation,
+    errorCode,
+    errorName: typeof error?.name === "string" ? error.name : "Error",
+    reason,
+  });
+}
+
 function validateEvent(event, now = Date.now()) {
   if (!event || typeof event !== "object" || Array.isArray(event)) return "Invalid activity event";
   if (typeof event.eventId !== "string" || !UUID.test(event.eventId)) return "Invalid event ID";
@@ -161,7 +177,10 @@ function bindDriverActionAudit(socket, {db, io}) {
         success: true, sessions: docs.map(doc => ({id: doc.id, ...doc.data()})),
         nextCursor: snapshot.docs.length > docs.length ? docs[docs.length - 1]?.data()?.startedAt?.toMillis?.() ?? null : null,
       });
-    } catch (_) { ack(callback, {success: false, message: "Activity history is temporarily unavailable"}); }
+    } catch (error) {
+      logReadFailure("get_sessions", error);
+      ack(callback, {success: false, errorCode: "DRIVER_ACTION_SESSIONS_READ_FAILED", message: "Activity history is temporarily unavailable"});
+    }
   });
 
   socket.on("driver_actions:get_events", async (payload, callback) => {
@@ -187,7 +206,10 @@ function bindDriverActionAudit(socket, {db, io}) {
         success: true, events: docs.map(doc => ({id: doc.id, ...doc.data()})),
         nextCursor: snapshot.docs.length > docs.length ? docs[docs.length - 1]?.data()?.sequence ?? null : null,
       });
-    } catch (_) { ack(callback, {success: false, message: "Activity history is temporarily unavailable"}); }
+    } catch (error) {
+      logReadFailure("get_events", error);
+      ack(callback, {success: false, errorCode: "DRIVER_ACTION_EVENTS_READ_FAILED", message: "Activity history is temporarily unavailable"});
+    }
   });
 }
 

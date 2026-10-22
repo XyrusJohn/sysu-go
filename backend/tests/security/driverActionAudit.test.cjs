@@ -156,3 +156,41 @@ test('late lower-sequence events can repair an already-synced session without ch
   assert.equal(docs.get(`driver_action_sessions/${sessionId}`).lastSequence, 3);
   assert.equal(docs.has(`driver_action_events/${lower.eventId}`), true);
 });
+
+test('session read returns a stable error code and logs safe Firestore diagnostics', async () => {
+  const driverId = '8IBYwCODqLNc1fNzdgheaUeQPO72';
+  const handlers = new Map();
+  const db = {
+    collection() {
+      return {
+        where() { return this; },
+        orderBy() { return this; },
+        limit() { return this; },
+        async get() { throw Object.assign(new Error('private Firestore details'), {code: 9}); },
+      };
+    },
+  };
+  const socket = {data: {uid: 'staff-uid', role: 'admin'}, on: (name, callback) => handlers.set(name, callback)};
+  bindDriverActionAudit(socket, {db, io: {to() { return {emit() {}}; }}});
+  const originalError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args);
+  try {
+    const response = await new Promise(resolve => handlers.get('driver_actions:get_sessions')({driverId}, resolve));
+    assert.deepEqual(response, {
+      success: false,
+      errorCode: 'DRIVER_ACTION_SESSIONS_READ_FAILED',
+      message: 'Activity history is temporarily unavailable',
+    });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], '[driver-action] Firestore read failed');
+  assert.deepEqual(logs[0][1], {
+    operation: 'get_sessions', errorCode: 9, errorName: 'Error',
+    reason: 'Firestore failed precondition; check query index requirements',
+  });
+  assert.equal(JSON.stringify(logs).includes(driverId), false);
+  assert.equal(JSON.stringify(logs).includes('private Firestore details'), false);
+});
