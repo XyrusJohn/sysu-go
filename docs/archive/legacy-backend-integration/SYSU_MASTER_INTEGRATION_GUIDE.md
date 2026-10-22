@@ -71,7 +71,7 @@
 
 | Environment | REST API | Socket.IO |
 |---|---|---|
-| **Production** | `https://sysu-app-production.up.railway.app` | `https://sysu-app-production.up.railway.app` |
+| **Production** | `https://sysu-app.onrender.com` | `https://sysu-app.onrender.com` |
 | **Local** | `http://localhost:8080` | `http://localhost:8080` |
 
 ---
@@ -438,7 +438,7 @@ Created on first login/registration:
 
 ## 7. REST API Contract — Complete Reference
 
-**Base URL:** `https://sysu-app-production.up.railway.app` (production) or `http://localhost:8080` (local)
+**Base URL:** `https://sysu-app.onrender.com` (production) or `http://localhost:8080` (local)
 
 **Auth header (for protected endpoints):** `Authorization: Bearer <Firebase ID Token>`
 
@@ -802,7 +802,7 @@ Authorization: Bearer <Firebase ID Token>
 ### Connection
 
 ```javascript
-const io = new Server("https://sysu-app-production.up.railway.app", {
+const io = new Server("https://sysu-app.onrender.com", {
   cors: { origin: "*" } // or same-origin in production
 });
 ```

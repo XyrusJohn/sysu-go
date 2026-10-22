@@ -4,7 +4,7 @@ This assessment is retained for audit history. It was superseded by the current 
 
 # SYSU-Go Android App — Detailed Assessment & Bug Report
 > Date: 2026-10-07 | Branch: main | Min SDK: 24 | Target SDK: 35
-> Backend: `https://sysu-go-production.up.railway.app`
+> Backend: `https://sysu-go.onrender.com`
 > Scope: All Kotlin source files, network layer, Firestore integration, Socket.IO, POD flow, cross-app connection with sysu-app (web dashboard)
 
 ---
@@ -114,7 +114,7 @@ Result.Error(-1, "Network error: ${e.javaClass.simpleName} - ${e.message}")
 release {
     isMinifyEnabled = false  // ← disabled
 ```
-**Impact:** Release APK is not obfuscated or shrunk. APK is larger than necessary and internal class/method names are visible via reverse engineering. Exposes API base URL (`sysu-go-production.up.railway.app`) and other internals.  
+**Impact:** Release APK is not obfuscated or shrunk. APK is larger than necessary and internal class/method names are visible via reverse engineering. Exposes API base URL (`sysu-go.onrender.com`) and other internals.
 **Fix:** Enable `isMinifyEnabled = true` + `shrinkResources = true` for release builds.
 
 ---

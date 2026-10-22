@@ -161,8 +161,8 @@ TV displays QR                  Driver opens app         Driver taps scan button
 
 | Environment | URL |
 |---|---|
-| **Production REST** | `https://sysu-app-production.up.railway.app` |
-| **Production Socket.IO** | `https://sysu-go-production.up.railway.app` |
+| **Production REST** | `https://sysu-app.onrender.com` |
+| **Production Socket.IO** | `https://sysu-go.onrender.com` |
 | **Local REST** | `http://localhost:8080` |
 | **Local Socket.IO** | `http://localhost:8080` |
 
@@ -171,8 +171,8 @@ TV displays QR                  Driver opens app         Driver taps scan button
 ```kotlin
 // YourApiClient.kt
 companion object {
-    private const val BASE_URL = "https://sysu-app-production.up.railway.app/"
-    private const val SOCKET_URL = "https://sysu-go-production.up.railway.app"
+    private const val BASE_URL = "https://sysu-app.onrender.com/"
+    private const val SOCKET_URL = "https://sysu-go.onrender.com"
 }
 ```
 
@@ -746,7 +746,7 @@ Live fleet tracking data (location, status).
 
 ```kotlin
 // Android/Kotlin with Socket.IO client
-val socket = IO.socket("https://sysu-go-production.up.railway.app")
+val socket = IO.socket("https://sysu-go.onrender.com")
 socket.connect()
 ```
 

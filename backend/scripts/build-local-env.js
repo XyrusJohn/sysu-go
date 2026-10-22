@@ -37,7 +37,7 @@ const localEnv = [
   '# NODE_ENV=production',
   '# ALLOWED_ORIGINS=https://sysu-web-5a25d.web.app,https://sysu-app.firebaseapp.com,https://android-app.firebaseapp.com',
   '# FRONTEND_URL=https://sysu-web-5a25d.web.app',
-  '# API_BASE_URL=https://sysu-web-production.up.railway.app',
+  '# API_BASE_URL=https://sysu-go.onrender.com',
   '# JWT_SECRET=your_jwt_secret_here',
   '# FIREBASE_SERVICE_ACCOUNT={...}',
   '',

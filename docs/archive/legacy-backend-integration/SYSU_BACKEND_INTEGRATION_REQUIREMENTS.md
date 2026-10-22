@@ -14,7 +14,7 @@
 ## OVERVIEW
 
 The sysu-go backend exposes these interfaces:
-- **REST API** on Railway (production): `https://sysu-app-production.up.railway.app`
+- **REST API** on Railway (production): `https://sysu-app.onrender.com`
 - **REST API** locally: `http://localhost:8080`
 - **Socket.IO** on same host — verify token on handshake, send `auth: { token: firebaseIdToken }` in opts
 
@@ -222,7 +222,7 @@ The web dashboard listens to `update_admin_map` and `vendor_status_update` via t
 
 ## API ENDPOINTS SUMMARY
 
-All production: `https://sysu-app-production.up.railway.app`
+All production: `https://sysu-app.onrender.com`
 All local: `http://localhost:8080`
 
 | Method | Endpoint | Auth | Description |

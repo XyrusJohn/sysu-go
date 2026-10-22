@@ -89,7 +89,7 @@ app.use("/api", (req, res) => {
 // ─── Socket.IO handshake logic ──────────────────────────────────────────────
 // onlineDriver tracks ALL live sockets per driver using a Set.
 // Driver is OFFLINE only when Set is EMPTY. This handles dual-socket connections
-// (Railway + sysu-app) correctly — Ctrl+Shift+R / reconnect / WiFi-kill on one
+// (SYSU Go + SYSU App) correctly — Ctrl+Shift+R / reconnect / WiFi-kill on one
 // socket must NOT mark driver offline if another socket is still alive.
 //
 // `lastSeen` is the timestamp of the most recent client→server emit (heartbeat,

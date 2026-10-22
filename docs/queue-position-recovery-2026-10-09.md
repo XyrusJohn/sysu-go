@@ -27,7 +27,7 @@ Web backend **149/149 passed**, including the equivalent registered AUV three-dr
 
 ## Production-configured APK and remaining acceptance
 
-Artifact: `app/build/outputs/apk/liveTest/app-liveTest.apk`, package `com.sysu.go`, API `https://sysu-go-production.up.railway.app`, Firebase emulators disabled, workstation debug signing. SHA-256: `0880c1e355a5c7a7a4ddf16ce7cc04c2a6beac44f9846768bb2366bf81efb9ba`.
+Artifact: `app/build/outputs/apk/liveTest/app-liveTest.apk`, package `com.sysu.go`, API `https://sysu-go.onrender.com`, Firebase emulators disabled, workstation debug signing. SHA-256: `0880c1e355a5c7a7a4ddf16ce7cc04c2a6beac44f9846768bb2366bf81efb9ba`.
 
 This APK replaces the previous G-27 build at the same output path. Installing/updating the phone app is necessary; refreshing the website cannot replace phone code. No connected authorized Android device or configured AVD was available, so this run did not install the APK or execute actual-device UI assertions. G-28 remains IN PROGRESS until that acceptance passes.
 

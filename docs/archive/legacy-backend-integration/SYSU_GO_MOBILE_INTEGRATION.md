@@ -339,7 +339,7 @@ Authorization: Bearer <Firebase ID Token>
 
 | Environment | REST API |
 |---|---|
-| Production | `https://sysu-app-production.up.railway.app` |
+| Production | `https://sysu-app.onrender.com` |
 | Local | `http://localhost:8080` |
 
 **Auth header (for protected endpoints):** `Authorization: Bearer <Firebase ID Token>`
@@ -507,7 +507,7 @@ See Section 5 above. The Phase 2 schema describes what SHOULD exist once `POST /
 ### Connection
 
 ```kotlin
-val socket = IO.socket("https://sysu-app-production.up.railway.app")
+val socket = IO.socket("https://sysu-app.onrender.com")
 socket.connect()
 ```
 

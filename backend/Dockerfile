@@ -1,6 +1,6 @@
 # backend/Dockerfile
 # Node.js 24: matches the verified backend runtime
-# Railway auto-detects this and uses it instead of nixpacks
+# Container build for the backend directory context
 FROM node:24-slim
 
 # Set working directory

@@ -1,7 +1,7 @@
 {
   "name": "sysu-go",
   "version": "1.0.0",
-  "description": "Railway deployment wrapper",
+  "description": "SYSU Go backend deployment wrapper",
   "private": true,
   "scripts": {
     "start": "cd backend && npm start",
