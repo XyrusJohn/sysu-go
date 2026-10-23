@@ -51,6 +51,7 @@ class QRScanActivity : AppCompatActivity() {
     private var camera: Camera? = null
     private var torchEnabled = false
     private var isZoomingFromSlider = false
+    private var scanOpenedAtMs = 0L
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -68,6 +69,11 @@ class QRScanActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityQrScanBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        scanOpenedAtMs = savedInstanceState?.getLong("driverActionScanOpenedAtMs")
+            ?.takeIf { it > 0L } ?: System.currentTimeMillis()
+        if (savedInstanceState == null) {
+            DriverActionAudit.recordFreshLocation(this, "qr_scan_opened")
+        }
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -250,7 +256,10 @@ class QRScanActivity : AppCompatActivity() {
             val result = QRApiService.verifyToken(token)
             when (result) {
                 is QRApiService.Result.Success -> {
-                    DriverActionAudit.recordFreshLocation(this@QRScanActivity, "qr_scan", outcome = "success")
+                    DriverActionAudit.recordFreshLocation(
+                        this@QRScanActivity, "qr_scan", outcome = "success",
+                        durationMs = (System.currentTimeMillis() - scanOpenedAtMs).coerceAtLeast(0L)
+                    )
                     currentToken = token
                     android.util.Log.i(TAG, "Token verified successfully ($token). Navigating to TripRegistrationActivity...")
                     withContext(Dispatchers.Main) {
@@ -266,6 +275,7 @@ class QRScanActivity : AppCompatActivity() {
                 is QRApiService.Result.Error -> {
                     DriverActionAudit.recordFreshLocation(
                         this@QRScanActivity, "qr_scan", outcome = "failed",
+                        durationMs = (System.currentTimeMillis() - scanOpenedAtMs).coerceAtLeast(0L),
                         metadata = JSONObject().put("errorCode", result.code)
                     )
                     android.util.Log.w(TAG, "Token verification error (code ${result.code}): ${result.message}")
@@ -308,5 +318,10 @@ class QRScanActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong("driverActionScanOpenedAtMs", scanOpenedAtMs)
+        super.onSaveInstanceState(outState)
     }
 }

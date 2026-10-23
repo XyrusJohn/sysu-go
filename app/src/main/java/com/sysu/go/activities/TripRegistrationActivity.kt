@@ -51,6 +51,7 @@ class TripRegistrationActivity : AppCompatActivity() {
     private lateinit var binding: ActivityTripRegistrationBinding
     private var queueId: String? = null
     private var currentToken: String? = null
+    private var registrationOpenedAtMs = 0L
     private val helperBindings = mutableListOf<ItemHelperInputBinding>()
     private lateinit var requirementsAdapter: RequirementEditAdapter
 
@@ -133,6 +134,12 @@ class TripRegistrationActivity : AppCompatActivity() {
             dlgView.findViewById<MaterialButton>(R.id.btnDismiss).setOnClickListener { dialog.dismiss(); finish() }
             dialog.show()
             return
+        }
+
+        registrationOpenedAtMs = savedInstanceState?.getLong("driverActionRegistrationOpenedAtMs")
+            ?.takeIf { it > 0L } ?: System.currentTimeMillis()
+        if (savedInstanceState == null) {
+            DriverActionAudit.recordFreshLocation(this, "registration_opened", subjectId = queueId)
         }
 
         setupTruckTypeSpinner()
@@ -502,6 +509,11 @@ class TripRegistrationActivity : AppCompatActivity() {
             return
         }
 
+        DriverActionAudit.recordFreshLocation(
+            this, "trip_confirmation", subjectId = queueId, outcome = "requested",
+            metadata = org.json.JSONObject().put("phase", "registration_submit")
+        )
+
         setLoading(true)
 
         lifecycleScope.launch {
@@ -659,6 +671,7 @@ class TripRegistrationActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("queueId", queueId)
+        outState.putLong("driverActionRegistrationOpenedAtMs", registrationOpenedAtMs)
         super.onSaveInstanceState(outState)
     }
 

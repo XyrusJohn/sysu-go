@@ -543,6 +543,14 @@ class GeneralTrackingActivity : AppCompatActivity() {
                 val allPODsComplete = allList.isNotEmpty() && allList.all {
                     it.tripStatus == "completed" || it.tripStatus == "delivered" || isAssignmentPodComplete(it)
                 }
+                if (allPODsComplete) {
+                    com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                        this@GeneralTrackingActivity, "all_deliveries_completed",
+                        subjectId = sessionAnchor?.docId,
+                        metadata = org.json.JSONObject().put("shipmentCount", allList.size),
+                        idempotencyKey = "all-deliveries-completed"
+                    )
+                }
                 if (inTransitAssignment != null) {
                     session.saveActiveSapDocId(inTransitAssignment.docId)
                     session.setTripActive(true)
@@ -716,6 +724,13 @@ class GeneralTrackingActivity : AppCompatActivity() {
         val session = SessionManager(this)
         val prevDocId = session.getActiveSapDocId()
         val nextDocId = assignment.docId
+        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+            this, "active_shipment_selected", subjectId = nextDocId
+        )
+        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+            this, "trip_confirmation", subjectId = nextDocId, outcome = "requested",
+            metadata = org.json.JSONObject().put("phase", "start_trip")
+        )
 
         val batch = db.batch()
 

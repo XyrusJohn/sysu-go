@@ -339,6 +339,10 @@ class AssignmentActivity : AppCompatActivity() {
                             "loadingStartedAt" to FieldValue.delete()
                         ))
                         .await()
+                    com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                        this@AssignmentActivity, "loading_cancelled", subjectId = assignment.docId,
+                        metadata = org.json.JSONObject().put("phase", "loading"),
+                    )
                     Log.d(TAG, "CANCEL_LOADING: ${assignment.docId}")
                 } catch (e: Exception) {
                     com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "shipment-state-transition", e)
@@ -388,6 +392,9 @@ class AssignmentActivity : AppCompatActivity() {
                             "guardVerifiedAt" to FieldValue.delete()
                         ))
                         .await()
+                    com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                        this@AssignmentActivity, "verification_cancelled", subjectId = assignment.docId,
+                    )
                     Log.d(TAG, "CANCEL_VERIFICATION: ${assignment.docId} → loading (guard data reset)")
                 } catch (e: Exception) {
                     com.sysu.go.diagnostics.UserErrorNotifier.showFailure(this@AssignmentActivity, "guard-verification", e)
@@ -568,6 +575,13 @@ class AssignmentActivity : AppCompatActivity() {
 
     private fun performStartTrip(assignment: Assignment) {
         val docId = assignment.docId
+        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+            this, "active_shipment_selected", subjectId = docId
+        )
+        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+            this, "trip_confirmation", subjectId = docId, outcome = "requested",
+            metadata = org.json.JSONObject().put("phase", "start_trip")
+        )
         sessionManager.saveActiveSapDocId(docId)
         sessionManager.saveCurrentSapDocId(docId)
         sessionManager.setTripActive(true)

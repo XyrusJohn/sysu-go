@@ -95,6 +95,13 @@ class ReturnToBaseBottomSheet : DialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        if (savedInstanceState == null) {
+            com.sysu.go.audit.DriverActionAudit.recordFreshLocation(requireContext(), "return_prompt_opened")
+            if (awaitingWarehouseConfirm || currentReturnStatus == "arrived_at_base") {
+                com.sysu.go.audit.DriverActionAudit.recordFreshLocation(requireContext(), "arrival_confirmation_opened")
+            }
+        }
+
         binding.overlay.setOnClickListener { dismiss() }
         binding.btnDismiss.setOnClickListener { dismiss() }
 
@@ -116,6 +123,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
             when {
                 // Step 2: Arrived at Base (Unlocked only if inside geofence)
                 currentReturnStatus == "returning_to_base" && !awaitingWarehouseConfirm -> {
+                    com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                        requireContext(), "arrival_confirmation_opened"
+                    )
                     showDualConfirmation(
                         title = "Dumating na sa Base?",
                         message = "Kumpirmahin kung nakarating ka na sa $warehouseName. Ito ay magsisilbing senyales ng pagdating sa warehouse.",
@@ -123,6 +133,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         confirmColor = R.color.sysu_blue,
                         iconRes = R.drawable.ic_location_crosshairs
                     ) {
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            requireContext(), "warehouse_arrival_confirmed", outcome = "requested"
+                        )
                         performArrivedAtBase()
                     }
                 }
@@ -135,6 +148,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         confirmColor = R.color.sysu_green,
                         iconRes = R.drawable.ic_dialog_confirm
                     ) {
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            requireContext(), "arrived_at_warehouse", outcome = "requested"
+                        )
                         performConfirmArrival()
                     }
                 }
@@ -147,6 +163,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                         confirmColor = R.color.sysu_blue,
                         iconRes = R.drawable.ic_dialog_confirm
                     ) {
+                        com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                            requireContext(), "return_to_base_requested", outcome = "requested"
+                        )
                         performStartReturning()
                     }
                 }
@@ -526,6 +545,9 @@ class ReturnToBaseBottomSheet : DialogFragment() {
                 }
 
                 currentReturnStatus = "arrived_at_base"
+                com.sysu.go.audit.DriverActionAudit.recordFreshLocation(
+                    requireContext(), "arrival_confirmation_opened"
+                )
                 hideLoading()
                 bindPanelContent()
                 bindConfirmButton()

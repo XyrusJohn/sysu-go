@@ -604,6 +604,9 @@ class MyTripActivity : AppCompatActivity() {
                             this@MyTripActivity,
                             "pod_captured",
                             subjectId = podData.shipmentDocId,
+                            metadata = org.json.JSONObject().put(
+                                "obdRef", podData.lineItem["obdNumber"]?.toString()?.take(128) ?: "unknown"
+                            ),
                             idempotencyKey = "pod:${podData.shipmentDocId}:${podData.lineItem["obdNumber"]}:${podData.capturedAtMillis}",
                             occurredAtMs = podData.capturedAtMillis
                         )
