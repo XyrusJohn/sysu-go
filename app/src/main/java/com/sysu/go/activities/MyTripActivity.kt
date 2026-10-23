@@ -79,6 +79,9 @@ class MyTripActivity : AppCompatActivity() {
     /** Firestore snapshot listener removed onDestroy */
     private var assignmentsListener: (() -> Unit)? = null
     private var hasLoadedAssignments = false
+    private val assignmentEnrichmentHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var assignmentEnrichmentTimeout: Runnable? = null
+    private var assignmentEnrichmentAttempt = 0
 
     /** Bouncing circles — cancelled onDestroy */
     private val circleAnimators = mutableListOf<android.animation.Animator>()
@@ -917,6 +920,7 @@ class MyTripActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMyTripBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.tvLoadError.setOnClickListener { loadAssignments() }
 
         // Restore savedInstanceState from before the permission-dialog restart.
         // When the location permission dialog appears, the Activity is STOPPED and
@@ -1009,6 +1013,8 @@ class MyTripActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        assignmentEnrichmentTimeout?.let(assignmentEnrichmentHandler::removeCallbacks)
+        assignmentEnrichmentTimeout = null
         super.onDestroy()
         circleAnimators.forEach { it.cancel() }
         circleAnimators.clear()
@@ -1050,7 +1056,13 @@ class MyTripActivity : AppCompatActivity() {
      */
     private fun loadAssignments() {
         assignmentsListener?.invoke()
-        val sessionDriverId = sessionManager.getDriverId() ?: return
+        val sessionDriverId = sessionManager.getDriverId()
+        if (sessionDriverId.isNullOrBlank()) {
+            binding.loadingSkeleton.root.visibility = View.GONE
+            binding.tvLoadError.text = "Your driver session is unavailable. Sign in again, then tap here to retry."
+            binding.tvLoadError.visibility = View.VISIBLE
+            return
+        }
         if (!hasLoadedAssignments) {
             binding.loadingSkeleton.root.visibility = View.VISIBLE
             binding.rvShipments.visibility = View.GONE
@@ -1065,34 +1077,77 @@ class MyTripActivity : AppCompatActivity() {
         // FAILED_PRECONDITION (single whereNotEqualTo alone is indexable, but paired with
         // other fields it can still fail — keep it off the query).
         assignmentsListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
-                val records = payload as? List<*> ?: return@subscribeRealtime
-                if (isFinishing) return@subscribeRealtime
-
-                // Render active shipments from this QR queue session only; prior trips remain history.
-                val currentQueueId = sessionManager.getCurrentQueueDocId()
-                val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
-                    val s = doc["tripStatus"] as? String
-                    s != "completed" && s != "delivered" &&
-                        (currentQueueId.isNullOrBlank() || doc["queueId"] == currentQueueId)
+                val records = payload as? List<*> ?: run {
+                    showAssignmentLoadError("The server returned an invalid shipment list. Tap to retry.")
+                    return@subscribeRealtime
                 }
-
-                val list = active.mapNotNull { snap ->
-                    @Suppress("UNCHECKED_CAST")
-                    buildAssignmentFromMap(snap + ("docId" to (snap["id"] ?: "")))
-                }
-                fetchDriverData(sessionDriverId, list) { enriched ->
-                    enrichWithQueueData(enriched) { final ->
-                        handleAssignmentList(final, intentDocId)
-                    }
-                }
+                handleAssignmentRecords(records, sessionDriverId, intentDocId)
             }, onError = { error ->
                 Log.e(TAG, "loadAssignments realtime error: $error")
                 com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@MyTripActivity, "assignment-subscription")
                 if (!hasLoadedAssignments && !isFinishing) {
-                    binding.loadingSkeleton.root.visibility = View.GONE
-                    binding.tvLoadError.visibility = View.VISIBLE
+                    loadAssignmentsFromCache(sessionDriverId, intentDocId)
                 }
             })
+    }
+
+    private fun handleAssignmentRecords(records: List<*>, driverId: String, intentDocId: String?) {
+        if (isFinishing) return
+        val currentQueueId = sessionManager.getCurrentQueueDocId()
+        val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
+            val status = doc["tripStatus"] as? String
+            status != "completed" && status != "delivered" &&
+                (currentQueueId.isNullOrBlank() || doc["queueId"] == currentQueueId)
+        }
+        val list = active.mapNotNull { record ->
+            buildAssignmentFromMap(record + ("docId" to (record["id"] ?: "")))
+        }
+        val attempt = ++assignmentEnrichmentAttempt
+        assignmentEnrichmentTimeout?.let(assignmentEnrichmentHandler::removeCallbacks)
+        var enrichmentCompleted = false
+        val showUnenrichedAssignments = Runnable {
+            if (attempt == assignmentEnrichmentAttempt && !enrichmentCompleted && !isFinishing) {
+                enrichmentCompleted = true
+                assignmentEnrichmentTimeout = null
+                Log.w(TAG, "Assignment enrichment timed out; showing realtime shipment data")
+                handleAssignmentList(list, intentDocId)
+            }
+        }
+        assignmentEnrichmentTimeout = showUnenrichedAssignments
+        assignmentEnrichmentHandler.postDelayed(showUnenrichedAssignments, 15_000L)
+        fetchDriverData(driverId, list) { enriched ->
+            enrichWithQueueData(enriched) { final ->
+                if (attempt != assignmentEnrichmentAttempt || enrichmentCompleted || isFinishing) return@enrichWithQueueData
+                enrichmentCompleted = true
+                assignmentEnrichmentTimeout?.let(assignmentEnrichmentHandler::removeCallbacks)
+                assignmentEnrichmentTimeout = null
+                handleAssignmentList(final, intentDocId)
+            }
+        }
+    }
+
+    private fun loadAssignmentsFromCache(driverId: String, intentDocId: String?) {
+        db.collection("sap_assignments").whereEqualTo("driverId", driverId)
+            .get(com.google.firebase.firestore.Source.CACHE)
+            .addOnSuccessListener { snapshot ->
+                if (isFinishing || hasLoadedAssignments) return@addOnSuccessListener
+                if (snapshot.isEmpty) {
+                    showAssignmentLoadError("Offline and no saved shipment data is available. Check your connection and tap to retry.")
+                    return@addOnSuccessListener
+                }
+                handleAssignmentRecords(snapshot.documents.map { it.data.orEmpty() + ("id" to it.id) }, driverId, intentDocId)
+            }
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Cached assignment read failed: ${error.message}")
+                showAssignmentLoadError("Shipments are unavailable offline. Check your connection and tap to retry.")
+            }
+    }
+
+    private fun showAssignmentLoadError(message: String) {
+        if (isFinishing || hasLoadedAssignments) return
+        binding.loadingSkeleton.root.visibility = View.GONE
+        binding.tvLoadError.text = message
+        binding.tvLoadError.visibility = View.VISIBLE
     }
 
     /**

@@ -48,3 +48,7 @@ Corrected README prerequisite to Node 24.x and documented required Firebase envi
 ## 2026-10-15 â€” Documentation consolidation verification
 
 Verified that the root README routes readers to the current Android/backend guides, the docs index distinguishes active guidance from archived records, and former app/backend and integration documents are preserved under docs/archive/. All 81 Markdown files have resolvable relative links. No app code changed and no tests or build were run for this documentation review.
+
+## 2026-10-23 -- realtime loading fallback
+
+Realtime subscriptions now fail their initial load after a bounded 20-second wait. My Trip, Assignments, and Queue Details then query Firestore's persisted local cache, keep cached records visible, or replace the skeleton with a tap-to-retry error when no cached data exists. My Trip also renders realtime assignment data if secondary driver/queue enrichment exceeds 15 seconds. Android emulator unit tests passed 95/95 and `assembleEmulator` passed. Physical-device/instrumentation testing was not performed. Audit also confirmed POD photo writes are not durably queued for offline retry; do not treat POD capture as offline-complete until that separate recovery path is implemented.

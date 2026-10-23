@@ -119,6 +119,10 @@ class QueueDetailsActivity : AppCompatActivity() {
 
         setupUI()
         startCircleAnimation()
+        binding.tvDetailsLoadError.setOnClickListener {
+            val shipmentDocId = intent.getStringExtra("shipment_doc_id")
+            if (!shipmentDocId.isNullOrBlank()) loadSpecificShipment(shipmentDocId) else loadQueueDetails()
+        }
 
         // Initialize location client for POD
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -399,12 +403,19 @@ class QueueDetailsActivity : AppCompatActivity() {
     }
 
     private fun loadQueueDetails() {
-        val sessionDriverId = sessionManager.getDriverId() ?: return
+        val sessionDriverId = sessionManager.getDriverId()
+        if (sessionDriverId.isNullOrBlank()) {
+            showDetailsLoadError("Your driver session is unavailable. Sign in again, then tap here to retry.")
+            return
+        }
         showDetailsLoading()
         queueListener?.invoke()
         SocketManager.connect(this)
         queueListener = SocketManager.subscribeRealtime("queue", onData = { payload ->
-            val records = payload as? List<*> ?: return@subscribeRealtime
+            val records = payload as? List<*> ?: run {
+                showDetailsLoadError("The server returned invalid queue data. Tap to retry.")
+                return@subscribeRealtime
+            }
             val queueRecords = records.mapNotNull { it as? Map<String, Any?> }
             val preferredQueueId = sessionManager.getCurrentQueueDocId()
             val active = queueRecords.firstOrNull { it["id"] == preferredQueueId &&
@@ -421,8 +432,46 @@ class QueueDetailsActivity : AppCompatActivity() {
         }, onError = { error ->
             Log.e("OBD", "queue realtime error: $error")
             com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "queue-subscription")
-            if (!hasLoadedDetails) showDetailsLoadError("Could not load queue details. Reopen this screen to retry.")
+            if (!hasLoadedDetails) loadQueueDetailsFromCache(sessionDriverId)
         })
+    }
+
+    private fun loadQueueDetailsFromCache(driverId: String) {
+        val queueId = sessionManager.getCurrentQueueDocId()
+        if (!queueId.isNullOrBlank()) {
+            db.collection("queue").document(queueId).get(com.google.firebase.firestore.Source.CACHE)
+                .addOnSuccessListener { snapshot ->
+                    if (isFinishing || hasLoadedDetails) return@addOnSuccessListener
+                    val data = snapshot.data
+                    if (!snapshot.exists() || data == null) {
+                        showDetailsLoadError("Offline and no saved queue data is available. Check your connection and tap to retry.")
+                        return@addOnSuccessListener
+                    }
+                    val record = data + ("id" to snapshot.id)
+                    if ((record["status"] as? String) in listOf("assigned", "waiting", "called", "loading", "in_transit", "fully_loaded")) {
+                        processQueueRecord(record, "cached_driver_queue")
+                    } else {
+                        showDetailsLoadError("No active queue is available offline. Check your connection and tap to retry.")
+                    }
+                }
+                .addOnFailureListener { error ->
+                    Log.w("OBD", "Cached queue read failed: ${error.message}")
+                    showDetailsLoadError("Queue details are unavailable offline. Check your connection and tap to retry.")
+                }
+        } else {
+            db.collection("queue").whereEqualTo("driverId", driverId)
+                .get(com.google.firebase.firestore.Source.CACHE)
+                .addOnSuccessListener { snapshot ->
+                    if (isFinishing || hasLoadedDetails) return@addOnSuccessListener
+                    val record = snapshot.documents.firstOrNull { it.getString("status") in listOf("assigned", "waiting", "called", "loading", "in_transit", "fully_loaded") }
+                    if (record == null) showDetailsLoadError("Offline and no saved queue data is available. Check your connection and tap to retry.")
+                    else processQueueRecord(record.data.orEmpty() + ("id" to record.id), "cached_driver_queue")
+                }
+                .addOnFailureListener { error ->
+                    Log.w("OBD", "Cached queue query failed: ${error.message}")
+                    showDetailsLoadError("Queue details are unavailable offline. Check your connection and tap to retry.")
+                }
+        }
     }
 
     private fun loadSpecificShipment(shipmentDocId: String) {
@@ -430,7 +479,10 @@ class QueueDetailsActivity : AppCompatActivity() {
         assignmentListener?.invoke()
         SocketManager.connect(this)
         assignmentListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
-            val records = payload as? List<*> ?: return@subscribeRealtime
+            val records = payload as? List<*> ?: run {
+                showDetailsLoadError("The server returned invalid shipment data. Tap to retry.")
+                return@subscribeRealtime
+            }
             val shipment = records.mapNotNull { it as? Map<String, Any?> }.firstOrNull { it["id"] == shipmentDocId }
                 ?: run {
                     showDetailsLoadError("Shipment details are no longer available.")
@@ -445,8 +497,26 @@ class QueueDetailsActivity : AppCompatActivity() {
         }, onError = { error ->
             Log.e("OBD", "shipment realtime error: $error")
             com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "assignment-subscription")
-            if (!hasLoadedDetails) showDetailsLoadError("Could not load shipment details. Reopen this screen to retry.")
+            if (!hasLoadedDetails) loadSpecificShipmentFromCache(shipmentDocId)
         })
+    }
+
+    private fun loadSpecificShipmentFromCache(shipmentDocId: String) {
+        db.collection("sap_assignments").document(shipmentDocId).get(com.google.firebase.firestore.Source.CACHE)
+            .addOnSuccessListener { snapshot ->
+                if (isFinishing || hasLoadedDetails) return@addOnSuccessListener
+                val data = snapshot.data
+                if (!snapshot.exists() || data == null) {
+                    showDetailsLoadError("Offline and no saved shipment data is available. Check your connection and tap to retry.")
+                    return@addOnSuccessListener
+                }
+                populateQueueDetailsUI(data + ("id" to snapshot.id))
+                hideDetailsLoading()
+            }
+            .addOnFailureListener { error ->
+                Log.w("OBD", "Cached shipment read failed: ${error.message}")
+                showDetailsLoadError("Shipment details are unavailable offline. Check your connection and tap to retry.")
+            }
     }
 
     private fun showDetailsLoading() {
@@ -463,6 +533,7 @@ class QueueDetailsActivity : AppCompatActivity() {
     private fun showDetailsLoadError(message: String) {
         if (isFinishing || isDestroyed) return
         binding.tvDetailsLoadError.text = message
+        binding.tvDetailsLoadError.isClickable = true
         binding.detailsLoadingContainer.visibility = View.VISIBLE
         binding.detailsLoadingSkeleton.root.visibility = View.GONE
         binding.tvDetailsLoadError.visibility = View.VISIBLE
@@ -711,6 +782,7 @@ class QueueDetailsActivity : AppCompatActivity() {
         }, onError = { error ->
             Log.e("OBD", "assignment realtime error: $error")
             com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@QueueDetailsActivity, "assignment-subscription")
+            if (!hasLoadedDetails) showDetailsLoadError("Shipment details are still loading. Check your connection and tap to retry.")
         })
     }
     private val sessionManager by lazy { SessionManager(this) }

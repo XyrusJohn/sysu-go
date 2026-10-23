@@ -81,6 +81,7 @@ class AssignmentActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityAssignmentBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.tvLoadError.setOnClickListener { loadAssignments() }
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -765,7 +766,13 @@ class AssignmentActivity : AppCompatActivity() {
      */
     private fun loadAssignments() {
         assignmentsListener?.invoke()
-        val sessionDriverId = sessionManager.getDriverId() ?: return
+        val sessionDriverId = sessionManager.getDriverId()
+        if (sessionDriverId.isNullOrBlank()) {
+            binding.loadingSkeleton.root.visibility = View.GONE
+            binding.tvLoadError.text = "Your driver session is unavailable. Sign in again, then tap here to retry."
+            binding.tvLoadError.visibility = View.VISIBLE
+            return
+        }
         if (!hasLoadedAssignments) {
             binding.loadingSkeleton.root.visibility = View.VISIBLE
             binding.rvAssignments.visibility = View.GONE
@@ -775,34 +782,61 @@ class AssignmentActivity : AppCompatActivity() {
         SocketManager.connect(this)
 
         assignmentsListener = SocketManager.subscribeRealtime("assignments", onData = { payload ->
-                val records = payload as? List<*> ?: return@subscribeRealtime
-                if (isFinishing) return@subscribeRealtime
-
-                // Client-side filter: exclude terminal trip states so they don't show
-                // as active cards. (Completed/delivered docs still exist for history.)
-                val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
-                    val s = doc["tripStatus"] as? String
-                    s != "completed" && s != "delivered" &&
-                        com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
-                            s, doc["returnStatus"] as? String, doc["queueId"] as? String,
-                            sessionManager.getCurrentQueueDocId(), "assigned"
-                        )
+                val records = payload as? List<*> ?: run {
+                    showAssignmentLoadError("The server returned an invalid shipment list. Tap to retry.")
+                    return@subscribeRealtime
                 }
-
-                val list = active.mapNotNull { record -> buildAssignment(record) }
-                hasLoadedAssignments = true
-                binding.loadingSkeleton.root.visibility = View.GONE
-                assignments = list
-                submitToAdapter(list)
-                updateAggregateBadge(list)
+                handleAssignmentRecords(records)
             }, onError = { error ->
                 Log.e(TAG, "loadAssignments realtime error: $error")
                 com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this@AssignmentActivity, "assignment-subscription")
                 if (!hasLoadedAssignments && !isFinishing) {
-                    binding.loadingSkeleton.root.visibility = View.GONE
-                    binding.tvLoadError.visibility = View.VISIBLE
+                    loadAssignmentsFromCache(sessionDriverId)
                 }
             })
+    }
+
+    private fun handleAssignmentRecords(records: List<*>) {
+        if (isFinishing) return
+        val active = records.mapNotNull { it as? Map<String, Any?> }.filter { doc ->
+            val status = doc["tripStatus"] as? String
+            status != "completed" && status != "delivered" &&
+                com.sysu.go.model.QueueShipmentPolicy.isCurrentShipment(
+                    status, doc["returnStatus"] as? String, doc["queueId"] as? String,
+                    sessionManager.getCurrentQueueDocId(), "assigned"
+                )
+        }
+        val list = active.mapNotNull { record -> buildAssignment(record) }
+        hasLoadedAssignments = true
+        binding.loadingSkeleton.root.visibility = View.GONE
+        binding.tvLoadError.visibility = View.GONE
+        assignments = list
+        submitToAdapter(list)
+        updateAggregateBadge(list)
+    }
+
+    private fun loadAssignmentsFromCache(driverId: String) {
+        db.collection("sap_assignments").whereEqualTo("driverId", driverId)
+            .get(com.google.firebase.firestore.Source.CACHE)
+            .addOnSuccessListener { snapshot ->
+                if (isFinishing || hasLoadedAssignments) return@addOnSuccessListener
+                if (snapshot.isEmpty) {
+                    showAssignmentLoadError("Offline and no saved shipment data is available. Check your connection and tap to retry.")
+                    return@addOnSuccessListener
+                }
+                handleAssignmentRecords(snapshot.documents.map { it.data.orEmpty() + ("id" to it.id) })
+            }
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Cached assignment read failed: ${error.message}")
+                showAssignmentLoadError("Shipments are unavailable offline. Check your connection and tap to retry.")
+            }
+    }
+
+    private fun showAssignmentLoadError(message: String) {
+        if (isFinishing || hasLoadedAssignments) return
+        binding.loadingSkeleton.root.visibility = View.GONE
+        binding.tvLoadError.text = message
+        binding.tvLoadError.visibility = View.VISIBLE
     }
 
     /**

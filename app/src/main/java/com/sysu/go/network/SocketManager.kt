@@ -49,8 +49,12 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         val params: Map<String, Any>,
         val onData: (Any?) -> Unit,
         val onError: (String) -> Unit,
+        var receivedInitialState: Boolean = false,
+        var initialSnapshotTimeout: Runnable? = null,
     )
     private val realtimeSubscriptions = java.util.concurrent.ConcurrentHashMap<String, RealtimeSubscription>()
+    private val realtimeHandler = Handler(Looper.getMainLooper())
+    private val initialSnapshotTimeoutMs = 20_000L
 
     private val eventListeners = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<(data: Any?) -> Unit>>()
     private val registeredEvents = java.util.concurrent.ConcurrentHashMap<Socket, MutableSet<String>>()
@@ -140,10 +144,19 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         val id = "android-${UUID.randomUUID()}"
         val subscription = RealtimeSubscription(id, topic, params.toMap(), onData, onError)
         realtimeSubscriptions[id] = subscription
+        val timeout = Runnable {
+            subscription.initialSnapshotTimeout = null
+            if (realtimeSubscriptions[id] === subscription && !subscription.receivedInitialState) {
+                subscription.onError("Realtime data is taking longer than expected. Check your connection and tap to retry.")
+            }
+        }
+        subscription.initialSnapshotTimeout = timeout
+        realtimeHandler.postDelayed(timeout, initialSnapshotTimeoutMs)
         mSocketGo?.takeIf { it.connected() }?.let { socket -> emitRealtimeSubscribe(socket, subscription) }
         val closed = AtomicBoolean(false)
         return {
             if (closed.compareAndSet(false, true)) {
+                subscription.initialSnapshotTimeout?.let(realtimeHandler::removeCallbacks)
                 realtimeSubscriptions.remove(id)
                 mSocketGo?.takeIf { it.connected() }?.emit("realtime:unsubscribe", JSONObject().put("id", id))
             }
@@ -172,7 +185,12 @@ object SocketManager : ConnectivityMonitor.ConnectivityChangeListener {
         if (subscription.topic != payload.optString("topic")) return
         val data = normalizeRealtimeValue(payload.opt("data"))
         Handler(Looper.getMainLooper()).post {
-            if (realtimeSubscriptions[id] === subscription) subscription.onData(data)
+            if (realtimeSubscriptions[id] === subscription) {
+                subscription.receivedInitialState = true
+                subscription.initialSnapshotTimeout?.let(realtimeHandler::removeCallbacks)
+                subscription.initialSnapshotTimeout = null
+                subscription.onData(data)
+            }
         }
     }
 
