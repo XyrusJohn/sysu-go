@@ -212,7 +212,7 @@ class DriverActionOutbox(context: Context) :
                 arrayOf(ownerUid, scopedDedupeKey, id, occurredAtMs)
             )
         }
-        if (eventType == "arrived_at_warehouse") {
+        if (eventType == "session_completed") {
             putState(db, ownerUid, "completed:$sessionId", occurredAtMs.toString())
             putState(db, ownerUid, "active_session", "")
         }
@@ -328,7 +328,10 @@ class DriverActionOutbox(context: Context) :
             "app_open", "qr_scan", "trip_registration", "queue_joined", "shipment_assigned",
             "loading_started", "fully_loaded", "guard_verified", "transit_started",
             "route_point", "unloading_started", "pod_captured", "returning_to_base",
-            "arrived_at_warehouse"
+            "arrived_at_warehouse", "qr_scan_opened", "registration_opened", "loading_cancelled",
+            "verification_cancelled", "trip_confirmation", "active_shipment_selected",
+            "warehouse_arrival_confirmed", "all_deliveries_completed", "return_prompt_opened",
+            "return_to_base_requested", "arrival_confirmation_opened", "session_completed"
         )
         val LOCATION_STATES = setOf("available", "unavailable", "permission_denied")
         private val UUID_PATTERN = Regex("^[0-9a-fA-F-]{36}$")

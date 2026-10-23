@@ -150,7 +150,7 @@ object DriverActionAudit {
                     subjectId = subjectId?.takeIf { it.length <= 128 && !it.contains('/') && !it.contains('\\') },
                     outcome = outcome.take(40), durationMs = durationMs, metadata = metadata,
                     idempotencyKey = idempotencyKey,
-                    closeSession = eventType == "arrived_at_warehouse"
+                    closeSession = eventType == "session_completed"
                 )
             } ?: return
             val locationResolved = AtomicBoolean(false)
@@ -201,7 +201,7 @@ object DriverActionAudit {
     }
 
     fun completeSession(context: Context) {
-        recordFreshLocation(context, "arrived_at_warehouse", outcome = "success", idempotencyKey = "warehouse-arrival")
+        recordFreshLocation(context, "session_completed", outcome = "success", idempotencyKey = "session-completed")
     }
 
     fun hasLocationPermission(context: Context): Boolean =

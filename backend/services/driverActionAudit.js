@@ -125,11 +125,13 @@ function bindDriverActionAudit(socket, {db, io}) {
           accepted.push(event.eventId);
         }
         for (const [ref, data] of pendingWrites) transaction.create(ref, data);
-        const hasArrival = events.some(event => event.eventType === "arrived_at_warehouse"
+        const hasLegacyArrivalCompletion = events.some(event => event.eventType === "arrived_at_warehouse"
+          && event.outcome === "success"
           && (accepted.includes(event.eventId) || terminalEventIds.includes(event.eventId)));
         const hasSessionCompletion = events.some(event => event.eventType === "session_completed"
+          && event.outcome === "success"
           && (accepted.includes(event.eventId) || terminalEventIds.includes(event.eventId)));
-        const hasCompletion = hasArrival || hasSessionCompletion;
+        const hasCompletion = hasLegacyArrivalCompletion || hasSessionCompletion;
         if (!sessionSnapshot.exists && pendingWrites.length) {
           transaction.create(sessionRef, {
             driverId: uid, sessionId: payload.sessionId,

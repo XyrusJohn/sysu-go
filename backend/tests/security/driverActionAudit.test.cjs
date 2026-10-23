@@ -43,7 +43,7 @@ test('driver action retention is 90 days and required Firestore query indexes ar
     && index.fields.map(field => `${field.fieldPath}:${field.order}`).join(',') === 'driverId:ASCENDING,sessionId:ASCENDING,sequence:DESCENDING'));
 });
 
-test('sync persists idempotently under authenticated driver identity and closes only on confirmed arrival event', async () => {
+test('sync persists idempotently under authenticated driver identity and closes after successful session completion', async () => {
   const docs = new Map();
   const ref = (collection, id) => ({collection, id, key: `${collection}/${id}`});
   const db = {
@@ -88,11 +88,45 @@ test('sync persists idempotently under authenticated driver identity and closes 
   assert.equal(emits.length, 2);
 
   const arrival = {...validEvent(), eventId: 'fd863694-b981-4b4b-8dc9-cf01c213d9fa', sessionId,
-    sequence: 2, eventType: 'arrived_at_warehouse', occurredAtMs: Date.now(), locationState: 'unavailable', lat: undefined, lng: undefined};
-  const closed = await call({sessionId, events: [arrival]});
+    sequence: 2, eventType: 'arrived_at_warehouse', outcome: 'requested', occurredAtMs: Date.now(), locationState: 'unavailable', lat: undefined, lng: undefined};
+  const arrivalRequested = await call({sessionId, events: [arrival]});
+  assert.equal(arrivalRequested.success, true);
+  assert.equal(docs.get(`driver_action_sessions/${sessionId}`).status, 'active');
+
+  const completed = {...validEvent(), eventId: '843733c2-6fd6-4c49-b9db-3e5e9fbcb68d', sessionId,
+    sequence: 3, eventType: 'session_completed', occurredAtMs: Date.now(), locationState: 'unavailable', lat: undefined, lng: undefined};
+  const closed = await call({sessionId, events: [completed]});
   assert.equal(closed.success, true);
   assert.equal(docs.get(`driver_action_sessions/${sessionId}`).status, 'completed');
   assert.equal(docs.has('drivers/authenticated-driver-uid'), false);
+});
+
+test('legacy successful warehouse-arrival event still closes its session', async () => {
+  const docs = new Map();
+  const ref = (collection, id) => ({key: `${collection}/${id}`});
+  const db = {
+    collection(name) { return {doc(id) { return ref(name, id); }}; },
+    async runTransaction(work) {
+      const writes = [];
+      const tx = {
+        async get(document) { const value = docs.get(document.key); return {exists: value !== undefined, data: () => value}; },
+        create(document, value) { writes.push([document, value]); },
+        update(document, value) { writes.push([document, {...(docs.get(document.key) || {}), ...value}]); },
+      };
+      const result = await work(tx);
+      for (const [document, value] of writes) docs.set(document.key, value);
+      return result;
+    },
+  };
+  const handlers = new Map();
+  const socket = {data: {uid: 'authenticated-driver-uid', role: 'driver'}, on: (name, callback) => handlers.set(name, callback)};
+  bindDriverActionAudit(socket, {db, io: {to() { return {emit() {}}; }}});
+  const sessionId = 'd2ba3a01-6749-4e19-9a4d-f9eb06df7153';
+  const arrival = {...validEvent(), eventId: '6bd2ed91-c8ee-453e-a393-5d791082b739', sessionId,
+    eventType: 'arrived_at_warehouse', outcome: 'success', locationState: 'unavailable', lat: undefined, lng: undefined};
+  const response = await new Promise(resolve => handlers.get('driver_actions:sync')({sessionId, events: [arrival]}, resolve));
+  assert.equal(response.success, true);
+  assert.equal(docs.get(`driver_action_sessions/${sessionId}`).status, 'completed');
 });
 
 test('expired offline events are terminally acknowledged so valid later events can sync', async () => {
