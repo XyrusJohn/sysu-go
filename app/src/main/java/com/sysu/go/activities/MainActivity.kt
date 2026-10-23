@@ -68,6 +68,9 @@ class MainActivity : AppCompatActivity() {
     private var hasShipment = false  // true when driver has an assigned shipment
     private var queueListener: (() -> Unit)? = null
     private var hasLoadedQueueState = false
+    private val queueLoadHandler = Handler(Looper.getMainLooper())
+    private var queueLoadTimeout: Runnable? = null
+    private var queueLoadAttempt = 0
     private var positionJob: kotlinx.coroutines.Job? = null
     private var assignmentListener: (() -> Unit)? = null
     private var pulseAnimator1: ObjectAnimator? = null
@@ -134,6 +137,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val QUEUE_LOAD_TIMEOUT_MS = 12_000L
         private const val PREFS_NAME = "go_prefs"
         private const val KEY_QR_TUTORIAL_SEEN = "qr_tutorial_seen"
         private const val KEY_NAV_TUTORIAL_SEEN = "nav_tutorial_seen"
@@ -186,6 +190,7 @@ class MainActivity : AppCompatActivity() {
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.tvQueueLoadError.setOnClickListener { listenToQueueStatus() }
         if (previousSessionHadCrash) {
             binding.root.post {
                 com.sysu.go.diagnostics.UserErrorNotifier.show(
@@ -1160,15 +1165,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun listenToQueueStatus() {
         val session = SessionManager(this)
-        val driverId = session.getDriverId() ?: return
+        val driverId = session.getDriverId()
+        if (driverId.isNullOrBlank()) {
+            showQueueLoadFallback()
+            return
+        }
+        val attempt = ++queueLoadAttempt
+        queueLoadTimeout?.let(queueLoadHandler::removeCallbacks)
+        queueLoadTimeout = null
         if (!hasLoadedQueueState) {
             binding.queueLoadingContainer.visibility = View.VISIBLE
             binding.queueLoadingSkeleton.root.visibility = View.VISIBLE
             binding.tvQueueLoadError.visibility = View.GONE
         }
+        val timeout = Runnable {
+            if (attempt == queueLoadAttempt && !hasLoadedQueueState && !isFinishing && !isDestroyed) {
+                showQueueLoadFallback()
+            }
+        }
+        queueLoadTimeout = timeout
+        queueLoadHandler.postDelayed(timeout, QUEUE_LOAD_TIMEOUT_MS)
         queueListener?.invoke()
         queueListener = SocketManager.subscribeRealtime("queue", onData = { payload ->
-            val records = payload as? List<*> ?: return@subscribeRealtime
+            val records = payload as? List<*>
+            if (records == null) {
+                runOnUiThread {
+                    if (attempt == queueLoadAttempt && !hasLoadedQueueState) showQueueLoadFallback()
+                }
+                return@subscribeRealtime
+            }
             val queues = records.mapNotNull { it as? Map<String, Any?> }
             val preferredQueueId = currentQueueDocId ?: session.getCurrentQueueDocId()
             val activeStatuses = listOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit")
@@ -1179,7 +1204,10 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
+                if (attempt != queueLoadAttempt) return@runOnUiThread
                 hasLoadedQueueState = true
+                queueLoadTimeout?.let(queueLoadHandler::removeCallbacks)
+                queueLoadTimeout = null
                 binding.queueLoadingContainer.visibility = View.GONE
                 if (entry != null) {
                     val queueId = entry["id"] as? String ?: return@runOnUiThread
@@ -1265,12 +1293,25 @@ class MainActivity : AppCompatActivity() {
         }, onError = { error ->
             Log.e(TAG, "queue realtime error: $error")
             com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this, "queue-subscription")
-            if (!hasLoadedQueueState && !isFinishing) {
-                binding.queueLoadingContainer.visibility = View.VISIBLE
-                binding.queueLoadingSkeleton.root.visibility = View.GONE
-                binding.tvQueueLoadError.visibility = View.VISIBLE
+            runOnUiThread {
+                if (attempt == queueLoadAttempt && !hasLoadedQueueState && !isFinishing && !isDestroyed) {
+                    showQueueLoadFallback()
+                }
             }
         })
+    }
+
+    private fun showQueueLoadFallback() {
+        queueLoadTimeout?.let(queueLoadHandler::removeCallbacks)
+        queueLoadTimeout = null
+        binding.queueLoadingContainer.visibility = View.VISIBLE
+        binding.queueLoadingSkeleton.root.visibility = View.GONE
+        binding.tvQueueLoadError.apply {
+            text = "Queue is taking longer than expected. Check your connection and tap here to retry."
+            visibility = View.VISIBLE
+            isClickable = true
+            isFocusable = true
+        }
     }
     private fun listenToAssignment(queueId: String, truckType: String, sessionDriverId: String) {
         Log.d(TAG, ">> listenToAssignment() called â€” queueId=$queueId sessionDriverId=$sessionDriverId")
@@ -1840,6 +1881,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        queueLoadTimeout?.let(queueLoadHandler::removeCallbacks)
+        queueLoadTimeout = null
         super.onDestroy()
         unregisterConnectionMonitor()
         TrackingStateMonitor.removeListener(trackingStateListener)
