@@ -1180,7 +1180,7 @@ class MainActivity : AppCompatActivity() {
         }
         val timeout = Runnable {
             if (attempt == queueLoadAttempt && !hasLoadedQueueState && !isFinishing && !isDestroyed) {
-                showQueueLoadFallback()
+                loadQueueSnapshotFallback(driverId, session, attempt)
             }
         }
         queueLoadTimeout = timeout
@@ -1190,7 +1190,9 @@ class MainActivity : AppCompatActivity() {
             val records = payload as? List<*>
             if (records == null) {
                 runOnUiThread {
-                    if (attempt == queueLoadAttempt && !hasLoadedQueueState) showQueueLoadFallback()
+                    if (attempt == queueLoadAttempt && !hasLoadedQueueState) {
+                        loadQueueSnapshotFallback(driverId, session, attempt)
+                    }
                 }
                 return@subscribeRealtime
             }
@@ -1262,43 +1264,73 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     isInQueue = false
                     hasShipment = false
-                    currentQueueDocId = null
-                    currentQueueStatus = null
-                    currentQueueEnteredAtMillis = null
-                    currentQueueShipmentIds = emptySet()
-                    session.saveCurrentQueueDocId(null)
-                    currentShipments.clear()
-                    currentQueueEntries.clear()
-                    shipmentCardAdapter?.submitList(emptyList())
-                    binding.rvShipmentCards.visibility = View.GONE
-                    positionJob?.cancel()
-                    listenToAssignmentViaSessionDriverId(driverId, "")
-                    binding.tvStatusBadgeText.text = "Ready to Scan"
-                    binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
-                    binding.tvScanHint.text = "Show QR code at booth to check in"
-                    binding.tvScanHint.visibility = View.VISIBLE
-                    binding.tvQueueStatus.text = "NOT IN QUEUE"
-                    binding.tvQueueStatus.textSize = 24f
-                    binding.tvQueueStatusLabel.text = ""
-                    binding.tvQueueStatusLabel.visibility = View.GONE
-                    binding.tvQueueDetails.text = ""
-                    binding.tvQueueDetails.visibility = View.GONE
-                    binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
-                    binding.ivQueueIcon.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
-                    binding.dividerCancelQueue.visibility = View.GONE
-                    binding.cancelQueueContainer.visibility = View.GONE
-                    updateScanButtonState()
+                    renderIdleQueueState(session, driverId)
                 }
             }
         }, onError = { error ->
             Log.e(TAG, "queue realtime error: $error")
-            com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this, "queue-subscription")
             runOnUiThread {
                 if (attempt == queueLoadAttempt && !hasLoadedQueueState && !isFinishing && !isDestroyed) {
-                    showQueueLoadFallback()
+                    loadQueueSnapshotFallback(driverId, session, attempt)
                 }
             }
         })
+    }
+
+    private fun loadQueueSnapshotFallback(driverId: String, session: SessionManager, attempt: Int) {
+        queueLoadTimeout?.let(queueLoadHandler::removeCallbacks)
+        queueLoadTimeout = null
+        db.collection("queue")
+            .whereEqualTo("driverId", driverId)
+            .get(com.google.firebase.firestore.Source.SERVER)
+            .addOnSuccessListener { snapshot ->
+                if (attempt != queueLoadAttempt || hasLoadedQueueState || isFinishing || isDestroyed) return@addOnSuccessListener
+                val activeStatuses = setOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit")
+                if (snapshot.documents.any { it.getString("status") in activeStatuses }) {
+                    showQueueLoadFallback()
+                } else {
+                    hasLoadedQueueState = true
+                    binding.queueLoadingContainer.visibility = View.GONE
+                    renderIdleQueueState(session, driverId)
+                }
+            }
+            .addOnFailureListener { error ->
+                Log.e(TAG, "Queue snapshot fallback failed", error)
+                if (attempt != queueLoadAttempt || hasLoadedQueueState || isFinishing || isDestroyed) return@addOnFailureListener
+                com.sysu.go.diagnostics.UserErrorNotifier.showRealtimeFailure(this, "queue-subscription")
+                showQueueLoadFallback()
+            }
+    }
+
+    private fun renderIdleQueueState(session: SessionManager, driverId: String) {
+        currentQueueDocId = null
+        currentQueueStatus = null
+        currentQueueEnteredAtMillis = null
+        currentQueueShipmentIds = emptySet()
+        isInQueue = false
+        hasShipment = false
+        session.saveCurrentQueueDocId(null)
+        currentShipments.clear()
+        currentQueueEntries.clear()
+        shipmentCardAdapter?.submitList(emptyList())
+        binding.rvShipmentCards.visibility = View.GONE
+        positionJob?.cancel()
+        listenToAssignmentViaSessionDriverId(driverId, "")
+        binding.tvStatusBadgeText.text = "Ready to Scan"
+        binding.statusBadge.setCardBackgroundColor(android.graphics.Color.parseColor("#33FFFFFF"))
+        binding.tvScanHint.text = "Show QR code at booth to check in"
+        binding.tvScanHint.visibility = View.VISIBLE
+        binding.tvQueueStatus.text = "NOT IN QUEUE"
+        binding.tvQueueStatus.textSize = 24f
+        binding.tvQueueStatusLabel.text = ""
+        binding.tvQueueStatusLabel.visibility = View.GONE
+        binding.tvQueueDetails.text = ""
+        binding.tvQueueDetails.visibility = View.GONE
+        binding.ivQueueIcon.setImageResource(R.drawable.ticket_1)
+        binding.ivQueueIcon.setColorFilter(ContextCompat.getColor(this, R.color.sysu_red))
+        binding.dividerCancelQueue.visibility = View.GONE
+        binding.cancelQueueContainer.visibility = View.GONE
+        updateScanButtonState()
     }
 
     private fun showQueueLoadFallback() {
