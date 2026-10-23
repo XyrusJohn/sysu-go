@@ -1,20 +1,16 @@
 const {Timestamp} = require("firebase-admin/firestore");
+const {DRIVER_ACTION_EVENT_TYPES} = require("../constants/driverActionEvents");
 
 const MAX_BATCH = 50;
 const MAX_PAGE = 500;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EVENT_TYPES = new Set([
-  "app_open", "qr_scan", "trip_registration", "queue_joined", "shipment_assigned",
-  "loading_started", "fully_loaded", "guard_verified", "transit_started", "route_point",
-  "unloading_started", "pod_captured", "returning_to_base", "arrived_at_warehouse",
-]);
+const EVENT_TYPES = DRIVER_ACTION_EVENT_TYPES;
 const LOCATION_STATES = new Set(["available", "unavailable", "permission_denied"]);
 const STAFF_ROLES = new Set(["fleet_manager", "admin", "super_admin"]);
 
 function logReadFailure(operation, error) {
   const code = error?.code;
-  const errorCode = typeof code === "string" || typeof code === "number" ? code : "UNKNOWN";
   const reason = code === 9 || code === "failed-precondition" ? "Firestore failed precondition; check query index requirements"
     : code === 7 || code === "permission-denied" ? "Firestore permission denied"
       : code === 4 || code === "deadline-exceeded" ? "Firestore query deadline exceeded"
@@ -22,7 +18,7 @@ function logReadFailure(operation, error) {
           : "Firestore query failed";
   console.error("[driver-action] Firestore read failed", {
     operation,
-    errorCode,
+    errorCode: typeof code === "string" || typeof code === "number" ? code : "UNKNOWN",
     errorName: typeof error?.name === "string" ? error.name : "Error",
     reason,
   });
@@ -107,7 +103,8 @@ function bindDriverActionAudit(socket, {db, io}) {
             accepted.push(event.eventId);
             continue;
           }
-          if (session.status === "completed" && !terminalEventIds.includes(event.eventId)) throw new Error("Activity sequence conflict");
+          if (session.status === "completed" && !terminalEventIds.includes(event.eventId)
+            && event.eventType !== "session_completed") throw new Error("Activity sequence conflict");
           if (terminalEventIds.includes(event.eventId)) {
             lastSequence = Math.max(lastSequence, event.sequence);
             continue;
@@ -130,18 +127,21 @@ function bindDriverActionAudit(socket, {db, io}) {
         for (const [ref, data] of pendingWrites) transaction.create(ref, data);
         const hasArrival = events.some(event => event.eventType === "arrived_at_warehouse"
           && (accepted.includes(event.eventId) || terminalEventIds.includes(event.eventId)));
+        const hasSessionCompletion = events.some(event => event.eventType === "session_completed"
+          && (accepted.includes(event.eventId) || terminalEventIds.includes(event.eventId)));
+        const hasCompletion = hasArrival || hasSessionCompletion;
         if (!sessionSnapshot.exists && pendingWrites.length) {
           transaction.create(sessionRef, {
             driverId: uid, sessionId: payload.sessionId,
-            status: hasArrival ? "completed" : "active", startedAt: Timestamp.fromMillis(events.find(event => !terminalEventIds.includes(event.eventId)).occurredAtMs),
+            status: hasCompletion ? "completed" : "active", startedAt: Timestamp.fromMillis(events.find(event => !terminalEventIds.includes(event.eventId)).occurredAtMs),
             updatedAt: Timestamp.fromMillis(now), lastSequence,
-            ...(hasArrival ? {completedAt: Timestamp.fromMillis(now)} : {}),
+            ...(hasCompletion ? {completedAt: Timestamp.fromMillis(now)} : {}),
             expiresAt: Timestamp.fromMillis(now + RETENTION_MS),
           });
         } else if (sessionSnapshot.exists && (pendingWrites.length || terminalEventIds.length)) {
           transaction.update(sessionRef, {
             updatedAt: Timestamp.fromMillis(now), lastSequence,
-            ...(hasArrival ? {status: "completed", completedAt: Timestamp.fromMillis(now)} : {}),
+            ...(hasCompletion ? {status: "completed", completedAt: Timestamp.fromMillis(now)} : {}),
             expiresAt: Timestamp.fromMillis(now + RETENTION_MS),
           });
         }

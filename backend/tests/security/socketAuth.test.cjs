@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {createSocketAuth}=require('../../middleware/socketAuth.js');
+const {EVENT_TYPES}=require('../../services/driverActionAudit.js');
 
 function harness({token='synthetic-valid-token-0001',role='driver',status='active',readError,decoded={uid:'uid-a',exp:Math.floor(Date.now()/1000)+3600}}={}){
  const calls=[];let disconnects=0;let current={role,status};let rejectToken=false;
@@ -42,6 +43,21 @@ test('driver activity sync accepts only bounded self-authenticated batches and v
   ]) {
     const other = harness(); assert.equal(await connect(other), undefined);
     assert.ok(await packet(other, 'driver_actions:sync', payload));
+  }
+});
+
+test('socket authorization accepts every activity event supported by the persistence service', async () => {
+  let sequence = 0;
+  for (const eventType of EVENT_TYPES) {
+    sequence += 1;
+    const sessionId = '0d3a8588-8c60-4e3f-97c9-c373148234c5';
+    const event = {
+      eventId: `6a1bb782-9c6f-447e-8a23-${sequence.toString(16).padStart(12, '0')}`,
+      sessionId, sequence, eventType, occurredAtMs: Date.now(),
+      locationState: 'unavailable', outcome: 'success', metadata: {},
+    };
+    const h = harness(); assert.equal(await connect(h), undefined);
+    assert.equal(await packet(h, 'driver_actions:sync', {sessionId, events: [event]}), undefined, eventType);
   }
 });
 
