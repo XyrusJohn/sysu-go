@@ -1285,8 +1285,7 @@ class MainActivity : AppCompatActivity() {
             .get(com.google.firebase.firestore.Source.SERVER)
             .addOnSuccessListener { snapshot ->
                 if (attempt != queueLoadAttempt || hasLoadedQueueState || isFinishing || isDestroyed) return@addOnSuccessListener
-                val activeStatuses = setOf("assigned", "waiting", "called", "loading", "fully_loaded", "in_transit")
-                if (snapshot.documents.any { it.getString("status") in activeStatuses }) {
+                if (com.sysu.go.model.QueueSnapshotPolicy.hasActiveQueue(snapshot.documents.map { it.getString("status") })) {
                     showQueueLoadFallback()
                 } else {
                     hasLoadedQueueState = true
